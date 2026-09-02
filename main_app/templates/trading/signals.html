@@ -19,7 +19,7 @@
     {% for s in page.object_list %}
       <tr>
         <td class="small">{{ s.ts|et:'%b %d %H:%M' }}</td><td>{{ s.strategy_key }}</td><td><strong>{{ s.instrument.symbol }}</strong></td><td>{{ s.action }}</td>
-        <td class="num">{{ s.price|num:2 }}</td><td class="num">{{ s.stop_price|num:2 }}</td><td class="num">{{ s.target_price|num:2 }}</td>
+        <td class="num">{{ s.price|price }}</td><td class="num">{{ s.stop_price|price }}</td><td class="num">{{ s.target_price|price }}</td>
         <td class="small">{{ s.reason }}</td>
         <td>{% if s.acted %}<span class="badge ok">order</span> {% if s.order %}<small>{{ s.order.status }}</small>{% endif %}{% else %}<span class="badge bad">blocked</span> <small>{{ s.blocked_reason }}</small>{% endif %}</td>
       </tr>

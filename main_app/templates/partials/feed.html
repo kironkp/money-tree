@@ -4,8 +4,10 @@
     <span class="more"><a href="{% url 'feed' %}?{{ account.query }}">full page</a></span></h3>
   <div class="chips">
     <button type="button" class="btn small active" data-levels="">all</button>
+    <button type="button" class="btn small" data-levels="pulse">pulse</button>
     <button type="button" class="btn small" data-levels="signal,order,fill,trade,risk,error,journal">decisions</button>
     <button type="button" class="btn small" data-levels="fill,trade">trades</button>
+    <button type="button" class="btn small" data-levels="bar,signal,order,fill,trade,risk,error,journal,system">no pulse</button>
     <button type="button" class="btn small" data-levels="bar">why not</button>
     <button type="button" class="btn small" data-levels="system,risk,error,journal">system</button>
     <span style="margin-left:auto"></span>

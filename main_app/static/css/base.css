@@ -316,3 +316,8 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .ph-fill .fx { border-left: 2px solid var(--info); padding-left: 6px; }
 .ph-close .fx { border-left: 2px solid var(--up); padding-left: 6px; }
 .ph-alert .fx { border-left: 2px solid var(--danger); padding-left: 6px; }
+
+.fl-pulse .fx { color: var(--muted); font-size: 11.5px; }
+.fl-pulse { border-bottom-style: dotted; }
+.badge.degen { color: #fff; background: #7a3ea1; border-color: #7a3ea1; }
+.strip-item.mode.degen .v { color: #c084fc; }

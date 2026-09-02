@@ -52,6 +52,17 @@ def num(value, places=2):
 
 
 @register.filter
+def price(value):
+    """Adaptive decimals: 2 for normal prices, more for sub-dollar coins."""
+    n = _num(value)
+    if n is None:
+        return '—'
+    a = abs(n)
+    places = 2 if a >= 1 else (4 if a >= 0.01 else 8)
+    return f'{n:,.{places}f}'
+
+
+@register.filter
 def qty(value):
     n = _num(value)
     if n is None:

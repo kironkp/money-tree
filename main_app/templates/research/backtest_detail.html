@@ -43,7 +43,7 @@
     <h3>Trades <span class="more">{{ trades|length }} most recent</span></h3>
     <div class="table-wrap"><table>
       <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th><th class="num">Qty</th><th class="num">In</th><th class="num">Out</th><th class="num">P&amp;L</th><th class="num">%</th><th class="num">Bars</th><th>Reason</th></tr></thead>
-      <tbody>{% for t in trades %}<tr><td><strong>{{ t.symbol }}</strong></td><td>{{ t.side }}</td><td class="small">{{ t.entry_ts|et }}</td><td class="small">{{ t.exit_ts|et }}</td><td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.entry_price|num:2 }}</td><td class="num">{{ t.exit_price|num:2 }}</td><td class="num {{ t.pnl|sign_class }}">{{ t.pnl|signed_money }}</td><td class="num">{{ t.pnl_pct|pct }}</td><td class="num">{{ t.bars_held }}</td><td><span class="badge">{{ t.exit_reason }}</span></td></tr>{% endfor %}</tbody>
+      <tbody>{% for t in trades %}<tr><td><strong>{{ t.symbol }}</strong></td><td>{{ t.side }}</td><td class="small">{{ t.entry_ts|et }}</td><td class="small">{{ t.exit_ts|et }}</td><td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.entry_price|price }}</td><td class="num">{{ t.exit_price|price }}</td><td class="num {{ t.pnl|sign_class }}">{{ t.pnl|signed_money }}</td><td class="num">{{ t.pnl_pct|pct }}</td><td class="num">{{ t.bars_held }}</td><td><span class="badge">{{ t.exit_reason }}</span></td></tr>{% endfor %}</tbody>
     </table></div>
   </div>
 </div>

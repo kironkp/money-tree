@@ -51,7 +51,7 @@ def build_status(account: Account, cfg: AgentConfig, run) -> dict:
     bar_age = None
     if run and run.last_bar_ts:
         bar_age = (now - (run.last_bar_ts + tf)).total_seconds()
-    market_open = account.market == Market.CRYPTO or cal.is_open(now)
+    market_open = account.is_24x7 or cal.is_open(now)
     if run and market_open and (bar_age is None or bar_age > 2 * tf.total_seconds()):
         blockers.append('market data is stale' if bar_age is not None else 'no completed bar seen yet')
     # reconciliation

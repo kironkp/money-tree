@@ -81,6 +81,16 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   whose agent is dead or stale. `services/status.py` builds "Safe to trade now" with
   explicit blockers.
 
+## v1.3 — Degen lane, pulse, auto-research
+
+- `Market.DEGEN`: altcoins (`Instrument.market='degen'`), 1Min bars, `AgentConfig.degen_*`
+  risk overrides via `RiskConfig.from_model(cfg, market)`; `burst` strategy
+  (`strategies/burst.py`). Prices are 8-decimal Decimals now (PEPE/SHIB/BONK).
+- Pulse: `Agent.pulse()` every `pulse_seconds` inside `_sleep` — Alpaca latest QUOTE
+  mid (trades are too sparse on Alpaca's crypto venue); marks positions, updates
+  `SymbolState.price`, writes `level='pulse'` feed lines (pruned after 24 h).
+- `manage.py auto_research` + `com.kiron.moneytree.research.plist` (02:10 nightly).
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live

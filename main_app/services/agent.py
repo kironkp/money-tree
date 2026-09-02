@@ -33,7 +33,7 @@ from .data import get_provider
 from .data.store import complete_bars_only, load_frame, quality_gate, synthetic_symbols, upsert_bars
 from .engine import Engine, EngineConfig
 from .indicators import minutes_to_close as _mtc
-from .ledger import DBRecorder, hydrate_broker, hydrate_cards, open_orders_from_db, persist_broker
+from .ledger import D as D_, DBRecorder, hydrate_broker, hydrate_cards, open_orders_from_db, persist_broker
 from .narrator import Narrator
 from .risk import RiskConfig, RiskManager
 from .strategies import make_strategy
@@ -81,6 +81,10 @@ class Agent:
         self._config_flagged = False
         self.exclude_sources: list = []
         self.provider = None
+        self._last_pulse = 0.0
+        self._pulse_prices: dict[str, float] = {}
+        self._pulse_ref: dict[str, float] = {}
+        self._pulse_ref_at = None
 
     # --- setup --------------------------------------------------------------
     def setup(self) -> None:
@@ -96,8 +100,7 @@ class Agent:
         self.narrator = Narrator(self.account, echo=not self.quiet)
         self.timeframe = self.cfg.timeframe_for(self.market)
         self.step = tf_delta(self.timeframe)
-        self.instruments = {i.symbol: i for i in Instrument.objects.filter(in_watchlist=True, active=True,
-                                                                         asset_class__in=self.account.asset_classes)}
+        self.instruments = {i.symbol: i for i in Instrument.objects.filter(in_watchlist=True, active=True, market=self.market)}
         if not self.instruments:
             raise RuntimeError(f'no {self.market} symbols on the watchlist — add some at /data/')
         self.asset_classes = {s: i.asset_class for s, i in self.instruments.items()}
@@ -115,7 +118,7 @@ class Agent:
             self.strategy_symbols[row.key] = {s for s in syms if s in self.instruments and strat.supports(self.asset_classes[s])}
             allocations[row.key] = float(row.allocation_pct)
         self.strategy_snapshot = self._strategy_snapshot()
-        risk_cfg = RiskConfig.from_model(self.cfg)
+        risk_cfg = RiskConfig.from_model(self.cfg, self.market)
         self.risk = RiskManager(risk_cfg, self.qty_increments)
         self.risk.kill_switch = self.cfg.kill_switch
         self.risk.trading_enabled = self.cfg.trading_enabled
@@ -145,7 +148,7 @@ class Agent:
         self.recorder = DBRecorder(self.account, self.instruments)
         self.engine = Engine(self.strategies, self.broker, engine_cfg, self.recorder, self.risk, narrator=self.narrator)
         # Risk state survives restarts: pick the day up where the last process left it.
-        today = cal.session_date(timezone.now()) if self.market != Market.CRYPTO else timezone.now().astimezone(cal.ET).date()
+        today = cal.session_date(timezone.now()) if not self.account.is_24x7 else timezone.now().astimezone(cal.ET).date()
         if self.mode != Mode.REPLAY and self.account.day_start_date == today:
             self.risk.restore(today, float(self.account.day_start_equity), self.account.day_entries,
                               self.account.day_halted, self.account.day_halted_reason)
@@ -241,12 +244,91 @@ class Agent:
                 raise AgentStop()
             if time.monotonic() - self._last_control_poll >= CONTROL_POLL_S:
                 self.poll_controls(timezone.now())
+            if self._pulse_enabled() and time.monotonic() - self._last_pulse >= self.cfg.pulse_seconds:
+                self.pulse(timezone.now())
             remaining = end - time.monotonic()
             if remaining <= 0:
                 break
             time.sleep(min(1.0, remaining))
         if self.stop_requested:
             raise AgentStop()
+
+    # --- the pulse: live prices between bars ---------------------------------
+    def _pulse_enabled(self) -> bool:
+        if self.mode == Mode.REPLAY or not self.cfg.pulse_seconds or self.provider is None or self.provider.name != 'alpaca':
+            return False
+        if self.account.is_24x7:
+            return True
+        return cal.is_open(timezone.now())
+
+    def pulse(self, now: datetime) -> None:
+        """Every few seconds: last prices, open P&L, distance to stop/target and
+        to the nearest trigger — the 'thinking out loud' between bar decisions."""
+        self._last_pulse = time.monotonic()
+        try:
+            ac = 'crypto' if self.account.is_24x7 else 'stock'
+            prices = self.provider.latest_prices(list(self.instruments), ac)
+        except Exception as exc:
+            self.say('pulse', f'pulse: price check failed ({exc!r})'[:200], phase='observe')
+            self.narrator.flush()
+            return
+        if not prices:
+            return
+        self.broker.mark(prices) if hasattr(self.broker, 'mark') else None
+        parts = []
+        for sym, px in prices.items():
+            ref = self._pulse_ref.get(sym)
+            chg = f' {((px / ref) - 1) * 100:+.2f}%/min' if ref else ''
+            parts.append(f'{sym.split("/")[0]} {px:,.6g}{chg}')
+        held = []
+        for sym, pos in self.broker.positions.items():
+            if not pos.qty or sym not in prices:
+                continue
+            px = prices[sym]
+            up = pos.unrealized(px)
+            d_stop = f', stop {((pos.stop / px) - 1) * 100:+.2f}% away' if pos.stop else ''
+            d_tgt = f', target {((pos.target / px) - 1) * 100:+.2f}% away' if pos.target else ''
+            held.append(f'{sym}: {up:+,.2f}{d_stop}{d_tgt}')
+        nearest = self._nearest_trigger(prices)
+        text = 'pulse — ' + ', '.join(parts)
+        if held:
+            text += ' · holding ' + '; '.join(held)
+        if nearest:
+            text += ' · ' + nearest
+        self.say('pulse', text[:600], phase='observe', data={'prices': prices})
+        self._pulse_prices = prices
+        if not self._pulse_ref or (now - self._pulse_ref_at).total_seconds() >= 60:
+            self._pulse_ref = dict(prices)
+            self._pulse_ref_at = now
+        try:
+            from main_app.models import SymbolState
+            for sym, px in prices.items():
+                SymbolState.objects.filter(account=self.account, symbol=sym).update(price=px, ts=now)
+            self.account.equity = D_(self.broker.account().equity)
+            self.account.save(update_fields=['equity'])
+        except Exception:
+            log.exception('pulse persist failed')
+        self.narrator.flush()
+
+    def _nearest_trigger(self, prices: dict) -> str:
+        """The symbol closest to firing, from the latest rule evaluation."""
+        try:
+            from main_app.models import SymbolState
+            best, best_gap = None, None
+            for st in SymbolState.objects.filter(account=self.account, symbol__in=list(prices)):
+                for r in st.rules or []:
+                    if r.get('ok') or r.get('value') is None or r.get('threshold') is None:
+                        continue
+                    if r['rule'] in ('move', 'breakout', 'stretch'):
+                        gap = abs(float(r['threshold']) - float(r['value']))
+                        if best_gap is None or gap < best_gap:
+                            best, best_gap = (st.symbol, r), gap
+            if best is None:
+                return ''
+            sym, r = best
+            return f'nearest trigger: {sym} ({r["strategy"]} {r["rule"]}: {r["value"]:.4g} vs {r["threshold"]:.4g})'
+        except Exception:
+            return ''
 
     # --- controls (polled every 2 s, even while sleeping) --------------------
     def poll_controls(self, now: datetime) -> None:
@@ -273,7 +355,7 @@ class Agent:
             if cfg.trading_enabled != self.risk.trading_enabled:
                 self.risk.trading_enabled = cfg.trading_enabled
                 self.say('system', 'Trading ' + ('enabled' if cfg.trading_enabled else 'disabled') + ' in Settings.')
-            new_risk = RiskConfig.from_model(cfg)
+            new_risk = RiskConfig.from_model(cfg, self.market)
             if new_risk != self.risk.cfg:
                 old = asdict(self.risk.cfg)
                 changes = [f'{k} {old[k]} → {v}' for k, v in asdict(new_risk).items() if old.get(k) != v]
@@ -367,16 +449,19 @@ class Agent:
         stock_syms = [s for s, ac in self.asset_classes.items() if ac != 'crypto']
         crypto_syms = [s for s, ac in self.asset_classes.items() if ac == 'crypto']
         step = self.step
+        lane = {'stocks': 'US stocks', 'crypto': 'BTC/ETH', 'degen': 'altcoins (the high-risk sandbox: fake money, expected to bleed)'}[self.market]
         tfm = tf_minutes(self.timeframe)
         cadence = f'{tfm} minutes' if tfm < 60 else ('hour' if tfm == 60 else f'{tfm // 60} hours')
         log.info('live loop: provider=%s timeframe=%s stocks=%d crypto=%d', provider.name, self.timeframe,
                  len(stock_syms), len(crypto_syms))
         feed_note = {'alpaca': 'Alpaca (IEX real-time)', 'yahoo': 'Yahoo (free, ~20 s late, rate-limited)',
                      'synthetic': 'SYNTHETIC random walk'}.get(provider.name, provider.name)
-        self.say('system', f'Quotes from {feed_note}. ' + (
-            f'Crypto trades around the clock; I evaluate every {cadence} ({self.timeframe} bars), {grace} s after each bar closes.'
-            if self.market == Market.CRYPTO else
-            f'US stocks trade 09:30–16:00 ET Mon–Fri (early closes 13:00 ET); I evaluate every {cadence} during the session and sleep outside it.'))
+        pulse_note = f' Between bars I check prices every {self.cfg.pulse_seconds} s (the pulse).' if self._pulse_enabled() or self.account.is_24x7 else ''
+        self.say('system', f'Lane: {lane}. Quotes from {feed_note}. ' + (
+            f'This lane trades around the clock; I evaluate every {cadence} ({self.timeframe} bars), {grace} s after each bar closes.'
+            if self.account.is_24x7 else
+            f'US stocks trade 09:30–16:00 ET Mon–Fri (early closes 13:00 ET); I evaluate every {cadence} during the session and sleep outside it.')
+            + pulse_note)
         self.narrator.flush()
         closed_note_at = None
         announced_bar = None

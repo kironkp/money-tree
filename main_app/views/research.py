@@ -298,10 +298,9 @@ def replay(request):
                                  replay_account.log_name)
         messages.success(request, f'replaying {d} ({market}) at {speed}× (pid {pid}) — watch the live feed')
         return redirect(f"{request.build_absolute_uri('/')}?{replay_account.query}")
-    classes = ('crypto',) if market == Market.CRYPTO else ('stock', 'etf')
     dates = Bar.objects.filter(timeframe=cfg.timeframe_for(market), instrument__in_watchlist=True,
-                               instrument__asset_class__in=classes).dates('ts', 'day', order='DESC')[:40]
-    sessions = [d for d in dates if market == Market.CRYPTO or cal.session_for(d)]
+                               instrument__market=market).dates('ts', 'day', order='DESC')[:40]
+    sessions = [d for d in dates if market != Market.STOCKS or cal.session_for(d)]
     enabled = Strategy.objects.filter(enabled=True, market=market).count()
     return render(request, 'research/replay.html', {'dates': sessions, 'cfg': cfg, 'enabled': enabled, 'market': market,
                                                     'log': procs.tail(replay_account.log_name, 30),

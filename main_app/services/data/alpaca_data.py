@@ -140,3 +140,47 @@ class AlpacaDataProvider(BarProvider):
             bars = self.stock_client.get_stock_bars(req)
             return {s: regular_session_only(_to_frame(bars, s)) for s in symbols}
         return {s: _to_frame(bars, s) for s in symbols}
+
+
+    def latest_prices(self, symbols, asset_class='stock') -> dict[str, float]:
+        """One request: the current mid price per symbol (for the live pulse).
+
+        Quotes, not trades: Alpaca's crypto venue prints trades sparsely, so the
+        last trade can sit still for minutes while the market moves."""
+        if not symbols:
+            return {}
+        out = {}
+        try:
+            if asset_class == 'crypto':
+                from alpaca.data.requests import CryptoLatestQuoteRequest
+                res = self.crypto_client.get_crypto_latest_quote(CryptoLatestQuoteRequest(symbol_or_symbols=list(symbols)))
+            else:
+                from alpaca.data.enums import DataFeed
+                from alpaca.data.requests import StockLatestQuoteRequest
+                res = self.stock_client.get_stock_latest_quote(StockLatestQuoteRequest(symbol_or_symbols=list(symbols), feed=DataFeed.IEX))
+            for s in symbols:
+                q = res.get(s)
+                bid, ask = float(getattr(q, 'bid_price', 0) or 0), float(getattr(q, 'ask_price', 0) or 0)
+                if bid > 0 and ask > 0:
+                    out[s] = (bid + ask) / 2
+                elif bid > 0 or ask > 0:
+                    out[s] = bid or ask
+        except Exception as exc:
+            log.warning('latest quotes failed: %s', exc)
+        missing = [s for s in symbols if s not in out]
+        if missing:
+            try:
+                if asset_class == 'crypto':
+                    from alpaca.data.requests import CryptoLatestTradeRequest
+                    res = self.crypto_client.get_crypto_latest_trade(CryptoLatestTradeRequest(symbol_or_symbols=missing))
+                else:
+                    from alpaca.data.enums import DataFeed
+                    from alpaca.data.requests import StockLatestTradeRequest
+                    res = self.stock_client.get_stock_latest_trade(StockLatestTradeRequest(symbol_or_symbols=missing, feed=DataFeed.IEX))
+                for s in missing:
+                    t = res.get(s)
+                    if t is not None and getattr(t, 'price', None):
+                        out[s] = float(t.price)
+            except Exception as exc:
+                log.warning('latest trades failed: %s', exc)
+        return out

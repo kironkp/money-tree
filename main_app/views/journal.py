@@ -92,7 +92,7 @@ def journal_run_proposal(request, pk, n):
     from main_app.services.strategies import get_strategy_class
     cls = get_strategy_class(prop['strategy_key'])
     account = current_account(request)
-    symbols = [i.symbol for i in Instrument.objects.filter(in_watchlist=True, active=True, asset_class__in=account.asset_classes)
+    symbols = [i.symbol for i in Instrument.objects.filter(in_watchlist=True, active=True, market=account.market)
                if cls.supports(i.asset_class)]
     end = timezone.localdate()
     exp = Experiment.objects.create(

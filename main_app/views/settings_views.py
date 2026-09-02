@@ -32,7 +32,7 @@ def settings_view(request):
         form = AgentConfigForm(instance=cfg)
     accounts = []
     for mode in (Mode.SIM, Mode.PAPER, Mode.REPLAY) + ((Mode.LIVE,) if cfg.mode == Mode.LIVE else ()):
-        for market in (Market.STOCKS, Market.CRYPTO):
+        for market in (Market.STOCKS, Market.CRYPTO, Market.DEGEN):
             accounts.append(Account.for_mode(mode, market))
     User = get_user_model()
     return render(request, 'settings.html', {

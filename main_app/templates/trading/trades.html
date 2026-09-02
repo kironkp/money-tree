@@ -19,9 +19,9 @@
     {% for t in page.object_list %}
       <tr>
         <td class="small">{{ t.exit_ts|et:'%b %d %H:%M' }}</td><td><strong>{{ t.instrument.symbol }}</strong></td><td>{{ t.strategy_key }}</td><td>{{ t.side }}</td>
-        <td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.entry_price|num:2 }}</td><td class="num">{{ t.exit_price|num:2 }}</td>
+        <td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.entry_price|price }}</td><td class="num">{{ t.exit_price|price }}</td>
         <td class="num {{ t.pnl|sign_class }}">{{ t.pnl|signed_money }}</td><td class="num {{ t.pnl_pct|sign_class }}">{{ t.pnl_pct|pct }}</td>
-        <td class="num small">{{ t.fees|num:2 }}</td><td class="num">{{ t.bars_held }}</td><td><span class="badge">{{ t.exit_reason }}</span></td>
+        <td class="num small">{{ t.fees|price }}</td><td class="num">{{ t.bars_held }}</td><td><span class="badge">{{ t.exit_reason }}</span></td>
       </tr>
     {% endfor %}
     </tbody>

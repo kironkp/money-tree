@@ -480,6 +480,12 @@ class AlpacaBroker(Broker):
             if symbol in self._positions:
                 self._positions[symbol].closing = False
 
+    def mark(self, prices: dict[str, float]) -> None:
+        for s, p in prices.items():
+            self.last_price[s] = p
+            if s in self._positions:
+                self._positions[s].last_price = p
+
     def drain_events(self) -> list:
         ev, self._events = self._events, []
         return ev

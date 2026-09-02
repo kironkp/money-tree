@@ -1,8 +1,9 @@
+from .burst import MomentumBurst
 from .ema_momentum import EmaMomentum
 from .orb import OpeningRangeBreakout
 from .vwap_reversion import VwapReversion
 
-STRATEGIES = {cls.key: cls for cls in (OpeningRangeBreakout, VwapReversion, EmaMomentum)}
+STRATEGIES = {cls.key: cls for cls in (OpeningRangeBreakout, VwapReversion, EmaMomentum, MomentumBurst)}
 
 
 def get_strategy_class(key: str):

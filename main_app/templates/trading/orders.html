@@ -15,7 +15,7 @@
         <td class="small">{{ o.submitted_at|et:'%b %d %H:%M:%S' }}</td><td><strong>{{ o.instrument.symbol }}</strong></td><td>{{ o.strategy_key }}</td>
         <td>{{ o.leg }}</td><td>{{ o.side }}</td><td class="num">{{ o.qty|qty }}</td><td>{{ o.order_type }}</td>
         <td><span class="badge {% if o.status == 'filled' %}ok{% elif o.status in 'rejected canceled' %}bad{% endif %}">{{ o.status }}</span>{% if o.error %}<br><small class="down">{{ o.error }}</small>{% endif %}</td>
-        <td class="num">{{ o.decision_price|num:2 }}</td><td class="num">{{ o.filled_avg_price|num:2 }}</td>
+        <td class="num">{{ o.decision_price|price }}</td><td class="num">{{ o.filled_avg_price|price }}</td>
         <td class="num small">{% for f in o.fills.all %}{{ f.realized_slippage_bps|floatformat:1 }}{% endfor %}</td>
         <td class="small">{{ o.reason }}</td>
       </tr>

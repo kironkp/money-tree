@@ -13,9 +13,9 @@
       <tr>
         <td><strong>{{ p.instrument.symbol }}</strong>{% if p.external %} <span class="badge warn">external</span>{% endif %}</td>
         <td>{{ p.strategy_key|default:'—' }}</td><td>{{ p.side }}</td><td class="num">{{ p.qty|qty }}</td>
-        <td class="num">{{ p.avg_price|num:2 }}</td><td class="num">{{ p.last_price|num:2 }}</td><td class="num">{{ p.market_value|money }}</td>
+        <td class="num">{{ p.avg_price|price }}</td><td class="num">{{ p.last_price|price }}</td><td class="num">{{ p.market_value|money }}</td>
         <td class="num {{ p.unrealized_pnl|sign_class }}">{{ p.unrealized_pnl|signed_money }} <small>{{ p.unrealized_pct|pct }}</small></td>
-        <td class="num">{{ p.stop_price|num:2 }}</td><td class="num">{{ p.target_price|num:2 }}</td><td class="num">{{ p.bars_held }}</td><td class="small">{{ p.opened_at|et }}</td>
+        <td class="num">{{ p.stop_price|price }}</td><td class="num">{{ p.target_price|price }}</td><td class="num">{{ p.bars_held }}</td><td class="small">{{ p.opened_at|et }}</td>
       </tr>
     {% endfor %}
     </tbody>

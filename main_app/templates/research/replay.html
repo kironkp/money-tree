@@ -3,7 +3,7 @@
 {% block title %}Replay · MoneyTree{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Replay a session</h1>
-  <div class="tabs"><a href="?market=stocks" class="{% if market == 'stocks' %}active{% endif %}">Stocks</a><a href="?market=crypto" class="{% if market == 'crypto' %}active{% endif %}">Crypto</a></div></div>
+  <div class="tabs"><a href="?market=stocks" class="{% if market == 'stocks' %}active{% endif %}">Stocks</a><a href="?market=crypto" class="{% if market == 'crypto' %}active{% endif %}">Crypto</a><a href="?market=degen" class="{% if market == 'degen' %}active{% endif %}">Degen</a></div></div>
 <div class="grid cols-2">
   <div class="card">
     <p class="small">Replays a stored {{ market }} session through the live loop into the <strong>Replay · {{ market }}</strong> account (reset each run): every enabled {{ market }} strategy, the risk manager, fills at the next bar's open, and the full commentary in the <a href="{% url 'feed' %}?account=replay&market={{ market }}">live feed</a>.</p>

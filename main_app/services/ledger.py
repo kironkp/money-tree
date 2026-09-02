@@ -16,7 +16,7 @@ from .engine import Recorder
 log = logging.getLogger('moneytree.ledger')
 
 
-def D(x, places='0.0001') -> Decimal:
+def D(x, places='0.00000001') -> Decimal:
     if x is None:
         return None
     return Decimal(str(x)).quantize(Decimal(places))

@@ -28,8 +28,8 @@ class RiskConfig:
     fee_bps: dict = field(default_factory=lambda: {'stock': 0.5, 'etf': 0.5, 'crypto': 25.0})
 
     @classmethod
-    def from_model(cls, cfg) -> 'RiskConfig':
-        return cls(
+    def from_model(cls, cfg, market: str = 'stocks') -> 'RiskConfig':
+        rc = cls(
             risk_per_trade_pct=float(cfg.risk_per_trade_pct), max_position_pct=float(cfg.max_position_pct),
             max_open_positions=int(cfg.max_open_positions), max_daily_loss_pct=float(cfg.max_daily_loss_pct),
             max_trades_per_day=int(cfg.max_trades_per_day),
@@ -39,6 +39,17 @@ class RiskConfig:
             min_reward_to_cost=float(cfg.min_reward_to_cost),
             fee_bps={'stock': float(cfg.fee_bps_stock), 'etf': float(cfg.fee_bps_stock), 'crypto': float(cfg.fee_bps_crypto)},
         )
+        if market == 'degen':
+            # The high-risk sandbox: bigger bets, more of them, a looser cost gate,
+            # a wider daily loss budget. Fake money, and it says so on the screen.
+            rc.risk_per_trade_pct = float(cfg.degen_risk_per_trade_pct)
+            rc.max_position_pct = float(cfg.degen_max_position_pct)
+            rc.max_open_positions = int(cfg.degen_max_open_positions)
+            rc.max_daily_loss_pct = float(cfg.degen_max_daily_loss_pct)
+            rc.max_trades_per_day = int(cfg.degen_max_trades_per_day)
+            rc.max_hold_minutes = int(cfg.degen_max_hold_minutes)
+            rc.min_reward_to_cost = float(cfg.degen_min_reward_to_cost)
+        return rc
 
     def round_trip_cost_pct(self, asset_class: str) -> float:
         return 2 * (self.fee_bps.get(asset_class, 0.5) + self.slippage_bps) / 1e4 * 100

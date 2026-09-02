@@ -26,10 +26,11 @@ def current_account(request, cfg: AgentConfig | None = None) -> Account:
 
 def account_tabs(cfg: AgentConfig | None = None) -> list[Account]:
     cfg = cfg or AgentConfig.get()
-    tabs = [Account.for_mode(cfg.mode, Market.STOCKS), Account.for_mode(cfg.mode, Market.CRYPTO)]
+    markets = (Market.STOCKS, Market.CRYPTO, Market.DEGEN)
+    tabs = [Account.for_mode(cfg.mode, m) for m in markets]
     if cfg.mode != Mode.SIM:
-        tabs += [Account.for_mode(Mode.SIM, Market.STOCKS), Account.for_mode(Mode.SIM, Market.CRYPTO)]
-    tabs += [Account.for_mode(Mode.REPLAY, Market.STOCKS), Account.for_mode(Mode.REPLAY, Market.CRYPTO)]
+        tabs += [Account.for_mode(Mode.SIM, m) for m in markets]
+    tabs += [Account.for_mode(Mode.REPLAY, m) for m in (Market.STOCKS, Market.CRYPTO, Market.DEGEN)]
     return tabs
 
 

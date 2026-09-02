@@ -12,7 +12,7 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--mode', default='sim', choices=['sim', 'paper', 'live'])
-        parser.add_argument('--market', default='stocks', choices=['stocks', 'crypto'])
+        parser.add_argument('--market', default='stocks', choices=['stocks', 'crypto', 'degen'])
         parser.add_argument('--replay', default='', help='replay this session date into the replay account')
         parser.add_argument('--speed', type=float, default=30.0, help='replay speed multiplier')
         parser.add_argument('--once', action='store_true', help='one tick, then exit')

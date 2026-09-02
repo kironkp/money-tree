@@ -30,7 +30,8 @@ class Mode(models.TextChoices):
 
 class Market(models.TextChoices):
     STOCKS = 'stocks', 'Stocks'   # NYSE/Nasdaq session, 09:30–16:00 ET
-    CRYPTO = 'crypto', 'Crypto'   # 24/7
+    CRYPTO = 'crypto', 'Crypto'   # BTC/ETH, hourly, 24/7
+    DEGEN = 'degen', 'Degen'      # altcoins, 1-minute bars, aggressive sizing — the high-risk sandbox
 
 
 class Stage(models.TextChoices):
@@ -44,7 +45,9 @@ class Instrument(models.Model):
     symbol = models.CharField(max_length=16, unique=True)  # AAPL, BTC/USD
     name = models.CharField(max_length=80, blank=True)
     asset_class = models.CharField(max_length=8, choices=AssetClass.choices, default=AssetClass.STOCK)
-    tick_size = models.DecimalField(max_digits=10, decimal_places=6, default=Decimal('0.01'))
+    # Which agent trades it: stocks, crypto (BTC/ETH) or degen (altcoins).
+    market = models.CharField(max_length=8, choices=Market.choices, default=Market.STOCKS)
+    tick_size = models.DecimalField(max_digits=12, decimal_places=8, default=Decimal('0.01'))
     # Smallest order quantity step. 1 for stocks (whole shares); crypto is
     # fractional and Alpaca publishes the per-asset increment.
     qty_increment = models.DecimalField(max_digits=16, decimal_places=8, default=Decimal('1'))
@@ -121,6 +124,17 @@ class AgentConfig(models.Model):
     # Crypto pays ~50 bps a round trip; 5-minute targets are smaller than that.
     # Hourly bars give the trade room to clear its costs.
     crypto_timeframe = models.CharField(max_length=8, default='1Hour')
+    # The degen lane: altcoins on 1-minute bars, its own (looser) risk limits.
+    degen_timeframe = models.CharField(max_length=8, default='1Min')
+    degen_risk_per_trade_pct = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal('3'))
+    degen_max_position_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('25'))
+    degen_max_open_positions = models.PositiveIntegerField(default=4)
+    degen_max_daily_loss_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('10'))
+    degen_max_trades_per_day = models.PositiveIntegerField(default=60)
+    degen_max_hold_minutes = models.PositiveIntegerField(default=45)
+    degen_min_reward_to_cost = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('1.2'))
+    # Live pulse: seconds between price checks while waiting for the next bar (0 = off).
+    pulse_seconds = models.PositiveIntegerField(default=10)
     starting_cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))
 
     # Risk — percentages are of account equity.
@@ -171,7 +185,7 @@ class AgentConfig(models.Model):
         return self.fee_bps_crypto if instrument.is_crypto else self.fee_bps_stock
 
     def timeframe_for(self, market: str) -> str:
-        return self.crypto_timeframe if market == Market.CRYPTO else self.timeframe
+        return {Market.CRYPTO: self.crypto_timeframe, Market.DEGEN: self.degen_timeframe}.get(market, self.timeframe)
 
 
 class Account(models.Model):
@@ -226,7 +240,11 @@ class Account(models.Model):
 
     @property
     def asset_classes(self) -> tuple:
-        return (AssetClass.CRYPTO,) if self.market == Market.CRYPTO else (AssetClass.STOCK, AssetClass.ETF)
+        return (AssetClass.CRYPTO,) if self.market in (Market.CRYPTO, Market.DEGEN) else (AssetClass.STOCK, AssetClass.ETF)
+
+    @property
+    def is_24x7(self) -> bool:
+        return self.market in (Market.CRYPTO, Market.DEGEN)
 
     @property
     def query(self) -> str:
@@ -272,9 +290,14 @@ class Account(models.Model):
 
 
 def market_for_symbols(symbols) -> str:
-    """crypto when every symbol is a pair like BTC/USD, else stocks."""
+    """The market whose instruments these are (falls back on the symbol shape)."""
     symbols = list(symbols or [])
-    return Market.CRYPTO if symbols and all('/' in s for s in symbols) else Market.STOCKS
+    if not symbols:
+        return Market.STOCKS
+    found = list(Instrument.objects.filter(symbol__in=symbols).values_list('market', flat=True).distinct())
+    if len(found) == 1:
+        return found[0]
+    return Market.CRYPTO if all('/' in s for s in symbols) else Market.STOCKS
 
 
 class Position(models.Model):
@@ -282,14 +305,14 @@ class Position(models.Model):
     instrument = models.ForeignKey(Instrument, on_delete=models.PROTECT, related_name='positions')
     strategy_key = models.CharField(max_length=40, blank=True)
     qty = models.DecimalField(max_digits=18, decimal_places=8)  # signed: negative = short
-    avg_price = models.DecimalField(max_digits=14, decimal_places=4)
-    stop_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
-    target_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    avg_price = models.DecimalField(max_digits=20, decimal_places=8)
+    stop_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    target_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     opened_at = models.DateTimeField()
     entry_bar_ts = models.DateTimeField(null=True, blank=True)
     bars_held = models.PositiveIntegerField(default=0)
     max_hold_until = models.DateTimeField(null=True, blank=True)
-    last_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    last_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     entry_fees = models.DecimalField(max_digits=12, decimal_places=4, default=D0)
     # Found at the broker but not opened by us: counted in exposure, never
     # touched by strategies.
@@ -373,8 +396,8 @@ class Order(models.Model):
     side = models.CharField(max_length=4, choices=OrderSide.choices)
     qty = models.DecimalField(max_digits=18, decimal_places=8)
     order_type = models.CharField(max_length=8, choices=OrderType.choices, default=OrderType.MARKET)
-    limit_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
-    stop_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    limit_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    stop_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     time_in_force = models.CharField(max_length=4, default='day')
     status = models.CharField(max_length=20, choices=OrderStatus.choices, default=OrderStatus.NEW)
     # Deterministic: mt-{mode}-{strategy}-{symbol}-{bar_ts}-{leg}. A crash
@@ -383,13 +406,13 @@ class Order(models.Model):
     client_order_id = models.CharField(max_length=120, unique=True)
     broker_order_id = models.CharField(max_length=80, blank=True)
     leg = models.CharField(max_length=8, default='entry')  # entry, stop, target, exit
-    decision_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    decision_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     bar_ts = models.DateTimeField(null=True, blank=True)
     reason = models.CharField(max_length=200, blank=True)
     submitted_at = models.DateTimeField(default=timezone.now)
     filled_at = models.DateTimeField(null=True, blank=True)
     filled_qty = models.DecimalField(max_digits=18, decimal_places=8, default=D0)
-    filled_avg_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    filled_avg_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     fees = models.DecimalField(max_digits=12, decimal_places=4, default=D0)
     error = models.TextField(blank=True)
 
@@ -409,7 +432,7 @@ class Fill(models.Model):
     order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name='fills')
     ts = models.DateTimeField()
     qty = models.DecimalField(max_digits=18, decimal_places=8)
-    price = models.DecimalField(max_digits=14, decimal_places=4)
+    price = models.DecimalField(max_digits=20, decimal_places=8)
     fee = models.DecimalField(max_digits=12, decimal_places=4, default=D0)
     # (fill − decision) / decision, signed against us. Feeds slippage calibration.
     realized_slippage_bps = models.FloatField(null=True, blank=True)
@@ -427,8 +450,8 @@ class Trade(models.Model):
     qty = models.DecimalField(max_digits=18, decimal_places=8)
     entry_ts = models.DateTimeField()
     exit_ts = models.DateTimeField()
-    entry_price = models.DecimalField(max_digits=14, decimal_places=4)
-    exit_price = models.DecimalField(max_digits=14, decimal_places=4)
+    entry_price = models.DecimalField(max_digits=20, decimal_places=8)
+    exit_price = models.DecimalField(max_digits=20, decimal_places=8)
     pnl = models.DecimalField(max_digits=14, decimal_places=2)
     pnl_pct = models.DecimalField(max_digits=8, decimal_places=3)
     fees = models.DecimalField(max_digits=12, decimal_places=4, default=D0)
@@ -466,9 +489,9 @@ class Signal(models.Model):
     ts = models.DateTimeField()  # bar ts the decision was made on
     action = models.CharField(max_length=6)  # buy sell close
     strength = models.FloatField(default=1.0)
-    price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
-    stop_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
-    target_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    stop_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    target_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     reason = models.CharField(max_length=200, blank=True)
     acted = models.BooleanField(default=False)
     blocked_reason = models.CharField(max_length=200, blank=True)
@@ -721,7 +744,8 @@ class FeedEvent(models.Model):
     @classmethod
     def prune(cls, days: int = 14) -> int:
         n, _ = cls.objects.filter(ts__lt=timezone.now() - timezone.timedelta(days=days)).delete()
-        return n
+        m, _ = cls.objects.filter(level='pulse', ts__lt=timezone.now() - timezone.timedelta(hours=24)).delete()
+        return n + m
 
 
 class SignupInvite(models.Model):
@@ -754,10 +778,10 @@ class TradeCard(models.Model):
     side = models.CharField(max_length=5, default='long')
     status = models.CharField(max_length=20, default='approved')
     bar_ts = models.DateTimeField(null=True, blank=True)
-    decision_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
-    planned_entry = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
-    stop_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
-    target_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    decision_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    planned_entry = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    stop_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
+    target_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     qty = models.DecimalField(max_digits=18, decimal_places=8, default=D0)
     risk_dollars = models.DecimalField(max_digits=12, decimal_places=2, default=D0)
     reward_dollars = models.DecimalField(max_digits=12, decimal_places=2, default=D0)
@@ -769,11 +793,11 @@ class TradeCard(models.Model):
     protection = models.CharField(max_length=12, default='none')  # none engine bracket stop_order
     protection_order_id = models.CharField(max_length=80, blank=True)
     filled_qty = models.DecimalField(max_digits=18, decimal_places=8, default=D0)
-    avg_fill = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    avg_fill = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     fees = models.DecimalField(max_digits=12, decimal_places=4, default=D0)
     slippage_bps = models.FloatField(null=True, blank=True)
     exit_reason = models.CharField(max_length=16, blank=True)
-    exit_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    exit_price = models.DecimalField(max_digits=20, decimal_places=8, null=True, blank=True)
     gross_pnl = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     net_pnl = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
     error = models.CharField(max_length=300, blank=True)

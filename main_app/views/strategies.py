@@ -25,7 +25,7 @@ def _account_for_stage(stage: str, market: str) -> Account | None:
 @login_required
 def strategy_list(request):
     cfg = AgentConfig.get()
-    groups = {'stocks': [], 'crypto': []}
+    groups = {'stocks': [], 'crypto': [], 'degen': []}
     for row in Strategy.objects.all():
         cls = STRATEGIES.get(row.key)
         if cls is None:
@@ -44,8 +44,7 @@ def strategy_detail(request, market, key):
     cls = get_strategy_class(key)
     cfg = AgentConfig.get()
     Form = strategy_param_form(cls, row.params)
-    wanted = ('crypto',) if market == 'crypto' else ('stock', 'etf')
-    instruments = [i for i in Instrument.objects.filter(in_watchlist=True, active=True, asset_class__in=wanted)
+    instruments = [i for i in Instrument.objects.filter(in_watchlist=True, active=True, market=market)
                    if cls.supports(i.asset_class)]
     if request.method == 'POST':
         denied = deny_observer(request)

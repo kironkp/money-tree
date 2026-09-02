@@ -16,7 +16,14 @@ Same engine, same risk manager, same strategy code at every stage. Promotion
 is gated by a checklist (sessions, trades, profit factor, drawdown, live
 expectancy vs backtest, realized slippage) shown on each strategy page.
 
-Two agents, two piggy banks: the **stocks agent** trades the NYSE/Nasdaq
+Three lanes, three piggy banks: **Stocks** (NYSE/Nasdaq session), **Crypto**
+(BTC/ETH, hourly, careful) and **Degen** (Alpaca altcoins on 1-minute bars,
+aggressive sizing, its own loose limits — the high-risk sandbox, clearly
+labeled, expected to bleed). Every lane has a live **pulse** every 10 seconds
+between bar decisions: prices, open P&L, distance to stop/target and to the
+nearest trigger, streamed into the decision journal.
+
+Two of them in detail: the **stocks agent** trades the NYSE/Nasdaq
 session (09:30–16:00 ET, sleeps otherwise) and the **crypto agent** trades
 BTC/USD and ETH/USD around the clock. Each has its own account, strategy
 rows, process and **live feed** — a running commentary of what it sees,
@@ -38,7 +45,8 @@ Then, in a second terminal, the agent:
 
 ```bash
 pipenv run python manage.py run_agent --mode sim --market stocks   # fake currency, live quotes
-pipenv run python manage.py run_agent --mode sim --market crypto   # the one that never sleeps
+pipenv run python manage.py run_agent --mode sim --market crypto   # BTC/ETH, hourly
+pipenv run python manage.py run_agent --mode sim --market degen    # altcoins, 1-minute bars, the sandbox
 pipenv run python manage.py run_agent --replay 2026-08-28 --speed 30 --market stocks   # demo a past session
 ```
 
@@ -75,6 +83,9 @@ tap for the audit). Kill switch and Stop reach a sleeping agent within 2 seconds
 6. **Coach** — with `ANTHROPIC_API_KEY`, Claude reviews recent sessions and
    proposes experiments you can run with one click.
 7. **Graduate** — when the checklist is green, move the strategy up a stage.
+8. **Nightly auto-research** (`manage.py auto_research`, launchd 02:10): walk-forward
+   every enabled strategy on trailing real bars; promote only when the search's
+   out-of-sample profit factor beats the current params' and clears costs; journal it.
 
 ## Accounts & people
 

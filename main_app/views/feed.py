@@ -14,9 +14,14 @@ from .common import account_tabs, current_account
 
 def _serialize(e: FeedEvent, today):
     local = e.ts.astimezone(cal.ET)
+    bar = e.bar_ts.astimezone(cal.ET) if e.bar_ts else None
+    data = e.data or {}
+    details = {k: v for k, v in data.items() if k not in ('rules', 'card')}
     return {'id': e.id, 'ts': int(e.ts.timestamp()),
             't': local.strftime('%H:%M:%S') if local.date() == today else local.strftime('%b %d %H:%M'),
-            'level': e.level, 'symbol': e.symbol, 'strategy': e.strategy_key, 'text': e.text}
+            'bar': (bar.strftime('%H:%M') if bar.date() == today else bar.strftime('%b %d %H:%M')) if bar else '',
+            'level': e.level, 'phase': e.phase, 'symbol': e.symbol, 'strategy': e.strategy_key, 'text': e.text,
+            'details': details, 'rules': data.get('rules') or [], 'card': e.card_id}
 
 
 @login_required

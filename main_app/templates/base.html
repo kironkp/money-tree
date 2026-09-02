@@ -26,10 +26,11 @@
   </head>
   <body class="{% block body_class %}{% endblock %}" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
     {% if user.is_authenticated %}
+    {% if account and account.mode == 'live' or not account and cfg.mode == 'live' %}<div class="live-banner">LIVE — REAL MONEY</div>{% endif %}
     <header class="site-header">
       <button type="button" id="menu-toggle" class="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="mobile-menu">☰</button>
       <a href="{% url 'dashboard' %}" class="brand"><span class="leaf">🌳</span> MoneyTree
-        <span class="badge {{ cfg.mode }}">{{ cfg.mode }}</span>
+        {% if account %}<span class="badge {{ account.mode }}" title="the account on this page">{{ account.mode }} · {{ account.market }}</span>{% else %}<span class="badge {{ cfg.mode }}" title="global mode">{{ cfg.mode }}</span>{% endif %}
       </a>
       <nav class="site-nav" aria-label="Main">
         <ul>
@@ -47,7 +48,7 @@
       </nav>
       <div class="header-tools">
         <span class="agents" title="running agents">
-          {% for r in agent_runs %}<span class="dot {% if r.heartbeat_age_s < 400 %}on{% else %}stale{% endif %}"></span><span class="label">{{ r.market }}{% if r.mode == 'replay' %} replay{% endif %} </span>{% empty %}<span class="dot"></span><span class="label">no agent</span>{% endfor %}
+          {% for r in agent_runs %}<span class="dot {{ r.health }}" title="{{ r.market }} {{ r.mode }}: {{ r.health }} ({{ r.state }})"></span><span class="label">{{ r.market }}{% if r.mode == 'replay' %} replay{% endif %} </span>{% empty %}<span class="dot off"></span><span class="label">no agent</span>{% endfor %}
         </span>
         {% if cfg.kill_switch %}<span class="badge bad">kill switch</span>{% endif %}
         <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch theme">☀</button>
@@ -88,7 +89,7 @@
       {% endif %}
       {% block content %}{% endblock %}
     </main>
-    <footer class="site-main small muted">MoneyTree v{{ VERSION }} · fake money until it earns its stripes · times in ET</footer>
+    <footer class="site-main small muted">MoneyTree v{{ VERSION }} · {% if cfg.mode == 'live' %}<span class="down">LIVE mode is armed — real money</span>{% else %}fake money until it earns its stripes{% endif %} · times in ET</footer>
     <script src="{% static_v 'js/app.js' %}"></script>
     <script src="{% static_v 'js/charts.js' %}"></script>
     <script src="{% static_v 'js/feed.js' %}"></script>

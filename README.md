@@ -50,6 +50,18 @@ walk to exercise everything; `--provider yahoo` gives real bars (60 days of
 5-min, 7 days of 1-min, rate-limited). With free Alpaca paper keys you get
 years of split-adjusted history and real-time IEX quotes.
 
+## What the screen answers in ten seconds
+
+The status strip says whether this is real money, whether the agent is healthy,
+waiting, stale or disconnected, how old the last completed bar is, when the books
+were last reconciled with the broker, whether trading is on and the kill switch
+off, and **"Safe to trade now: Yes/No"** with every blocker named. Below it: what
+the agent is doing now and when it acts next, the closest opportunities with the
+rules that still fail, active trades with planned risk and stop/target distance
+and protection, pending orders through the broker lifecycle, portfolio risk,
+alerts that stay until acknowledged, and the decision journal (readable lines,
+tap for the audit). Kill switch and Stop reach a sleeping agent within 2 seconds.
+
 ## The improvement loop
 
 1. **Data** — sync history, look at coverage and quality flags.

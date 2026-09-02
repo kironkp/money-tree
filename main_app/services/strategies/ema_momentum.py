@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import indicators as ind
-from .base import Context, Param, Signal, Strategy
+from .base import Context, Param, Rule, Signal, Strategy
 
 
 class EmaMomentum(Strategy):
@@ -68,13 +68,24 @@ class EmaMomentum(Strategy):
                            reason=f'EMA{int(self.p["fast"])}<{int(self.p["slow"])} cross, RSI {bar.rsi:.0f}')]
         return []
 
-    def explain(self, ctx: Context, bar) -> str:
+    def rules(self, ctx: Context, bar) -> list[Rule]:
         if np.isnan(bar.ema_diff_prev):
-            return 'warming up'
-        rel = '>' if bar.ema_diff > 0 else '<'
-        note = f'EMA{int(self.p["fast"])} {bar.ema_fast:,.2f} {rel} EMA{int(self.p["slow"])} {bar.ema_slow:,.2f}, RSI {bar.rsi:.0f}'
+            return [Rule('warmup', False, 'still warming up')]
+        fast, slow = int(self.p['fast']), int(self.p['slow'])
         if ctx.position is not None:
-            return f'holding, {note}'
-        if bar.relvol < self.p['min_relvol']:
-            note += f', relvol {bar.relvol:.1f} low'
-        return note + ' — waiting for a cross'
+            return [Rule('holding', True, f'holding; EMA{fast} {bar.ema_fast:,.2f} vs EMA{slow} {bar.ema_slow:,.2f} (exits on a cross down)')]
+        cross_up = bar.ema_diff > 0 and bar.ema_diff_prev <= 0
+        if cross_up:
+            cross_text = f'EMA{fast} just crossed above EMA{slow}'
+        elif bar.ema_diff > 0:
+            cross_text = f'EMA{fast} is above EMA{slow} (bullish) but did not newly cross'
+        else:
+            cross_text = f'EMA{fast} is below EMA{slow} (bearish)'
+        out = [Rule('cross', bool(cross_up), cross_text, value=bar.ema_diff, threshold=0.0)]
+        in_band = self.p['rsi_min'] <= bar.rsi <= self.p['rsi_max']
+        out.append(Rule('rsi', bool(in_band), f'RSI {bar.rsi:.0f} ' + ('within' if in_band else 'outside') +
+                        f' the {self.p["rsi_min"]:.0f}–{self.p["rsi_max"]:.0f} band', value=bar.rsi, threshold=self.p['rsi_min']))
+        vol_ok = bar.relvol >= self.p['min_relvol']
+        out.append(Rule('volume', bool(vol_ok), f'relative volume {bar.relvol:.1f} vs {self.p["min_relvol"]:.1f} required',
+                        value=bar.relvol, threshold=self.p['min_relvol']))
+        return out

@@ -50,6 +50,37 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
 - **Tabs**: `static/js/tabs.js` traveling indicator + `@view-transition` for
   cross-page flow (Secretary's nav-tabs feel).
 
+## v1.2 — the "game time" slice (execution truth before appearance)
+
+- **Trade cards** (`TradeCard`, engine `CardState`): one record per trade with the
+  correlation id = entry client_order_id; states awaiting_approval → approved →
+  submitted → accepted → partially_filled → filled → protected → closing → closed
+  (or rejected/canceled/expired). `hydrate_cards()` restores open cards on restart.
+- **Symbol states** (`SymbolState`): every rule with value/threshold/pass-fail from
+  `Strategy.rules()`, plus the plain-English summary — feeds "closest opportunities".
+- **Feed phases**: observe/evaluate/decide/size/submit/fill/manage/close/alert;
+  `ts` = wall clock, `bar_ts` = the market bar. `feed.js` renders summaries with an
+  expandable audit and shows DISCONNECTED on failed polls.
+- **One coordinated close**: `SimBroker` marks `closing`, rejects duplicate exits,
+  cancels in-flight exits before an immediate close, never fills an exit without a
+  position (no reversals). `AlpacaBroker.close_position` cancels protection →
+  confirms → closes the venue's remaining qty; crypto gets a venue-side stop-limit
+  after the entry fill (`_place_protection`).
+- **Reconciliation**: `AlpacaBroker.sync()` every tick reports adopted/closed/
+  diverged; divergence blocks entries (`RiskManager.blocks['reconcile']`) until clean.
+  `Account.last_reconcile_at/reconcile_ok/reconcile_note` drive the status strip.
+- **Kill means now**: the agent polls `AgentConfig`/`AgentRun.stop_requested`/
+  approvals every 2 s inside `_sleep`; risk settings hot-reload between bars;
+  strategy edits raise a `config_changed` alert (restart to apply).
+- **Risk survives restarts**: `Account.day_entries/day_halted/day_halted_reason`
+  restored via `RiskManager.restore()`; `AgentRun.expected_interval_s/state/
+  next_action_at/last_bar_ts` feed `AgentRun.health` (healthy/waiting/stale/disconnected).
+- **Strategies own positions**; `allocation_pct` caps exposure; graduation is
+  enforced (override needs a reason); `live_confirm_orders` = operator approval cards.
+- **Watchdog** (`manage.py watchdog`, launchd every 5 min) closes paper/live positions
+  whose agent is dead or stale. `services/status.py` builds "Safe to trade now" with
+  explicit blockers.
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live

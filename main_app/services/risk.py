@@ -70,10 +70,16 @@ class RiskManager:
         self.day = DayState()
         self.kill_switch = False
         self.trading_enabled = True
+        # Named blockers set by the agent (reconciliation diverged, data stale, …).
+        self.blocks: dict[str, str] = {}
 
     # --- day tracking -----------------------------------------------------
     def new_day(self, date, equity: float) -> None:
         self.day = DayState(date=date, start_equity=equity)
+
+    def restore(self, date, start_equity: float, entries: int = 0, halted: bool = False, reason: str = '') -> None:
+        """Pick the day up where a previous process left it."""
+        self.day = DayState(date=date, start_equity=start_equity, entries=entries, halted=halted, halted_reason=reason)
 
     def record_entry(self) -> None:
         self.day.entries += 1
@@ -100,12 +106,14 @@ class RiskManager:
 
     # --- the gate ---------------------------------------------------------
     def evaluate(self, sig: Signal, ctx: Context, account, positions: dict, asset_class: str,
-                 strategy_supports: bool = True) -> Decision:
+                 strategy_supports: bool = True, allocation_pct: float = 100.0, strategy_exposure: float = 0.0) -> Decision:
         c = self.cfg
         if self.kill_switch:
             return Decision(False, reason='kill switch is on')
         if not self.trading_enabled:
             return Decision(False, reason='trading disabled in settings')
+        for reason in self.blocks.values():
+            return Decision(False, reason=reason)
         if self.day.halted:
             return Decision(False, reason=f'halted for the day: {self.day.halted_reason}')
         if not strategy_supports:
@@ -144,6 +152,11 @@ class RiskManager:
         qty_cap = equity * c.max_position_pct / 100.0 / price
         qty_cash = account.buying_power / (price * (1 + c.slippage_bps / 1e4))
         qty = min(qty_risk, qty_cap, qty_cash)
+        if allocation_pct < 100:
+            room = equity * allocation_pct / 100.0 - strategy_exposure
+            if room <= 0:
+                return Decision(False, reason=f'strategy allocation ({allocation_pct:g}% of equity) is fully used')
+            qty = min(qty, room / price)
         inc = float(self.qty_increments.get(sig.symbol, 0.0001 if asset_class == 'crypto' else 1.0))
         qty = round_qty(qty, inc)
         if qty <= 0:

@@ -39,7 +39,8 @@
       {% for it in check.items %}<li><span class="mark">{% if it.ok %}<span class="up">✔</span>{% else %}<span class="down">✘</span>{% endif %}</span><span>{{ it.name }}{% if it.actual != '' %} — <span class="mono">{{ it.actual }}</span>{% endif %}{% if it.required %} <small class="muted">(need {{ it.required }})</small>{% endif %}</span></li>{% endfor %}
     </ul>
     <div class="pill-row" style="margin-top: var(--s-3)">
-      {% if check.next %}<form method="post" class="inline" data-confirm="Move {{ row.name }} up to {{ check.next_label }}?">{% csrf_token %}<input type="hidden" name="action" value="stage_up"><button class="btn small {% if check.ready %}primary{% endif %}">Promote to {{ check.next }}</button></form>{% endif %}
+      {% if check.next %}<form method="post" class="inline" data-confirm="Move {{ row.name }} up to {{ check.next_label }}?">{% csrf_token %}<input type="hidden" name="action" value="stage_up"><button class="btn small {% if check.ready %}primary{% endif %}">Promote to {{ check.next }}</button>
+        {% if not check.ready %}<label class="small" style="display:inline"><input type="checkbox" name="override" value="yes"> override</label> <input type="text" name="override_reason" placeholder="reason (logged)" style="width:160px;display:inline-block">{% endif %}</form>{% endif %}
       {% if row.stage != 'seed' %}<form method="post" class="inline">{% csrf_token %}<input type="hidden" name="action" value="stage_down"><button class="btn small">Demote</button></form>{% endif %}
     </div>
     {% if check.baseline %}<p class="small muted" style="margin-top: var(--s-3)">Backtest baseline: {{ check.baseline.trades }} trades, expectancy {{ check.baseline.expectancy|floatformat:2 }}, PF {{ check.baseline.profit_factor|floatformat:2 }}, Sharpe {{ check.baseline.sharpe|floatformat:2 }}</p>{% endif %}

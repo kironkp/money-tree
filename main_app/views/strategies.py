@@ -59,11 +59,22 @@ def strategy_detail(request, market, key):
             return redirect('strategy-detail', market=market, key=key)
         if action in ('stage_up', 'stage_down'):
             target = next_stage(row.stage) if action == 'stage_up' else previous_stage(row.stage)
+            if target and action == 'stage_up':
+                account = _account_for_stage(row.stage, market) or Account.for_mode('sim', market)
+                check = graduation_checklist(row, account, cfg)
+                override = request.POST.get('override') == 'yes'
+                if not check['ready'] and not override:
+                    failing = '; '.join(i['name'] for i in check['items'] if not i['ok'])
+                    messages.error(request, f'not ready for {STAGE_LABEL[target]}: {failing}. Tick "override" and give a reason to force it.')
+                    return redirect('strategy-detail', market=market, key=key)
+                source = 'graduated (checklist green)' if check['ready'] else f'OVERRIDE: {request.POST.get("override_reason", "")[:120] or "no reason given"}'
+            else:
+                source = 'manual stage change'
             if target:
                 row.stage = target
-                row.history = (row.history or []) + [{'at': str(date.today()), 'stage': target, 'source': 'manual stage change'}]
+                row.history = (row.history or []) + [{'at': str(date.today()), 'stage': target, 'source': source}]
                 row.save(update_fields=['stage', 'history'])
-                messages.success(request, f'{row.name} is now {STAGE_LABEL[target]}')
+                messages.success(request, f'{row.name} is now {STAGE_LABEL[target]} ({source})')
             return redirect('strategy-detail', market=market, key=key)
         form = Form(request.POST)
         if form.is_valid():
@@ -77,6 +88,7 @@ def strategy_detail(request, market, key):
             row.params = params
             row.symbols = [s for s in request.POST.getlist('symbols') if Instrument.objects.filter(symbol=s).exists()]
             row.allocation_pct = request.POST.get('allocation_pct') or row.allocation_pct
+            row.timeframe = cfg.timeframe_for(market)  # the market's timeframe is the only one that runs
             row.notes = request.POST.get('notes', row.notes)
             if changed:
                 row.version += 1
@@ -135,3 +147,29 @@ def strategy_create_missing(request):
             n += created
     messages.success(request, f'{n} strategy rows created')
     return redirect('strategy-list')
+
+
+@operator_required
+@require_POST
+def portfolio_backtest(request, market):
+    """Every enabled strategy of a market together — conflicts and capital contention included."""
+    cfg = AgentConfig.get()
+    rows = list(Strategy.objects.filter(market=market, enabled=True))
+    if not rows:
+        messages.error(request, f'no enabled {market} strategies')
+        return redirect('strategy-list')
+    symbols = sorted({s for r in rows for s in (r.symbols or [])})
+    days = int(request.POST.get('days', 60) or 60)
+    end = date.today()
+    run = BacktestRun.objects.create(
+        strategy_key='portfolio', symbols=symbols, timeframe=cfg.timeframe_for(market), start=end - timedelta(days=days), end=end,
+        starting_cash=cfg.starting_cash, tag=f'{market} portfolio ({len(rows)} strategies)',
+        params={'strategies': [{'key': r.key, 'params': r.params, 'symbols': r.symbols, 'allocation_pct': float(r.allocation_pct)}
+                               for r in rows]})
+    try:
+        run_backtest_for_model(run)
+    except Exception as exc:
+        messages.error(request, f'portfolio backtest failed: {exc}')
+        return redirect('strategy-list')
+    messages.success(request, f'portfolio backtest #{run.pk}: {run.metrics.get("trades", 0)} trades, net {run.metrics.get("net_pnl", 0):+.2f}')
+    return redirect('backtest-detail', pk=run.pk)

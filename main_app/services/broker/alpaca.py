@@ -1,8 +1,11 @@
 """Alpaca broker adapter (paper and live share it; the keys differ).
 
-Stocks: bracket orders carry the stop and target server-side. Crypto: simple
-orders only (Alpaca has no crypto brackets), so the engine evaluates exits
-on every bar exactly like the simulator and fires a market exit.
+Alpaca is the source of truth. `sync()` reconciles account, positions, open
+orders and closed fills against our books and reports divergences; the agent
+calls it before every decision. Closing is one coordinated lifecycle: cancel
+protective orders, confirm, close the remaining venue quantity, ignore
+duplicates. Stocks carry bracket legs at the venue; crypto (no brackets) gets
+a resting stop order after the entry fills, so a stop survives our process.
 
 Live money is refused unless settings.LIVE_TRADING_ARMED is on AND the
 AgentConfig mode is 'live' — two switches in two places, on purpose.
@@ -24,23 +27,30 @@ class LiveTradingRefused(RuntimeError):
     pass
 
 
+def _status(o) -> str:
+    return str(getattr(o, 'status', '')).lower().split('.')[-1]
+
+
 class AlpacaBroker(Broker):
     name = 'alpaca'
     immediate_fills = True
 
     def __init__(self, paper: bool = True, asset_classes: dict | None = None, qty_increments: dict | None = None,
-                 mode_is_live: bool = False):
-        if not paper:
-            if not (settings.LIVE_TRADING_ARMED and mode_is_live):
-                raise LiveTradingRefused('live trading is not armed (LIVE_TRADING_ARMED=1 and mode=live are both required)')
-            key, secret = settings.ALPACA_LIVE_API_KEY, settings.ALPACA_LIVE_SECRET_KEY
-        else:
-            key, secret = settings.ALPACA_API_KEY, settings.ALPACA_SECRET_KEY
-        if not (key and secret):
-            raise RuntimeError('Alpaca keys missing for this mode')
-        from alpaca.trading.client import TradingClient
-        self.client = TradingClient(key, secret, paper=paper)
+                 mode_is_live: bool = False, client=None, poll_s: float = 8.0):
+        if client is None:
+            if not paper:
+                if not (settings.LIVE_TRADING_ARMED and mode_is_live):
+                    raise LiveTradingRefused('live trading is not armed (LIVE_TRADING_ARMED=1 and mode=live are both required)')
+                key, secret = settings.ALPACA_LIVE_API_KEY, settings.ALPACA_LIVE_SECRET_KEY
+            else:
+                key, secret = settings.ALPACA_API_KEY, settings.ALPACA_SECRET_KEY
+            if not (key and secret):
+                raise RuntimeError('Alpaca keys missing for this mode')
+            from alpaca.trading.client import TradingClient
+            client = TradingClient(key, secret, paper=paper)
+        self.client = client
         self.paper = paper
+        self.poll_s = poll_s
         self.asset_classes = asset_classes or {}
         self.qty_increments = qty_increments or {}
         self._positions: dict[str, Position] = {}
@@ -49,9 +59,11 @@ class AlpacaBroker(Broker):
         self._buying_power = 0.0
         self.last_price: dict[str, float] = {}
         self.orders: dict[str, OrderReq] = {}
+        self._open_orders: list[dict] = []
         self._events: list = []
         self._last_order_sync: datetime | None = None
         self.trades: list[TradeRecord] = []
+        self.last_sync: dict = {}
 
     # --- state ------------------------------------------------------------
     @property
@@ -68,52 +80,87 @@ class AlpacaBroker(Broker):
                             buying_power=self._buying_power or self._cash)
 
     def hydrate(self, cash: float, positions: list[Position]) -> None:
-        # Local knowledge (strategy, stop/target) layered over the venue's truth in sync().
+        # Local knowledge (strategy, stop/target, protection) layered over the venue's truth in sync().
         self._positions = {p.symbol: p for p in positions}
         self._cash = float(cash)
 
     def _is_crypto(self, symbol: str) -> bool:
         return self.asset_classes.get(symbol, 'stock') == 'crypto'
 
-    @staticmethod
-    def _sym(symbol: str) -> str:
-        return symbol  # Alpaca accepts 'BTC/USD' for crypto and 'AAPL' for stocks
+    def _venue_symbol(self, symbol: str) -> str:
+        return symbol.replace('/', '') if self._is_crypto(symbol) else symbol
+
+    def _our_symbol(self, venue_symbol: str) -> str:
+        if '/' in venue_symbol:
+            return venue_symbol
+        for s in self.asset_classes:
+            if s.replace('/', '') == venue_symbol:
+                return s
+        return venue_symbol
+
+    def _increment(self, symbol: str) -> float:
+        return float(self.qty_increments.get(symbol, 1.0 if not self._is_crypto(symbol) else 0.0001))
+
+    def open_orders_for(self, symbol: str | None = None) -> list:
+        return [o for o in self._open_orders if symbol is None or o['symbol'] == symbol]
 
     # --- reconciliation ---------------------------------------------------
     def sync(self) -> dict:
+        """Compare our books with the venue and adopt the venue's truth.
+
+        Returns adopted (positions we did not know), closed (positions the venue
+        no longer has), diverged [(symbol, ours, venue)], open_orders, fills."""
         acct = self.client.get_account()
         self._cash = float(acct.cash)
         self._equity = float(acct.equity)
         self._buying_power = float(acct.buying_power)
-        venue = {}
+        venue: dict[str, tuple[float, float, float]] = {}
         for p in self.client.get_all_positions():
-            symbol = p.symbol if '/' in p.symbol or not self._looks_crypto(p.symbol) else self._crypto_symbol(p.symbol)
-            qty = float(p.qty) * (-1 if str(p.side).lower().endswith('short') else 1)
-            venue[symbol] = (qty, float(p.avg_entry_price), float(p.current_price or p.avg_entry_price))
-        adopted, closed = [], []
+            symbol = self._our_symbol(str(p.symbol))
+            qty = float(p.qty) * (-1 if str(getattr(p, 'side', '')).lower().endswith('short') else 1)
+            venue[symbol] = (qty, float(p.avg_entry_price), float(getattr(p, 'current_price', None) or p.avg_entry_price))
+        adopted, closed, diverged = [], [], []
         for symbol, (qty, avg, cur) in venue.items():
             local = self._positions.get(symbol)
             if local is None:
                 self._positions[symbol] = Position(symbol=symbol, qty=qty, avg_price=avg, entry_ts=datetime.now(UTC),
-                                                   external=True, last_price=cur)
+                                                   external=True, last_price=cur, protection='none')
                 adopted.append(symbol)
             else:
+                if abs(local.qty - qty) > self._increment(symbol) / 2:
+                    diverged.append((symbol, local.qty, qty))
                 local.qty, local.avg_price, local.last_price = qty, avg, cur
             self.last_price[symbol] = cur
         for symbol in list(self._positions):
             if symbol not in venue:
                 closed.append(symbol)
-                del self._positions[symbol]
-        self._sync_closed_orders()
-        return {'adopted': adopted, 'closed': closed, 'cash': self._cash, 'equity': self._equity}
+        fills = self._sync_closed_orders()
+        for symbol in closed:
+            self._positions.pop(symbol, None)
+        self._open_orders = self._fetch_open_orders()
+        self.last_sync = {'adopted': adopted, 'closed': closed, 'diverged': diverged, 'cash': self._cash,
+                          'equity': self._equity, 'open_orders': len(self._open_orders), 'fills': fills,
+                          'at': datetime.now(UTC)}
+        return self.last_sync
 
-    def _looks_crypto(self, symbol: str) -> bool:
-        return symbol.endswith('USD') and len(symbol) > 4 and symbol[:-3] + '/USD' in self.asset_classes
+    def _fetch_open_orders(self) -> list[dict]:
+        try:
+            from alpaca.trading.enums import QueryOrderStatus
+            from alpaca.trading.requests import GetOrdersRequest
+            rows = self.client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN, nested=True, limit=200))
+        except Exception as exc:
+            log.warning('open-order fetch failed: %s', exc)
+            return self._open_orders
+        out = []
+        for o in rows:
+            out.append({'id': str(o.id), 'client_order_id': str(o.client_order_id or ''), 'symbol': self._our_symbol(str(o.symbol)),
+                        'side': str(getattr(o, 'side', '')).lower().split('.')[-1], 'qty': float(o.qty or 0),
+                        'type': str(getattr(o, 'type', '')).lower().split('.')[-1], 'status': _status(o),
+                        'order_class': str(getattr(o, 'order_class', '')).lower().split('.')[-1],
+                        'legs': len(getattr(o, 'legs', None) or [])})
+        return out
 
-    def _crypto_symbol(self, symbol: str) -> str:
-        return symbol[:-3] + '/USD'
-
-    def _sync_closed_orders(self) -> None:
+    def _sync_closed_orders(self) -> int:
         """Turn fills the venue reports into Fill/Trade events for the recorder."""
         try:
             from alpaca.trading.enums import QueryOrderStatus
@@ -122,30 +169,31 @@ class AlpacaBroker(Broker):
             closed = self.client.get_orders(req)
         except Exception as exc:
             log.warning('order sync failed: %s', exc)
-            return
+            return 0
         self._last_order_sync = datetime.now(UTC)
+        n = 0
         for o in closed:
-            self._absorb_closed(o)
+            n += self._absorb_closed(o)
             for leg in (getattr(o, 'legs', None) or []):
-                self._absorb_closed(leg, parent=o)
+                n += self._absorb_closed(leg, parent=o)
+        return n
 
-    def _absorb_closed(self, o, parent=None) -> None:
+    def _absorb_closed(self, o, parent=None) -> int:
         cid = str(o.client_order_id or '')
-        if str(o.status).lower().split('.')[-1] != 'filled' or not o.filled_avg_price:
-            return
+        if _status(o) != 'filled' or not o.filled_avg_price:
+            return 0
         local = self.orders.get(cid)
         if local is None:
             if parent is None or str(parent.client_order_id or '') not in self.orders:
-                return
-            # A bracket leg: register it as an exit on our books.
+                return 0
             p = self.orders[str(parent.client_order_id)]
-            reason = 'target' if str(o.type).lower().endswith('limit') else 'stop'
+            reason = 'target' if str(getattr(o, 'type', '')).lower().endswith('limit') else 'stop'
             local = OrderReq(id=cid or f'{p.id}-{reason}', symbol=p.symbol, side='sell' if p.side == 'buy' else 'buy',
                              qty=float(o.filled_qty or o.qty), leg='exit', strategy_key=p.strategy_key,
                              reason=reason, exit_reason=reason, bar_ts=None)
             self.orders[local.id] = local
         if local.status == 'filled':
-            return
+            return 0
         price = float(o.filled_avg_price)
         qty = float(o.filled_qty or local.qty)
         ts = getattr(o, 'filled_at', None) or datetime.now(UTC)
@@ -155,15 +203,13 @@ class AlpacaBroker(Broker):
         if local.decision_price:
             signed = (price - local.decision_price) / local.decision_price * 1e4
             slip = signed if local.side == 'buy' else -signed
-        fill = Fill(local.id, local.symbol, ts, local.side, qty, price, 0.0, slip)
-        self._events.append(('fill', fill, local))
+        self._events.append(('fill', Fill(local.id, local.symbol, ts, local.side, qty, price, 0.0, slip), local))
         if local.leg == 'exit':
             self._record_trade(local, price, qty, ts)
+        return 1
 
     def _record_trade(self, order: OrderReq, price: float, qty: float, ts: datetime) -> None:
-        pos = self._closed_snapshot.pop(order.symbol, None) if hasattr(self, '_closed_snapshot') else None
-        if pos is None:
-            pos = self._positions.get(order.symbol)
+        pos = self._positions.get(order.symbol)
         if pos is None:
             return
         pnl = (price - pos.avg_price) * qty * (1 if pos.qty > 0 else -1)
@@ -174,6 +220,7 @@ class AlpacaBroker(Broker):
                          exit_reason=order.exit_reason, entry_order_id=pos.entry_order_id, exit_order_id=order.id)
         self.trades.append(tr)
         self._events.append(('trade', tr, order))
+        self._positions.pop(order.symbol, None)
 
     # --- orders -----------------------------------------------------------
     def submit(self, order: OrderReq) -> OrderReq:
@@ -183,11 +230,23 @@ class AlpacaBroker(Broker):
             order.status, order.error = 'rejected', 'duplicate client order id'
             return order
         crypto = self._is_crypto(order.symbol)
-        kwargs = dict(symbol=self._sym(order.symbol), qty=order.qty,
+        if order.leg == 'exit':
+            pos = self._positions.get(order.symbol)
+            if pos is None or pos.qty == 0:
+                order.status, order.error = 'rejected', 'no position to close'
+                return order
+            if pos.closing:
+                order.status, order.error = 'rejected', 'an exit is already in flight (duplicate ignored)'
+                return order
+            # Exits go through the coordinated close so protective orders come off first.
+            res = self.close_position(order.symbol, order.decision_price or self.last_price.get(order.symbol, 0.0),
+                                      order.submitted_ts or datetime.now(UTC), order.exit_reason, order.id)
+            return res or order
+        kwargs = dict(symbol=self._venue_symbol(order.symbol), qty=order.qty,
                       side=OrderSide.BUY if order.side == 'buy' else OrderSide.SELL,
                       time_in_force=TimeInForce.GTC if crypto else TimeInForce.DAY,
                       client_order_id=order.id)
-        if order.leg == 'entry' and not crypto and order.stop and order.target:
+        if not crypto and order.stop and order.target:
             kwargs.update(order_class=OrderClass.BRACKET,
                           take_profit=TakeProfitRequest(limit_price=round(order.target, 2)),
                           stop_loss=StopLossRequest(stop_price=round(order.stop, 2)))
@@ -204,60 +263,120 @@ class AlpacaBroker(Broker):
         self._await_fill(order)
         return order
 
-    def _await_fill(self, order: OrderReq, timeout_s: float = 8.0) -> None:
-        deadline = time.time() + timeout_s
+    def _await_fill(self, order: OrderReq) -> None:
+        deadline = time.time() + self.poll_s
         while time.time() < deadline:
             try:
                 o = self.client.get_order_by_client_id(order.id)
             except Exception as exc:
                 log.warning('poll failed %s: %s', order.id, exc)
                 break
-            status = str(o.status).lower().split('.')[-1]
+            status = _status(o)
+            filled_qty = float(o.filled_qty or 0)
             if status == 'filled' and o.filled_avg_price:
-                price, qty = float(o.filled_avg_price), float(o.filled_qty)
-                ts = getattr(o, 'filled_at', None) or datetime.now(UTC)
-                order.status, order.filled_qty, order.filled_avg_price, order.filled_ts = 'filled', qty, price, ts
-                slip = None
-                if order.decision_price:
-                    signed = (price - order.decision_price) / order.decision_price * 1e4
-                    slip = signed if order.side == 'buy' else -signed
-                self._events.append(('fill', Fill(order.id, order.symbol, ts, order.side, qty, price, 0.0, slip), order))
-                self._apply_fill(order, qty, price, ts)
+                self._record_fill(order, float(o.filled_avg_price), filled_qty, getattr(o, 'filled_at', None) or datetime.now(UTC), 'filled')
                 return
+            if status == 'partially_filled' and filled_qty > order.filled_qty and o.filled_avg_price:
+                self._record_fill(order, float(o.filled_avg_price), filled_qty, datetime.now(UTC), 'partially_filled')
             if status in ('canceled', 'rejected', 'expired'):
                 order.status = status
+                order.error = f'venue: {status}'
                 return
             time.sleep(0.5)
+
+    def _record_fill(self, order: OrderReq, price: float, filled_qty: float, ts, status: str) -> None:
+        new_qty = filled_qty - order.filled_qty
+        if new_qty <= 0:
+            return
+        order.status = status
+        order.filled_qty = filled_qty
+        order.filled_avg_price = price
+        order.filled_ts = ts
+        slip = None
+        if order.decision_price:
+            signed = (price - order.decision_price) / order.decision_price * 1e4
+            slip = signed if order.side == 'buy' else -signed
+        self._events.append(('fill', Fill(order.id, order.symbol, ts, order.side, new_qty, price, 0.0, slip), order))
+        self._apply_fill(order, new_qty, price, ts)
 
     def _apply_fill(self, order: OrderReq, qty: float, price: float, ts: datetime) -> None:
         signed = qty if order.side == 'buy' else -qty
         pos = self._positions.get(order.symbol)
-        if order.leg == 'entry' or pos is None:
-            self._positions[order.symbol] = Position(symbol=order.symbol, qty=signed, avg_price=price, entry_ts=ts,
-                                                     strategy_key=order.strategy_key, stop=order.stop, target=order.target,
-                                                     entry_bar_ts=order.bar_ts, last_price=price, entry_order_id=order.id)
+        if order.leg == 'entry':
+            if pos is None or pos.qty == 0:
+                pos = Position(symbol=order.symbol, qty=signed, avg_price=price, entry_ts=ts, strategy_key=order.strategy_key,
+                               stop=order.stop, target=order.target, entry_bar_ts=order.bar_ts, last_price=price,
+                               entry_order_id=order.id, protection='none')
+                self._positions[order.symbol] = pos
+            else:
+                total = pos.qty + signed
+                pos.avg_price = (pos.avg_price * pos.qty + price * signed) / total
+                pos.qty = total
             self._cash -= signed * price
+            if not self._is_crypto(order.symbol) and order.stop and order.target:
+                pos.protection, pos.protection_order_id = 'bracket', order.broker_order_id
+            elif order.stop and order.status == 'filled':
+                self._place_protection(pos)
             return
         self._record_trade(order, price, qty, ts)
         self._cash -= signed * price
-        pos.qty += signed
-        if abs(pos.qty) < 1e-9:
-            del self._positions[order.symbol]
+
+    def _place_protection(self, pos: Position) -> None:
+        """Crypto has no brackets: rest a stop order at the venue so the stop
+        survives our process, the laptop lid and the internet."""
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        from alpaca.trading.requests import StopLimitOrderRequest
+        if pos.stop is None:
+            return
+        try:
+            req = StopLimitOrderRequest(symbol=self._venue_symbol(pos.symbol), qty=abs(pos.qty),
+                                        side=OrderSide.SELL if pos.qty > 0 else OrderSide.BUY,
+                                        time_in_force=TimeInForce.GTC, stop_price=round(pos.stop, 2),
+                                        limit_price=round(pos.stop * (0.995 if pos.qty > 0 else 1.005), 2),
+                                        client_order_id=f'{pos.entry_order_id}-stop')
+            resp = self.client.submit_order(req)
+            pos.protection, pos.protection_order_id = 'stop_order', str(resp.id)
+            self.orders[f'{pos.entry_order_id}-stop'] = OrderReq(id=f'{pos.entry_order_id}-stop', symbol=pos.symbol,
+                                                               side='sell' if pos.qty > 0 else 'buy', qty=abs(pos.qty),
+                                                               order_type='stop', leg='exit', strategy_key=pos.strategy_key,
+                                                               reason='stop', exit_reason='stop', status='accepted',
+                                                               broker_order_id=str(resp.id))
+        except Exception as exc:
+            log.warning('protective stop failed for %s: %s', pos.symbol, exc)
+            pos.protection = 'none'
 
     def cancel_open_orders(self, symbol: str | None = None) -> int:
         try:
             if symbol is None:
                 res = self.client.cancel_orders()
+                self._open_orders = []
                 return len(res or [])
             n = 0
-            for o in self.client.get_orders():
-                if o.symbol == self._sym(symbol):
-                    self.client.cancel_order_by_id(o.id)
+            for o in self.open_orders_for(symbol) or self._fetch_open_orders():
+                if o['symbol'] == symbol:
+                    self.client.cancel_order_by_id(o['id'])
                     n += 1
+            self._open_orders = [o for o in self._open_orders if o['symbol'] != symbol]
             return n
         except Exception as exc:
             log.warning('cancel failed: %s', exc)
             return 0
+
+    def _confirm_canceled(self, order_ids: list[str]) -> bool:
+        deadline = time.time() + 5.0
+        pending = set(order_ids)
+        while pending and time.time() < deadline:
+            for oid in list(pending):
+                try:
+                    o = self.client.get_order_by_id(oid)
+                except Exception:
+                    pending.discard(oid)
+                    continue
+                if _status(o) in ('canceled', 'filled', 'expired', 'rejected', 'done_for_day'):
+                    pending.discard(oid)
+            if pending:
+                time.sleep(0.4)
+        return not pending
 
     def on_bar(self, symbol: str, bar, ts: datetime) -> list:
         self.last_price[symbol] = float(bar.close)
@@ -266,24 +385,57 @@ class AlpacaBroker(Broker):
             return []
         pos.bars_held += 1
         pos.last_price = float(bar.close)
-        # Crypto (no bracket at the venue): manage exits here.
-        if self._is_crypto(symbol):
+        # Targets on crypto are engine-managed (the venue only holds the stop).
+        if self._is_crypto(symbol) and not pos.closing:
             hit = evaluate_exit(pos, bar)
-            if hit is not None:
-                reason, level = hit
-                self.close_position(symbol, level, ts, reason, f'{pos.entry_order_id or symbol}-{reason}-{int(ts.timestamp())}')
+            if hit is not None and hit[0] == 'target':
+                self.close_position(symbol, hit[1], ts, 'target', f'{pos.entry_order_id or symbol}-target-{int(ts.timestamp())}')
         return []
 
     def close_position(self, symbol: str, price: float, ts: datetime, reason: str, order_id: str) -> OrderReq | None:
+        """One coordinated close: cancel protection → confirm → close the venue quantity."""
         pos = self._positions.get(symbol)
         if pos is None or pos.qty == 0:
             return None
-        if not self._is_crypto(symbol):
-            self.cancel_open_orders(symbol)  # drop bracket legs before flattening
-        order = OrderReq(id=order_id, symbol=symbol, side='sell' if pos.qty > 0 else 'buy', qty=abs(pos.qty), leg='exit',
-                         strategy_key=pos.strategy_key, reason=reason, decision_price=price, bar_ts=ts,
-                         submitted_ts=ts, exit_reason=reason)
-        return self.submit(order)
+        if pos.closing:
+            return None
+        pos.closing = True
+        try:
+            protective = [o['id'] for o in self.open_orders_for(symbol)]
+            if pos.protection_order_id and pos.protection_order_id not in protective:
+                protective.append(pos.protection_order_id)
+            for oid in protective:
+                try:
+                    self.client.cancel_order_by_id(oid)
+                except Exception as exc:
+                    log.warning('cancel %s failed: %s', oid, exc)
+            if protective and not self._confirm_canceled(protective):
+                log.warning('%s: protective orders not confirmed canceled — closing anyway', symbol)
+            # The venue's remaining quantity is what we close (a leg may have filled meanwhile).
+            try:
+                venue = self.client.get_open_position(self._venue_symbol(symbol))
+                remaining = abs(float(venue.qty))
+            except Exception:
+                remaining = 0.0
+            if remaining <= 0:
+                self._sync_closed_orders()   # a leg closed it: the trade is recorded from the fill
+                self._positions.pop(symbol, None)
+                return None
+            from alpaca.trading.enums import OrderSide, TimeInForce
+            from alpaca.trading.requests import MarketOrderRequest
+            order = OrderReq(id=order_id, symbol=symbol, side='sell' if pos.qty > 0 else 'buy', qty=remaining, leg='exit',
+                             strategy_key=pos.strategy_key, reason=reason, decision_price=price, bar_ts=ts,
+                             submitted_ts=ts, exit_reason=reason)
+            resp = self.client.submit_order(MarketOrderRequest(
+                symbol=self._venue_symbol(symbol), qty=remaining, side=OrderSide.SELL if pos.qty > 0 else OrderSide.BUY,
+                time_in_force=TimeInForce.GTC if self._is_crypto(symbol) else TimeInForce.DAY, client_order_id=order.id))
+            order.status, order.broker_order_id = 'accepted', str(resp.id)
+            self.orders[order.id] = order
+            self._await_fill(order)
+            return order
+        finally:
+            if symbol in self._positions:
+                self._positions[symbol].closing = False
 
     def drain_events(self) -> list:
         ev, self._events = self._events, []

@@ -1,0 +1,222 @@
+"""The Alpaca adapter against a fake venue: brackets, crypto stop orders, the
+coordinated close, duplicate closes, divergence detection and partial fills.
+The real API is not exercised here; this pins the adapter's behaviour."""
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from uuid import uuid4
+
+from django.test import SimpleTestCase
+
+from main_app.services.broker.alpaca import AlpacaBroker
+from main_app.services.broker.base import OrderReq
+from main_app.tests.test_sim_broker import bar
+
+T0 = datetime(2026, 9, 1, 14, 0, tzinfo=UTC)
+
+
+class FakeVenue:
+    """Just enough of alpaca-py's TradingClient for the adapter."""
+
+    def __init__(self, price=100.0, cash=10000.0, partial_first=False):
+        self.price = price
+        self.cash = cash
+        self.orders: dict[str, SimpleNamespace] = {}
+        self.by_client: dict[str, SimpleNamespace] = {}
+        self.positions: dict[str, SimpleNamespace] = {}
+        self.canceled: list[str] = []
+        self.partial_first = partial_first
+        self.submitted: list = []
+
+    # account / positions
+    def get_account(self):
+        equity = self.cash + sum(float(p.qty) * self.price for p in self.positions.values())
+        return SimpleNamespace(cash=str(self.cash), equity=str(equity), buying_power=str(self.cash), status='ACTIVE')
+
+    def get_all_positions(self):
+        return list(self.positions.values())
+
+    def get_open_position(self, symbol):
+        p = self.positions.get(symbol)
+        if p is None:
+            raise RuntimeError('no position')
+        return p
+
+    # orders
+    def submit_order(self, req):
+        self.submitted.append(req)
+        oid = str(uuid4())
+        typ = type(req).__name__
+        o = SimpleNamespace(id=oid, client_order_id=req.client_order_id, symbol=req.symbol, qty=str(req.qty),
+                            side=str(req.side).lower(), status='accepted', filled_qty='0', filled_avg_price=None,
+                            filled_at=None, type='market' if 'Market' in typ else 'stop_limit', legs=[],
+                            order_class=str(getattr(req, 'order_class', '') or 'simple'))
+        self.orders[oid] = o
+        self.by_client[req.client_order_id] = o
+        if 'Market' in typ:
+            self._fill(o, partial=self.partial_first)
+            self.partial_first = False
+        return o
+
+    def _fill(self, o, partial=False):
+        qty = float(o.qty)
+        filled = qty / 2 if partial else qty
+        o.filled_qty = str(filled)
+        o.filled_avg_price = str(self.price)
+        o.status = 'partially_filled' if partial else 'filled'
+        o.filled_at = T0
+        signed = filled if 'buy' in o.side else -filled
+        p = self.positions.get(o.symbol)
+        new_qty = (float(p.qty) if p else 0.0) + signed
+        self.cash -= signed * self.price
+        if abs(new_qty) < 1e-9:
+            self.positions.pop(o.symbol, None)
+        else:
+            self.positions[o.symbol] = SimpleNamespace(symbol=o.symbol, qty=str(new_qty), avg_entry_price=str(self.price),
+                                                       current_price=str(self.price), side='long' if new_qty > 0 else 'short')
+
+    def complete_partial(self):
+        for o in self.orders.values():
+            if o.status == 'partially_filled':
+                remaining = float(o.qty) - float(o.filled_qty)
+                o.status, o.filled_qty = 'filled', o.qty
+                signed = remaining if 'buy' in o.side else -remaining
+                p = self.positions[o.symbol]
+                p.qty = str(float(p.qty) + signed)
+
+    def get_order_by_client_id(self, cid):
+        return self.by_client[cid]
+
+    def get_order_by_id(self, oid):
+        return self.orders[oid]
+
+    def get_orders(self, req=None):
+        want = str(getattr(req, 'status', 'open')).lower().split('.')[-1]
+        if want == 'closed':
+            return [o for o in self.orders.values() if o.status in ('filled', 'canceled')]
+        return [o for o in self.orders.values() if o.status in ('accepted', 'new', 'partially_filled')]
+
+    def cancel_orders(self):
+        ids = [oid for oid, o in self.orders.items() if o.status in ('accepted', 'new')]
+        for oid in ids:
+            self.cancel_order_by_id(oid)
+        return ids
+
+    def cancel_order_by_id(self, oid):
+        self.canceled.append(oid)
+        self.orders[oid].status = 'canceled'
+
+
+def make_broker(venue, crypto=False):
+    ac = {'BTC/USD': 'crypto'} if crypto else {'AAPL': 'stock'}
+    b = AlpacaBroker(client=venue, asset_classes=ac, qty_increments={'BTC/USD': 0.0001}, poll_s=0.5)
+    b.sync()
+    return b
+
+
+def entry(symbol='AAPL', qty=10, stop=98.0, target=104.0):
+    return OrderReq(id=f'mt-t-x-{symbol.replace("/", "")}-1-entry', symbol=symbol, side='buy', qty=qty, leg='entry',
+                    strategy_key='x', decision_price=100.0, bar_ts=T0, submitted_ts=T0, stop=stop, target=target)
+
+
+class StockEntriesCarryBrackets(SimpleTestCase):
+    def test_bracket_entry_fills_and_is_protected(self):
+        v = FakeVenue()
+        b = make_broker(v)
+        o = b.submit(entry())
+        self.assertEqual(o.status, 'filled')
+        self.assertEqual(str(v.submitted[0].order_class).lower().split('.')[-1], 'bracket')
+        pos = b.positions['AAPL']
+        self.assertEqual(pos.qty, 10)
+        self.assertEqual(b.protection_for('AAPL')[0], 'bracket')
+        kinds = [e[0] for e in b.drain_events()]
+        self.assertEqual(kinds, ['fill'])
+
+    def test_partial_then_full_fill_emits_two_fills(self):
+        v = FakeVenue(partial_first=True)
+        b = make_broker(v)
+        o = b.submit(entry())
+        self.assertEqual(o.status, 'partially_filled')
+        self.assertEqual(b.positions['AAPL'].qty, 5)
+        v.complete_partial()
+        b._await_fill(o)
+        self.assertEqual(o.status, 'filled')
+        self.assertEqual(b.positions['AAPL'].qty, 10)
+        self.assertEqual(len([e for e in b.drain_events() if e[0] == 'fill']), 2)
+
+
+class CryptoGetsAVenueSideStop(SimpleTestCase):
+    def test_stop_order_rests_at_the_venue_after_the_fill(self):
+        v = FakeVenue(price=100.0)
+        b = make_broker(v, crypto=True)
+        b.submit(entry('BTC/USD', qty=0.05, stop=95.0, target=110.0))
+        kind, oid = b.protection_for('BTC/USD')
+        self.assertEqual(kind, 'stop_order')
+        self.assertIn(oid, v.orders)
+        self.assertEqual(v.orders[oid].type, 'stop_limit')
+
+
+class ClosingIsOneCoordinatedLifecycle(SimpleTestCase):
+    def test_close_cancels_protection_confirms_then_closes_remaining(self):
+        v = FakeVenue()
+        b = make_broker(v, crypto=True)
+        b.submit(entry('BTC/USD', qty=0.05, stop=95.0, target=110.0))
+        _, stop_id = b.protection_for('BTC/USD')
+        b.drain_events()
+        v.price = 103.0
+        res = b.close_position('BTC/USD', 103.0, T0, 'signal', 'mt-t-x-BTCUSD-2-exit')
+        self.assertIsNotNone(res)
+        self.assertIn(stop_id, v.canceled)
+        self.assertNotIn('BTC/USD', b.positions)
+        self.assertNotIn('BTC/USD', v.positions)
+        events = b.drain_events()
+        self.assertEqual([e[0] for e in events], ['fill', 'trade'])
+        self.assertAlmostEqual(events[1][1].pnl, 0.05 * 3.0)
+
+    def test_duplicate_close_and_exit_submit_are_ignored(self):
+        v = FakeVenue()
+        b = make_broker(v)
+        b.submit(entry())
+        pos = b.positions['AAPL']
+        pos.closing = True   # an exit is in flight
+        self.assertIsNone(b.close_position('AAPL', 100.0, T0, 'eod', 'dup-1'))
+        dup = b.submit(OrderReq(id='dup-2', symbol='AAPL', side='sell', qty=10, leg='exit'))
+        self.assertEqual(dup.status, 'rejected')
+        self.assertEqual(len(v.submitted), 1)
+
+    def test_close_when_a_leg_already_closed_it_records_no_new_order(self):
+        v = FakeVenue()
+        b = make_broker(v)
+        b.submit(entry())
+        v.positions.pop('AAPL')  # the venue's stop leg took it out
+        res = b.close_position('AAPL', 97.0, T0, 'signal', 'mt-t-x-AAPL-3-exit')
+        self.assertIsNone(res)
+        self.assertNotIn('AAPL', b.positions)
+        self.assertEqual(len(v.submitted), 1)
+
+
+class ReconciliationTrustsTheVenue(SimpleTestCase):
+    def test_divergence_is_reported_and_the_venue_quantity_adopted(self):
+        v = FakeVenue()
+        b = make_broker(v)
+        b.submit(entry())
+        v.positions['AAPL'].qty = '7'   # someone sold 3 shares by hand
+        info = b.sync()
+        self.assertEqual(info['diverged'], [('AAPL', 10.0, 7.0)])
+        self.assertEqual(b.positions['AAPL'].qty, 7)
+
+    def test_unknown_position_is_adopted_as_external(self):
+        v = FakeVenue()
+        v.positions['MSFT'] = SimpleNamespace(symbol='MSFT', qty='3', avg_entry_price='400', current_price='401', side='long')
+        b = make_broker(v)
+        self.assertTrue(b.positions['MSFT'].external)
+        self.assertEqual(b.last_sync['adopted'], ['MSFT'])
+        self.assertEqual(b.protection_for('MSFT')[0], 'none')
+
+    def test_position_gone_at_the_venue_is_dropped(self):
+        v = FakeVenue()
+        b = make_broker(v)
+        b.submit(entry())
+        v.positions.pop('AAPL')
+        info = b.sync()
+        self.assertEqual(info['closed'], ['AAPL'])
+        self.assertNotIn('AAPL', b.positions)

@@ -106,6 +106,17 @@ class SimBroker(Broker):
             order.error = 'quantity rounds to zero'
             self.orders[order.id] = order
             return order
+        if order.leg == 'exit':
+            pos = self._positions.get(order.symbol)
+            if pos is None or pos.qty == 0:
+                order.status, order.error = 'rejected', 'no position to close'
+                self.orders[order.id] = order
+                return order
+            if pos.closing or any(o.symbol == order.symbol and o.leg == 'exit' for o in self.open_orders.values()):
+                order.status, order.error = 'rejected', 'an exit is already in flight (duplicate ignored)'
+                self.orders[order.id] = order
+                return order
+            pos.closing = True
         order.status = 'accepted'
         self.orders[order.id] = order
         if self.immediate_fills:
@@ -125,10 +136,23 @@ class SimBroker(Broker):
             if symbol is None or o.symbol == symbol:
                 o.status = 'canceled'
                 del self.open_orders[oid]
+                if o.leg == 'exit' and o.symbol in self._positions:
+                    self._positions[o.symbol].closing = False
                 n += 1
         return n
 
+    def open_orders_for(self, symbol: str | None = None) -> list:
+        return [o for o in self.open_orders.values() if symbol is None or o.symbol == symbol]
+
     def _fill(self, order: OrderReq, price: float, ts: datetime, bar_volume: float | None, apply_slippage_bps: bool = True) -> None:
+        if order.leg == 'exit':
+            pos = self._positions.get(order.symbol)
+            if pos is None or pos.qty == 0:
+                # The position is already gone (a stop/target got there first): never reverse.
+                order.status, order.error = 'canceled', 'position already closed'
+                self.open_orders.pop(order.id, None)
+                return
+            order.qty = min(order.qty, abs(pos.qty))
         qty = order.qty - order.filled_qty
         if bar_volume is not None and bar_volume > 0 and self.liquidity_cap_pct > 0:
             cap = round_qty(bar_volume * self.liquidity_cap_pct / 100.0, self._increment(order.symbol))
@@ -227,7 +251,7 @@ class SimBroker(Broker):
                 elif order.side == 'sell' and float(bar.low) <= sp:
                     self._fill(order, self._slip(min(o, sp), 'sell'), ts, vol)
         pos = self._positions.get(symbol)
-        if pos is not None and not pos.external:
+        if pos is not None and not pos.external and not pos.closing:
             hit = evaluate_exit(pos, bar)
             if hit is not None:
                 reason, level = hit
@@ -252,11 +276,17 @@ class SimBroker(Broker):
         pos = self._positions.get(symbol)
         if pos is None or pos.qty == 0:
             return None
+        # One coordinated close: drop any in-flight exit for this symbol first,
+        # then fill the whole remaining quantity at once.
+        self.cancel_open_orders(symbol)
         side = 'sell' if pos.qty > 0 else 'buy'
         order = OrderReq(id=order_id, symbol=symbol, side=side, qty=abs(pos.qty), leg='exit',
                          strategy_key=pos.strategy_key, reason=reason, decision_price=price, bar_ts=ts,
                          submitted_ts=ts, exit_reason=reason, status='accepted')
+        if order.id in self.orders:
+            order.id = f'{order_id}-{int(ts.timestamp())}'
         self.orders[order.id] = order
+        pos.closing = True
         self._fill(order, self._slip(price, side), ts, None)
         return order
 

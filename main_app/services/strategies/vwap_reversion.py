@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import indicators as ind
-from .base import Context, Param, Signal, Strategy
+from .base import Context, Param, Rule, Signal, Strategy
 
 
 class VwapReversion(Strategy):
@@ -63,11 +63,18 @@ class VwapReversion(Strategy):
                            strength=min(1.0, abs(bar.z) / 3), reason=f'z={bar.z:.2f} above VWAP {bar.svwap:.2f}')]
         return []
 
-    def explain(self, ctx: Context, bar) -> str:
+    def rules(self, ctx: Context, bar) -> list[Rule]:
         if np.isnan(bar.z):
-            return 'warming up'
+            return [Rule('warmup', False, 'still warming up (not enough bars for the σ estimate)')]
         if ctx.position is not None:
-            return f'holding, z {bar.z:+.2f}, {ctx.position.bars_held} bars (exit at VWAP {bar.svwap:,.2f})'
-        if bar.bar_pos < self.p['min_bar_pos']:
-            return f'too early in the session ({int(bar.bar_pos) + 1}/{self.p["min_bar_pos"]} bars)'
-        return f'z {bar.z:+.2f} vs VWAP {bar.svwap:,.2f} (buy at ≤ −{self.p["entry_z"]:.1f})'
+            return [Rule('holding', True, f'holding, z {bar.z:+.2f}, {ctx.position.bars_held} bars; exits at VWAP {bar.svwap:,.2f}')]
+        out = []
+        ready = bar.bar_pos >= self.p['min_bar_pos']
+        out.append(Rule('session', bool(ready), 'far enough into the session' if ready
+                        else f'too early in the session ({int(bar.bar_pos) + 1}/{self.p["min_bar_pos"]} bars)',
+                        value=bar.bar_pos, threshold=self.p['min_bar_pos']))
+        stretched = bar.z <= -self.p['entry_z']
+        out.append(Rule('stretch', bool(stretched),
+                        f'z-score {bar.z:+.2f} vs VWAP {bar.svwap:,.2f}; this strategy buys at −{self.p["entry_z"]:.1f} or lower',
+                        value=bar.z, threshold=-self.p['entry_z']))
+        return out

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Independent emergency close, every 5 minutes: if a paper/live agent is
+       dead or stale while positions are open, cancel and close at the venue.
+       Separate process from the agent on purpose. -->
+  <key>Label</key><string>com.kiron.moneytree.watchdog</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/kironkp/.local/bin/pipenv</string>
+    <string>run</string><string>python</string><string>manage.py</string><string>watchdog</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
+  <key>StartInterval</key><integer>300</integer>
+  <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/watchdog.log</string>
+  <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/watchdog.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/kironkp/.local/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>

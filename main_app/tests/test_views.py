@@ -79,7 +79,8 @@ class PagesRenderWithData(TestCase):
             'trading_enabled': 'on', 'timeframe': '5Min', 'crypto_timeframe': '1Hour', 'starting_cash': '10000', 'risk_per_trade_pct': '0.75',
             'max_position_pct': '20', 'max_open_positions': '3', 'max_daily_loss_pct': '2', 'max_trades_per_day': '10',
             'no_entries_before_close_min': '30', 'flat_before_close_min': '5', 'max_hold_minutes': '240',
-            'slippage_bps': '3', 'fee_bps_stock': '0.5', 'fee_bps_crypto': '25', 'liquidity_cap_pct': '1', 'min_reward_to_cost': '3'})
+            'slippage_bps': '3', 'fee_bps_stock': '0.5', 'fee_bps_crypto': '25', 'liquidity_cap_pct': '1', 'min_reward_to_cost': '3',
+            'live_confirm_orders': 'on', 'live_confirm_minutes': '3'})
         self.assertEqual(r.status_code, 302)
         self.cfg.refresh_from_db()
         self.assertEqual(float(self.cfg.risk_per_trade_pct), 0.75)
@@ -195,3 +196,66 @@ class FeedStreamsNarration(TestCase):
         self.assertEqual([e['text'] for e in r.json()['events']], ['CLOSED QQQ'])
         r = self.client.get(reverse('api-feed') + '?account=sim&market=stocks&levels=trade')
         self.assertEqual(len(r.json()['events']), 1)
+
+
+class StatusStripTellsTheTruth(TestCase):
+    def setUp(self):
+        self.cfg, self.instruments = seed_db(('QQQ',), with_bars=False)
+        self.user = make_user()
+        self.client.force_login(self.user)
+
+    def test_no_agent_means_not_safe_with_named_blockers(self):
+        from main_app.models import Account
+        from main_app.services.status import build_status
+        account = Account.for_mode('sim', 'stocks')
+        st = build_status(account, self.cfg, None)
+        self.assertFalse(st['safe'])
+        self.assertTrue(any('no agent' in b for b in st['blockers']))
+        self.assertTrue(any('no stocks strategy' in b for b in st['blockers']))
+        self.cfg.kill_switch = True
+        self.cfg.save()
+        st = build_status(account, self.cfg, None)
+        self.assertTrue(any('kill switch' in b for b in st['blockers']))
+
+    def test_strip_partial_and_alert_ack(self):
+        from main_app.models import Account, RiskEvent
+        account = Account.for_mode('sim', 'stocks')
+        ev = RiskEvent.objects.create(account=account, kind='config_changed', message='changed')
+        r = self.client.get(reverse('status-strip') + '?account=sim&market=stocks')
+        self.assertContains(r, 'Safe to trade now')
+        self.assertContains(r, 'needs a restart')
+        self.client.post(reverse('alert-ack', args=[ev.pk]), {'account': 'sim', 'market': 'stocks'})
+        ev.refresh_from_db()
+        self.assertIsNotNone(ev.acknowledged_at)
+
+    def test_card_approval_endpoint(self):
+        from main_app.models import Account, TradeCard
+        account = Account.for_mode('sim', 'stocks')
+        card = TradeCard.objects.create(account=account, entry_order_id='mt-x-1', symbol='QQQ', status='awaiting_approval')
+        self.client.post(reverse('card-decide', args=[card.pk, 'approve']))
+        card.refresh_from_db()
+        self.assertEqual(card.status, 'approved')
+        self.assertTrue(card.approved_by)
+
+    def test_graduation_is_enforced_unless_overridden(self):
+        row = enable_strategy('orb', symbols=['QQQ'], stage='seed')
+        r = self.client.post(reverse('strategy-detail', args=['stocks', 'orb']), {'action': 'stage_up'})
+        row.refresh_from_db()
+        self.assertEqual(row.stage, 'seed')
+        r = self.client.post(reverse('strategy-detail', args=['stocks', 'orb']), {'action': 'stage_up', 'override': 'yes', 'override_reason': 'testing'})
+        row.refresh_from_db()
+        self.assertEqual(row.stage, 'sprout')
+        self.assertIn('OVERRIDE', row.history[-1]['source'])
+
+
+class PortfolioBacktestRunsAllEnabledStrategies(TestCase):
+    def test_portfolio_run_has_per_strategy_breakdown(self):
+        cfg, instruments = seed_db(('QQQ', 'NVDA'))
+        enable_strategy('orb', {'min_relvol': 0.0}, ['QQQ', 'NVDA'])
+        enable_strategy('ema_momentum', {'min_relvol': 0.0}, ['QQQ', 'NVDA'])
+        self.client.force_login(make_user())
+        r = self.client.post(reverse('portfolio-backtest', args=['stocks']), {'days': 10})
+        self.assertEqual(r.status_code, 302)
+        run = BacktestRun.objects.get(strategy_key='portfolio')
+        self.assertEqual(run.status, 'done')
+        self.assertGreaterEqual(len(run.metrics['per_strategy']), 1)

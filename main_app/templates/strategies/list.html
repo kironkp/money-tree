@@ -6,7 +6,8 @@
   <div class="actions">{% if missing and is_operator %}<form method="post" action="{% url 'strategy-create-missing' %}">{% csrf_token %}<button class="btn small">Create rows for {{ missing|length }} new strateg{{ missing|length|pluralize:'y,ies' }}</button></form>{% endif %}</div></div>
 <p class="small muted">The ladder: <span class="badge seed">seed</span> backtests only → <span class="badge sprout">sprout</span> trades fake currency on the simulator → <span class="badge sapling">sapling</span> trades the Alpaca paper account → <span class="badge tree">tree</span> real money. The stocks agent and the crypto agent each run their own copies.</p>
 {% for market, rows in groups.items %}
-<h2 style="margin-top: var(--s-4)">{{ market|capfirst }} agent</h2>
+<h2 style="margin-top: var(--s-4)">{{ market|capfirst }} agent
+  {% if is_operator %}<span class="more"><form method="post" action="{% url 'portfolio-backtest' market %}" class="inline">{% csrf_token %}<select name="days" style="width:auto;display:inline-block"><option value="60">60d</option><option value="120">120d</option><option value="250">250d</option></select> <button class="btn small">Backtest all enabled together</button></form></span>{% endif %}</h2>
 <div class="grid cols-2">
 {% for r in rows %}
   <div class="card">

@@ -149,6 +149,7 @@ class AgentConfig(models.Model):
     # Live-mode ritual (v2).
     live_armed_at = models.DateTimeField(null=True, blank=True)
     live_confirm_orders = models.BooleanField(default=True)
+    live_confirm_minutes = models.PositiveIntegerField(default=3)
     live_sessions_completed = models.PositiveIntegerField(default=0)
 
     updated_at = models.DateTimeField(auto_now=True)
@@ -187,6 +188,15 @@ class Account(models.Model):
     buying_power = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))
     day_start_equity = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))
     day_start_date = models.DateField(null=True, blank=True)
+    # Risk state that must survive a restart.
+    day_entries = models.PositiveIntegerField(default=0)
+    day_halted = models.BooleanField(default=False)
+    day_halted_reason = models.CharField(max_length=120, blank=True)
+    # Broker reconciliation (paper/live): when we last compared our books with
+    # the venue, and whether they agreed. The simulator is its own venue.
+    last_reconcile_at = models.DateTimeField(null=True, blank=True)
+    reconcile_ok = models.BooleanField(default=True)
+    reconcile_note = models.CharField(max_length=300, blank=True)
     last_synced_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     reset_at = models.DateTimeField(null=True, blank=True)
@@ -251,8 +261,14 @@ class Account(models.Model):
         self.buying_power = cash
         self.day_start_equity = cash
         self.day_start_date = None
+        self.day_entries = 0
+        self.day_halted = False
+        self.day_halted_reason = ''
         self.reset_at = timezone.now()
         self.save()
+        self.cards.all().delete()
+        self.symbol_states.all().delete()
+        self.feed.all().delete()
 
 
 def market_for_symbols(symbols) -> str:
@@ -278,12 +294,30 @@ class Position(models.Model):
     # Found at the broker but not opened by us: counted in exposure, never
     # touched by strategies.
     external = models.BooleanField(default=False)
+    # How the exit is protected: engine (simulator / engine-managed levels),
+    # bracket (venue-side legs), stop_order (venue-side stop), none.
+    protection = models.CharField(max_length=12, default='engine')
+    protection_order_id = models.CharField(max_length=80, blank=True)
+    closing = models.BooleanField(default=False)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(fields=['account', 'instrument'], name='uniq_position'),
         ]
+
+    @property
+    def risk_dollars(self) -> Decimal:
+        """Planned loss if the stop is hit (0 when unprotected)."""
+        if self.stop_price is None:
+            return D0
+        return (abs(self.qty) * abs(self.avg_price - self.stop_price)).quantize(Decimal('0.01'))
+
+    def distance_pct(self, level) -> Decimal | None:
+        price = self.last_price if self.last_price is not None else self.avg_price
+        if level is None or not price:
+            return None
+        return ((level - price) / price * 100).quantize(Decimal('0.01'))
 
     def __str__(self):
         return f'{self.instrument.symbol} {self.qty} @ {self.avg_price}'
@@ -447,14 +481,22 @@ class Signal(models.Model):
 
 
 class RiskEvent(models.Model):
+    ALERT_KINDS = ('daily_loss', 'kill_switch', 'missed_ticks', 'external_position', 'error', 'drift', 'reconcile',
+                   'disconnected', 'config_changed', 'watchdog', 'unprotected')
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='risk_events')
     ts = models.DateTimeField(default=timezone.now)
-    kind = models.CharField(max_length=32)  # daily_loss, kill_switch, missed_ticks, external_position, block, flatten, error
+    kind = models.CharField(max_length=32)
     message = models.CharField(max_length=300)
     data = models.JSONField(default=dict, blank=True)
+    # Alerts stay on the dashboard until someone acknowledges them.
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ['-ts']
+
+    @property
+    def is_alert(self):
+        return self.kind in self.ALERT_KINDS and self.acknowledged_at is None
 
 
 class AgentRun(models.Model):
@@ -470,6 +512,16 @@ class AgentRun(models.Model):
     ticks = models.PositiveIntegerField(default=0)
     replay_date = models.DateField(null=True, blank=True)
     speed = models.FloatField(default=1.0)
+    # Health inputs: how often a heartbeat is expected, what the loop is doing,
+    # and when it plans to act next. The dashboard derives healthy/waiting/
+    # stale/disconnected from these instead of a fixed number.
+    expected_interval_s = models.PositiveIntegerField(default=60)
+    state = models.CharField(max_length=12, default='starting')  # starting waiting ticking sleeping stopping
+    next_action_at = models.DateTimeField(null=True, blank=True)
+    data_source = models.CharField(max_length=24, blank=True)
+    last_bar_ts = models.DateTimeField(null=True, blank=True)
+    # Control channel: the web sets these, the loop polls them every 2 s.
+    stop_requested = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['-started_at']
@@ -478,6 +530,19 @@ class AgentRun(models.Model):
     def heartbeat_age_s(self):
         ref = self.last_tick_at or self.started_at
         return (timezone.now() - ref).total_seconds()
+
+    @property
+    def health(self) -> str:
+        """healthy · waiting · stale · disconnected — relative to the expected cadence."""
+        if self.status != 'running' or not self.is_alive:
+            return 'disconnected'
+        age = self.heartbeat_age_s
+        expected = max(30, self.expected_interval_s)
+        if age > 3 * expected:
+            return 'disconnected'
+        if age > 1.5 * expected:
+            return 'stale'
+        return 'waiting' if self.state in ('waiting', 'sleeping') else 'healthy'
 
     @property
     def is_alive(self):
@@ -634,13 +699,17 @@ class FeedEvent(models.Model):
     """The running commentary: what the agent sees, decides and does. One row
     per line; the dashboard streams them. Pruned after two weeks."""
     LEVELS = ('system', 'bar', 'signal', 'order', 'fill', 'trade', 'risk', 'journal', 'error')
+    PHASES = ('observe', 'evaluate', 'decide', 'size', 'submit', 'fill', 'manage', 'close', 'system', 'alert')
     account = models.ForeignKey(Account, on_delete=models.CASCADE, null=True, blank=True, related_name='feed')
-    ts = models.DateTimeField(default=timezone.now)
+    ts = models.DateTimeField(default=timezone.now)   # when it happened (wall clock)
+    bar_ts = models.DateTimeField(null=True, blank=True)  # the market bar being evaluated, if any
     level = models.CharField(max_length=8, default='system')
+    phase = models.CharField(max_length=10, default='system')
     symbol = models.CharField(max_length=16, blank=True)
     strategy_key = models.CharField(max_length=40, blank=True)
-    text = models.CharField(max_length=400)
+    text = models.CharField(max_length=600)
     data = models.JSONField(default=dict, blank=True)
+    card = models.ForeignKey('TradeCard', on_delete=models.SET_NULL, null=True, blank=True, related_name='events')
 
     class Meta:
         ordering = ['-id']
@@ -669,3 +738,82 @@ class SignupInvite(models.Model):
 
     def __str__(self):
         return self.email
+
+
+class TradeCard(models.Model):
+    """One trade, from decision to reconciliation. The feed's lines hang off
+    it; the dashboard's Active/Pending panels render it directly."""
+    STATUSES = ('awaiting_approval', 'approved', 'submitted', 'accepted', 'partially_filled', 'filled', 'protected',
+                'closing', 'closed', 'rejected', 'canceled', 'expired')
+    OPEN = ('filled', 'protected', 'closing')
+    PENDING = ('awaiting_approval', 'approved', 'submitted', 'accepted', 'partially_filled')
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='cards')
+    entry_order_id = models.CharField(max_length=120, unique=True)  # correlation id everywhere
+    symbol = models.CharField(max_length=16)
+    strategy_key = models.CharField(max_length=40, blank=True)
+    side = models.CharField(max_length=5, default='long')
+    status = models.CharField(max_length=20, default='approved')
+    bar_ts = models.DateTimeField(null=True, blank=True)
+    decision_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    planned_entry = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    stop_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    target_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    qty = models.DecimalField(max_digits=18, decimal_places=8, default=D0)
+    risk_dollars = models.DecimalField(max_digits=12, decimal_places=2, default=D0)
+    reward_dollars = models.DecimalField(max_digits=12, decimal_places=2, default=D0)
+    expected_costs = models.DecimalField(max_digits=12, decimal_places=2, default=D0)
+    reward_risk = models.DecimalField(max_digits=8, decimal_places=2, default=D0)
+    reason = models.CharField(max_length=300, blank=True)
+    rules = models.JSONField(default=list, blank=True)
+    broker_order_id = models.CharField(max_length=80, blank=True)
+    protection = models.CharField(max_length=12, default='none')  # none engine bracket stop_order
+    protection_order_id = models.CharField(max_length=80, blank=True)
+    filled_qty = models.DecimalField(max_digits=18, decimal_places=8, default=D0)
+    avg_fill = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    fees = models.DecimalField(max_digits=12, decimal_places=4, default=D0)
+    slippage_bps = models.FloatField(null=True, blank=True)
+    exit_reason = models.CharField(max_length=16, blank=True)
+    exit_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    gross_pnl = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    net_pnl = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    error = models.CharField(max_length=300, blank=True)
+    approval_expires_at = models.DateTimeField(null=True, blank=True)
+    approved_by = models.CharField(max_length=80, blank=True)
+    opened_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        indexes = [models.Index(fields=['account', 'status'])]
+
+    def __str__(self):
+        return f'{self.symbol} {self.side} {self.status}'
+
+    @property
+    def is_open(self):
+        return self.status in self.OPEN
+
+    @property
+    def is_pending(self):
+        return self.status in self.PENDING
+
+
+class SymbolState(models.Model):
+    """The latest evaluation of one symbol: every rule with value, threshold
+    and pass/fail, plus the plain-English summary. Feeds "closest opportunities"."""
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='symbol_states')
+    symbol = models.CharField(max_length=16)
+    ts = models.DateTimeField(default=timezone.now)
+    bar_ts = models.DateTimeField(null=True, blank=True)
+    price = models.FloatField(default=0)
+    source = models.CharField(max_length=24, blank=True)
+    decision = models.CharField(max_length=12, default='wait')  # wait entry blocked holding
+    summary = models.CharField(max_length=600, blank=True)
+    rules = models.JSONField(default=list, blank=True)  # [{strategy, rule, value, threshold, ok, text}]
+    proximity = models.FloatField(default=0)  # 0..1 — share of rules passing (best strategy)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['account', 'symbol'], name='uniq_symbol_state')]
+        ordering = ['-proximity', 'symbol']

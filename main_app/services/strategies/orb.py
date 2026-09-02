@@ -13,7 +13,7 @@ import pandas as pd
 
 from .. import indicators as ind
 from ..timeframes import tf_minutes
-from .base import Context, Param, Signal, Strategy
+from .base import Context, Param, Rule, Signal, Strategy
 
 
 class OpeningRangeBreakout(Strategy):
@@ -72,18 +72,28 @@ class OpeningRangeBreakout(Strategy):
                            reason=f'ORB↓ close {bar.close:.2f} < range low {bar.or_low:.2f}')]
         return []
 
-    def explain(self, ctx: Context, bar) -> str:
+    def rules(self, ctx: Context, bar) -> list[Rule]:
         if ctx.position is not None:
             pos = ctx.position
-            return f'holding {pos.side} from {pos.avg_price:,.2f}, stop {pos.stop:,.2f}, target {pos.target:,.2f}'
+            return [Rule('holding', True, f'holding {pos.side} from {pos.avg_price:,.2f}, stop {pos.stop:,.2f}, target {pos.target:,.2f}')]
         st = self.symbol_state(ctx.symbol)
         if st.get('traded_session') == bar.session:
-            return 'done for today (one trade per session)'
-        if np.isnan(bar.or_high):
-            return f'opening range forming ({int(bar.bar_pos) + 1} bars in)'
-        if bar.minutes_since_open > self.p['entry_window_minutes']:
-            return 'entry window closed'
-        note = f'inside range {bar.or_low:,.2f}–{bar.or_high:,.2f}'
-        if bar.relvol < self.p['min_relvol']:
-            note += f', relvol {bar.relvol:.1f} < {self.p["min_relvol"]:.1f}'
-        return note
+            return [Rule('fresh', False, 'already traded this session (one trade per day)')]
+        out = []
+        range_ok = not np.isnan(bar.or_high)
+        if range_ok:
+            out.append(Rule('range', True, f'opening range {bar.or_low:,.2f}–{bar.or_high:,.2f} is set'))
+            broke = bar.close > bar.or_high
+            out.append(Rule('breakout', bool(broke),
+                            f'close {bar.close:,.2f} broke above the range high {bar.or_high:,.2f}' if broke
+                            else f'close {bar.close:,.2f} is inside the range (needs above {bar.or_high:,.2f})',
+                            value=bar.close, threshold=bar.or_high))
+        else:
+            out.append(Rule('range', False, f'opening range still forming ({int(bar.bar_pos) + 1} bars in)'))
+        in_window = bar.minutes_since_open <= self.p['entry_window_minutes']
+        out.append(Rule('window', bool(in_window), 'within the entry window' if in_window else 'entry window has closed for today',
+                        value=bar.minutes_since_open, threshold=self.p['entry_window_minutes']))
+        vol_ok = bar.relvol >= self.p['min_relvol']
+        out.append(Rule('volume', bool(vol_ok), f'relative volume {bar.relvol:.1f} vs {self.p["min_relvol"]:.1f} required',
+                        value=bar.relvol, threshold=self.p['min_relvol']))
+        return out

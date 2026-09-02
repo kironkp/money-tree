@@ -65,7 +65,10 @@ class ReplayMatchesTheBacktest(TestCase):
         levels = set(FeedEvent.objects.filter(account__mode='replay').values_list('level', flat=True))
         self.assertIn('trade', levels)
         self.assertIn('bar', levels)
-        self.assertTrue(FeedEvent.objects.filter(level='signal', text__startswith='BUY').exists())
+        self.assertTrue(FeedEvent.objects.filter(level='signal', text__contains='entry approved').exists())
+        from main_app.models import SymbolState, TradeCard
+        self.assertTrue(TradeCard.objects.filter(account__mode='replay', status='closed').exists())
+        self.assertTrue(SymbolState.objects.filter(account__mode='replay').exists())
         self.assertTrue(EquitySnapshot.objects.filter(account__mode='replay').exists())
         self.assertTrue(JournalEntry.objects.filter(kind='auto_eod').exists())
         self.assertTrue(Signal.objects.filter(account__mode='replay').exists())

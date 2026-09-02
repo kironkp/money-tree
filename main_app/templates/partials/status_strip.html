@@ -1,0 +1,12 @@
+{% load mt_tags %}
+<div class="strip {% if status.real_money %}strip-live{% endif %}">
+  <div class="strip-item mode {{ status.mode }}"><span class="k">Money</span><span class="v">{{ status.mode_label }}</span></div>
+  <div class="strip-item"><span class="k">Agent</span><span class="v"><span class="dot {{ status.health }}"></span>{{ status.health }}{% if status.run %} · {{ status.state }}{% endif %}</span></div>
+  <div class="strip-item"><span class="k">Data</span><span class="v">{{ status.data_source }}{% if status.last_bar_ts %} · bar {{ status.last_bar_ts|et:'%H:%M' }} ({{ status.bar_age|duration }} old){% else %} · no bar yet{% endif %}</span></div>
+  <div class="strip-item"><span class="k">Broker</span><span class="v">{% if status.reconcile.applies %}{% if status.reconcile.ok %}reconciled{% else %}<span class="down">DIVERGED</span>{% endif %}{% if status.reconcile.age is not None %} {{ status.reconcile.age|duration }} ago{% else %} never{% endif %}{% else %}simulator (own venue){% endif %}</span></div>
+  <div class="strip-item"><span class="k">Controls</span><span class="v">{% if status.kill_switch %}<span class="down">KILL SWITCH ON</span>{% elif status.trading_enabled %}trading on{% else %}<span class="warn">trading off</span>{% endif %}{% if status.halted %} · <span class="down">halted</span>{% endif %}</span></div>
+  <div class="strip-item safe {% if status.safe %}yes{% else %}no{% endif %}"><span class="k">Safe to trade now</span><span class="v">{% if status.safe %}Yes{% else %}No{% endif %}</span></div>
+</div>
+{% if status.blockers or status.notes %}
+<p class="small strip-notes">{% for b in status.blockers %}<span class="badge bad">{{ b }}</span> {% endfor %}{% for n in status.notes %}<span class="badge">{{ n }}</span> {% endfor %}</p>
+{% endif %}

@@ -1,98 +1,115 @@
 {% load mt_tags %}
-<div class="tiles">
-  <div class="tile"><div class="label">Equity</div><div class="value">{{ account.equity|money }}</div>
-    <div class="sub {{ account.total_pnl|sign_class }}">{{ account.total_pnl|signed_money }} since seed</div></div>
-  <div class="tile"><div class="label">Day P&amp;L</div><div class="value {{ day_pnl|sign_class }}">{{ day_pnl|signed_money }}</div>
-    <div class="sub">closed {{ pnl_today_closed|signed_money }} · open {{ unrealized|signed_money }}</div></div>
-  <div class="tile"><div class="label">Cash</div><div class="value">{{ account.cash|money }}</div>
-    <div class="sub">buying power {{ account.buying_power|money }}</div></div>
-  <div class="tile"><div class="label">Daily loss budget</div><div class="value">{{ loss_used_pct|floatformat:0 }}%</div>
-    <div class="meter {% if loss_used_pct > 70 %}hot{% endif %}"><span style="width: {{ loss_used_pct|floatformat:0 }}%"></span></div>
-    <div class="sub">of {{ cfg.max_daily_loss_pct }}% limit</div></div>
-  <div class="tile"><div class="label">Positions</div><div class="value">{{ positions_used }}</div>
-    <div class="sub">{{ trades_today|length }} trades today · {{ wins_today }} wins</div></div>
-  <div class="tile"><div class="label">Market</div><div class="value" style="font-size:14px">{{ market.label }}</div>
-    <div class="sub">{{ enabled_strategies }} {{ account.market }} strateg{{ enabled_strategies|pluralize:'y,ies' }} enabled</div></div>
-</div>
-
 <div class="grid cols-2">
   <div class="card">
-    <h3>Open positions <span class="more"><a href="{% url 'positions' %}?{{ account.query }}">all</a></span></h3>
-    {% if positions %}
+    <h3>What it is doing now</h3>
+    <dl class="kv">
+      <dt>Last cycle</dt><dd>{% if run %}{{ run.last_tick_at|et:'%H:%M:%S' }} — {{ run.message }}{% else %}not running{% endif %}</dd>
+      <dt>Next action</dt><dd>{% if status.next_action_at %}{{ status.next_action_at|et:'%a %H:%M:%S' }} ET{% else %}—{% endif %}</dd>
+      <dt>Process</dt><dd>{% if run %}pid {{ run.pid }} · {{ run.ticks }} heartbeats · expects one every {{ run.expected_interval_s|duration }}{% else %}—{% endif %}</dd>
+      <dt>Strategies</dt><dd>{{ enabled_strategies }} enabled for {{ account.market }}</dd>
+    </dl>
+  </div>
+  <div class="card">
+    <h3>Portfolio risk</h3>
+    <div class="tiles" style="margin:0">
+      <div class="tile"><div class="label">At risk to stops</div><div class="value down">{{ risk.at_risk|money }}</div><div class="sub">{{ risk.positions }} position(s)</div></div>
+      <div class="tile"><div class="label">Daily loss budget left</div><div class="value">{{ risk.remaining|money }}</div>
+        <div class="meter {% if risk.used_pct > 70 %}hot{% endif %}"><span style="width: {{ risk.used_pct|floatformat:0 }}%"></span></div><div class="sub">{{ risk.used|money }} of {{ risk.budget|money }} used</div></div>
+      <div class="tile"><div class="label">Exposure</div><div class="value">{{ risk.exposure_pct|floatformat:0 }}%</div><div class="sub">{{ risk.exposure|money }} notional</div></div>
+      <div class="tile"><div class="label">Equity</div><div class="value">{{ account.equity|money }}</div><div class="sub {{ account.day_pnl|sign_class }}">day {{ account.day_pnl|signed_money }} · open {{ unrealized|signed_money }}</div></div>
+    </div>
+    {% if risk.unprotected %}<p class="message error" style="margin-top:var(--s-3)">UNPROTECTED: {{ risk.unprotected|joinlist }} — no stop in place</p>{% endif %}
+  </div>
+
+  {% if alerts %}
+  <div class="card span-2 alerts">
+    <h3>Alerts requiring action <span class="more">{% if is_operator %}<form method="post" action="{% url 'alert-ack' 0 %}" class="inline">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn small">acknowledge all</button></form>{% endif %}</span></h3>
+    <table><tbody>
+    {% for a in alerts %}<tr><td class="small">{{ a.ts|et:'%b %d %H:%M:%S' }}</td><td><span class="badge bad">{{ a.kind }}</span></td><td>{{ a.message }}</td>
+      <td>{% if is_operator %}<form method="post" action="{% url 'alert-ack' a.pk %}" class="inline">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn small">ack</button></form>{% endif %}</td></tr>{% endfor %}
+    </tbody></table>
+  </div>
+  {% endif %}
+
+  {% if pending_cards or open_orders %}
+  <div class="card span-2">
+    <h3>Pending orders</h3>
     <div class="table-wrap"><table>
-      <thead><tr><th>Symbol</th><th>Strategy</th><th class="num">Qty</th><th class="num">Avg</th><th class="num">Last</th><th class="num">P&amp;L</th><th class="num">Stop / Target</th><th>Since</th></tr></thead>
+      <thead><tr><th>Symbol</th><th>Strategy</th><th>Status</th><th class="num">Qty</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th><th class="num">Risk</th><th>Correlation id</th><th></th></tr></thead>
       <tbody>
-      {% for p in positions %}
-        <tr>
-          <td><strong>{{ p.instrument.symbol }}</strong> {% if p.external %}<span class="badge warn">external</span>{% endif %}</td>
-          <td>{{ p.strategy_name }}</td>
-          <td class="num">{{ p.qty|qty }}</td>
-          <td class="num">{{ p.avg_price|num:2 }}</td>
-          <td class="num">{{ p.last_price|num:2 }}</td>
-          <td class="num {{ p.unrealized_pnl|sign_class }}">{{ p.unrealized_pnl|signed_money }}<br><small>{{ p.unrealized_pct|pct }}</small></td>
-          <td class="num small">{{ p.stop_price|num:2 }} / {{ p.target_price|num:2 }}</td>
-          <td class="small">{{ p.opened_at|et }}</td>
-        </tr>
-      {% endfor %}
+      {% for c in pending_cards %}<tr>
+        <td><strong>{{ c.symbol }}</strong> {{ c.side }}</td><td>{{ c.strategy_key }}</td>
+        <td><span class="badge {% if c.status == 'awaiting_approval' %}warn{% endif %}">{{ c.status }}</span>{% if c.status == 'awaiting_approval' %}<br><small>expires {{ c.approval_expires_at|et_time }}</small>{% endif %}{% if c.broker_order_id %}<br><small>broker {{ c.broker_order_id|truncatechars:12 }}</small>{% endif %}</td>
+        <td class="num">{{ c.qty|qty }}{% if c.filled_qty %} <small>({{ c.filled_qty|qty }} filled)</small>{% endif %}</td><td class="num">{{ c.planned_entry|num:2 }}</td><td class="num">{{ c.stop_price|num:2 }}</td><td class="num">{{ c.target_price|num:2 }}</td>
+        <td class="num">{{ c.risk_dollars|money }}</td><td class="small mono">{{ c.entry_order_id }}</td>
+        <td>{% if c.status == 'awaiting_approval' and is_operator %}<form method="post" action="{% url 'card-decide' c.pk 'approve' %}" class="inline">{% csrf_token %}<button class="btn small primary">approve</button></form> <form method="post" action="{% url 'card-decide' c.pk 'reject' %}" class="inline">{% csrf_token %}<button class="btn small">reject</button></form>{% endif %}</td>
+      </tr>{% endfor %}
+      {% for o in open_orders %}<tr><td><strong>{{ o.instrument.symbol }}</strong></td><td>{{ o.strategy_key }}</td><td><span class="badge">{{ o.leg }} · {{ o.status }}</span></td><td class="num">{{ o.qty|qty }}</td><td class="num">{{ o.decision_price|num:2 }}</td><td class="num">{{ o.stop_price|num:2 }}</td><td class="num">{{ o.limit_price|num:2 }}</td><td></td><td class="small mono">{{ o.client_order_id }}</td><td></td></tr>{% endfor %}
       </tbody>
     </table></div>
-    {% else %}<p class="empty">flat</p>{% endif %}
+  </div>
+  {% endif %}
+
+  <div class="card span-2">
+    <h3>Active trades <span class="more"><a href="{% url 'positions' %}?{{ account.query }}">positions</a></span></h3>
+    {% if active_cards %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Symbol</th><th>Strategy</th><th>Status</th><th class="num">Qty</th><th class="num">Entry</th><th class="num">Last</th><th class="num">P&amp;L</th><th class="num">Stop (dist)</th><th class="num">Target (dist)</th><th class="num">Planned risk</th><th>Protection</th><th>Age</th></tr></thead>
+      <tbody>{% for c in active_cards %}<tr>
+        <td><strong>{{ c.symbol }}</strong> {{ c.side }}</td><td>{{ c.strategy_key }}</td><td><span class="badge {% if c.status == 'protected' %}ok{% elif c.status == 'closing' %}warn{% endif %}">{{ c.status }}</span></td>
+        <td class="num">{{ c.filled_qty|qty }}</td><td class="num">{{ c.avg_fill|num:2 }}</td><td class="num">{{ c.position.last_price|num:2 }}</td>
+        <td class="num {{ c.position.unrealized_pnl|sign_class }}">{{ c.position.unrealized_pnl|signed_money }}</td>
+        <td class="num">{{ c.stop_price|num:2 }} <small>({{ c.dist_stop|pct:1 }})</small></td><td class="num">{{ c.target_price|num:2 }} <small>({{ c.dist_target|pct:1 }})</small></td>
+        <td class="num">{{ c.risk_dollars|money }}</td>
+        <td>{% if c.protection == 'none' %}<span class="badge bad">NONE</span>{% else %}<span class="badge ok">{{ c.protection }}</span>{% endif %}</td><td class="small">{{ c.age_min }} min</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p class="empty">flat — no open trades on {{ account.label }}</p>{% endif %}
+    {% for p in positions %}{% if p.external %}<p class="small warn">External position at the broker: {{ p.instrument.symbol }} {{ p.qty|qty }} — not managed by any strategy.</p>{% endif %}{% endfor %}
+  </div>
+
+  <div class="card span-2">
+    <h3>Closest opportunities <span class="more">rules from the latest completed bar</span></h3>
+    {% if states %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Symbol</th><th class="num">Last</th><th>Bar</th><th>Decision</th><th>Passing</th><th>Still needs</th></tr></thead>
+      <tbody>{% for st in states %}<tr>
+        <td><strong>{{ st.symbol }}</strong><br><small class="muted">{{ st.proximity|floatformat:0|pct_of:1|floatformat:0 }}% of rules</small></td>
+        <td class="num">{{ st.price|num:2 }}</td><td class="small">{{ st.bar_ts|et:'%H:%M' }}</td>
+        <td><span class="badge {% if st.decision == 'holding' %}ok{% elif st.decision == 'blocked' %}bad{% endif %}">{{ st.decision }}</span></td>
+        <td class="small">{% for r in st.passing %}<span class="badge ok" title="{{ r.text }}">{{ r.strategy }} · {{ r.rule }}</span> {% endfor %}</td>
+        <td class="small">{% for r in st.failing %}<div><span class="down">✘</span> {{ r.strategy }}: {{ r.text }}</div>{% empty %}<span class="muted">—</span>{% endfor %}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p class="empty">no evaluations yet — they appear after the first completed bar</p>{% endif %}
   </div>
 
   <div class="card">
     <h3>Today's trades <span class="more"><a href="{% url 'trades' %}?{{ account.query }}">history</a></span></h3>
     {% if trades_today %}
     <div class="table-wrap"><table>
-      <thead><tr><th>Symbol</th><th>Strategy</th><th>Side</th><th class="num">Qty</th><th class="num">In → Out</th><th class="num">P&amp;L</th><th>Exit</th><th>When</th></tr></thead>
-      <tbody>
-      {% for t in trades_today %}
-        <tr>
-          <td><strong>{{ t.instrument.symbol }}</strong></td><td>{{ t.strategy_key }}</td><td>{{ t.side }}</td>
-          <td class="num">{{ t.qty|qty }}</td>
-          <td class="num small">{{ t.entry_price|num:2 }} → {{ t.exit_price|num:2 }}</td>
-          <td class="num {{ t.pnl|sign_class }}">{{ t.pnl|signed_money }}</td>
-          <td><span class="badge">{{ t.exit_reason }}</span></td>
-          <td class="small">{{ t.exit_ts|et_time }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
+      <thead><tr><th>Symbol</th><th>Strategy</th><th class="num">Qty</th><th class="num">In → Out</th><th class="num">Net</th><th>Exit</th><th>When</th></tr></thead>
+      <tbody>{% for t in trades_today %}<tr>
+        <td><strong>{{ t.instrument.symbol }}</strong> {{ t.side }}</td><td>{{ t.strategy_key }}</td><td class="num">{{ t.qty|qty }}</td>
+        <td class="num small">{{ t.entry_price|num:2 }} → {{ t.exit_price|num:2 }}</td><td class="num {{ t.pnl|sign_class }}">{{ t.pnl|signed_money }}</td>
+        <td><span class="badge">{{ t.exit_reason }}</span></td><td class="small">{{ t.exit_ts|et_time }}</td>
+      </tr>{% endfor %}</tbody>
     </table></div>
+    <p class="small muted">closed {{ pnl_today_closed|signed_money }} · {{ wins_today }} wins of {{ trades_today|length }}</p>
     {% else %}<p class="empty">no trades yet today</p>{% endif %}
   </div>
 
   <div class="card">
-    <h3>Latest signals <span class="more"><a href="{% url 'signals' %}?{{ account.query }}">all</a></span></h3>
+    <h3>Latest decisions <span class="more"><a href="{% url 'signals' %}?{{ account.query }}">all signals</a></span></h3>
     {% if signals %}
     <div class="table-wrap"><table>
-      <thead><tr><th>Bar</th><th>Strategy</th><th>Symbol</th><th>Action</th><th>Result</th></tr></thead>
-      <tbody>
-      {% for s in signals %}
-        <tr>
-          <td class="small">{{ s.ts|et }}</td><td>{{ s.strategy_key }}</td><td><strong>{{ s.instrument.symbol }}</strong></td>
-          <td>{{ s.action }} <small class="muted">{{ s.reason }}</small></td>
-          <td>{% if s.acted %}<span class="badge ok">order</span>{% else %}<span class="badge bad">blocked</span> <small>{{ s.blocked_reason }}</small>{% endif %}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
+      <thead><tr><th>Bar</th><th>Strategy</th><th>Symbol</th><th>Signal</th><th>Outcome</th></tr></thead>
+      <tbody>{% for s in signals %}<tr>
+        <td class="small">{{ s.ts|et }}</td><td>{{ s.strategy_key }}</td><td><strong>{{ s.instrument.symbol }}</strong></td>
+        <td>{{ s.action }} <small class="muted">{{ s.reason|truncatechars:60 }}</small></td>
+        <td>{% if s.acted %}{% if s.order %}<span class="badge {% if s.order.status == 'filled' %}ok{% elif s.order.status in 'rejected canceled' %}bad{% endif %}">{{ s.order.status }}</span>{% else %}<span class="badge">allowed</span>{% endif %}{% else %}<span class="badge bad">blocked</span> <small>{{ s.blocked_reason }}</small>{% endif %}</td>
+      </tr>{% endfor %}</tbody>
     </table></div>
-    {% else %}<p class="empty">no signals yet — the agent needs bars and an enabled strategy</p>{% endif %}
-  </div>
-
-  <div class="card">
-    <h3>Agent &amp; risk <span class="more"><a href="{% url 'risk-events' %}?{{ account.query }}">events</a></span></h3>
-    <dl class="kv">
-      <dt>Process</dt><dd>{% if run %}<span class="dot on"></span>{{ run.market }} {{ run.mode }} · pid {{ run.pid }} · {{ run.ticks }} ticks{% else %}<span class="dot"></span>not running{% endif %}</dd>
-      <dt>Heartbeat</dt><dd>{% if run %}{{ run.heartbeat_age_s|duration }} ago — {{ run.message }}{% else %}—{% endif %}</dd>
-      <dt>Kill switch</dt><dd>{% if cfg.kill_switch %}<span class="down">ON — no entries, positions flattened</span>{% else %}off{% endif %}</dd>
-      <dt>Trading</dt><dd>{% if cfg.trading_enabled %}enabled{% else %}<span class="warn">disabled in settings</span>{% endif %}</dd>
-      <dt>Synced</dt><dd>{{ account.last_synced_at|et:'%b %d %H:%M:%S' }}</dd>
-    </dl>
-    {% if risk_events %}
-    <table style="margin-top: var(--s-3)">
-      <tbody>
-      {% for e in risk_events %}<tr><td class="small">{{ e.ts|et }}</td><td><span class="badge {% if e.kind in 'daily_loss kill_switch error drift' %}bad{% elif e.kind in 'missed_ticks external_position' %}warn{% endif %}">{{ e.kind }}</span></td><td class="small">{{ e.message }}</td></tr>{% endfor %}
-      </tbody>
-    </table>
-    {% endif %}
+    {% else %}<p class="empty">no signals yet</p>{% endif %}
   </div>
 </div>

@@ -72,6 +72,11 @@ class Position:
     max_hold_until: datetime | None = None
     external: bool = False
     entry_order_id: str = ''
+    # Exit protection: engine (levels evaluated by us), bracket / stop_order
+    # (venue-side), none. `closing` = an exit is in flight; more exits are ignored.
+    protection: str = 'engine'
+    protection_order_id: str = ''
+    closing: bool = False
 
     @property
     def side(self):
@@ -166,6 +171,16 @@ class Broker:
     def sync(self) -> dict:
         """Reconcile with the venue (no-op for the simulator)."""
         return {}
+
+    def open_orders_for(self, symbol: str | None = None) -> list:
+        return []
+
+    def protection_for(self, symbol: str) -> tuple[str, str]:
+        """(kind, order id) of the exit protection on an open position."""
+        pos = self.positions.get(symbol)
+        if pos is None or pos.qty == 0:
+            return 'none', ''
+        return pos.protection, pos.protection_order_id
 
     def drain_events(self) -> list:
         """Fills/trades produced since the last drain, for the recorder."""

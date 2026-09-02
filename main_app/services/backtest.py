@@ -48,14 +48,28 @@ class BacktestResult:
 def run_backtest(spec: BacktestSpec, frames: dict[str, pd.DataFrame],
                  benchmark_frame: pd.DataFrame | None = None) -> BacktestResult:
     t0 = time.time()
-    strat = make_strategy(spec.strategy_key, spec.params)
-    frames = {s: df for s, df in frames.items() if len(df) and strat.supports(spec.asset_classes.get(s, 'stock'))}
+    allocations, strategy_symbols = {}, {}
+    if spec.strategy_key == 'portfolio':
+        # Every enabled strategy of a market together: signal conflicts, capital
+        # contention and allocation caps included.
+        strategies = []
+        for item in spec.params.get('strategies', []):
+            st = make_strategy(item['key'], item.get('params'))
+            strategies.append(st)
+            allocations[st.key] = float(item.get('allocation_pct', 100))
+            if item.get('symbols'):
+                strategy_symbols[st.key] = set(item['symbols'])
+    else:
+        strategies = [make_strategy(spec.strategy_key, spec.params)]
+    frames = {s: df for s, df in frames.items()
+              if len(df) and any(st.supports(spec.asset_classes.get(s, 'stock')) for st in strategies)}
     broker = SimBroker(spec.starting_cash, immediate_fills=False, slippage_bps=spec.risk.slippage_bps,
                        fee_bps=spec.fee_bps, liquidity_cap_pct=spec.liquidity_cap_pct,
                        asset_classes=spec.asset_classes, qty_increments=spec.qty_increments)
-    cfg = EngineConfig(timeframe=spec.timeframe, mode='bt', asset_classes=spec.asset_classes, risk=spec.risk)
+    cfg = EngineConfig(timeframe=spec.timeframe, mode='bt', asset_classes=spec.asset_classes, risk=spec.risk,
+                       allocations=allocations, strategy_symbols=strategy_symbols)
     rec = MemoryRecorder()
-    engine = Engine([strat], broker, cfg, rec, RiskManager(spec.risk, spec.qty_increments))
+    engine = Engine(strategies, broker, cfg, rec, RiskManager(spec.risk, spec.qty_increments))
     engine.run_frames(frames, act_from=spec.act_from)
     bench = None
     bdf = benchmark_frame if benchmark_frame is not None else frames.get(spec.benchmark_symbol)

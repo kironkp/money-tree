@@ -10,7 +10,7 @@
   {% if is_operator %}
   <div class="actions">
     {% if run %}
-      <form method="post" action="{% url 'agent-stop' %}" class="inline" data-confirm="Stop the {{ account.market }} agent? Open positions on sim/paper are flattened.">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn">■ Stop {{ account.market }} agent</button></form>
+      <form method="post" action="{% url 'agent-stop' %}" class="inline" data-confirm="Stop the {{ account.market }} agent? {% if account.mode == 'live' %}Live positions stay open unless LIVE_FLATTEN_ON_EXIT=1.{% else %}Open positions are flattened.{% endif %}">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn">■ Stop {{ account.market }} agent</button></form>
     {% elif account.mode != 'replay' %}
       <form method="post" action="{% url 'agent-start' %}" class="inline">{% csrf_token %}
         <input type="hidden" name="market" value="{{ account.market }}">
@@ -24,18 +24,25 @@
     {% else %}
       <a class="btn" href="{% url 'replay' %}?market={{ account.market }}">▶ New replay</a>
     {% endif %}
-    <form method="post" action="{% url 'flatten-now' %}" class="inline" data-confirm="Close every open position on {{ account.name }} now?">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn warn">Flatten all</button></form>
+    {% if not run %}<form method="post" action="{% url 'flatten-now' %}" class="inline" data-confirm="Close every open position on {{ account.name }} now?">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn warn">Flatten all</button></form>{% endif %}
     {% if cfg.kill_switch %}
       <form method="post" action="{% url 'kill-switch' %}" class="inline">{% csrf_token %}<input type="hidden" name="state" value="off"><input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn">Reset kill switch</button></form>
     {% else %}
-      <form method="post" action="{% url 'kill-switch' %}" class="inline" data-confirm="KILL SWITCH: flatten every agent's positions and block all entries until reset?">{% csrf_token %}<input type="hidden" name="state" value="on"><input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn danger">Kill switch</button></form>
+      <form method="post" action="{% url 'kill-switch' %}" class="inline" data-confirm="KILL SWITCH: every agent flattens within 2 seconds and no entries happen until you reset it. Continue?">{% csrf_token %}<input type="hidden" name="state" value="on"><input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn danger">Kill switch</button></form>
     {% endif %}
   </div>
   {% endif %}
 </div>
-<p class="small muted">{{ market.label }} · {% if run %}<span class="dot on"></span>{{ account.market }} agent running (pid {{ run.pid }}, {{ run.ticks }} ticks, last tick {{ run.heartbeat_age_s|duration }} ago){% else %}<span class="dot"></span>no {{ account.market }} agent running{% endif %}</p>
 
-{% include 'partials/feed.html' %}
+<div id="strip" hx-get="{% url 'status-strip' %}?{{ account.query }}" hx-trigger="every 10s" hx-swap="innerHTML">
+  {% include 'partials/status_strip.html' %}
+</div>
+
+<div id="panels" hx-get="{% url 'dashboard-panels' %}?{{ account.query }}" hx-trigger="every 15s" hx-swap="innerHTML">
+  {% include 'partials/dashboard_panels.html' %}
+</div>
+
+<div style="margin-top: var(--s-4)">{% include 'partials/feed.html' with title='Decision journal' %}</div>
 
 <div class="card" style="margin: var(--s-4) 0">
   <h3>Equity <span class="more">
@@ -44,11 +51,7 @@
   <div id="equity-chart" class="chart"></div>
 </div>
 
-<div id="panels" hx-get="{% url 'dashboard-panels' %}?{{ account.query }}" hx-trigger="every 15s" hx-swap="innerHTML">
-  {% include 'partials/dashboard_panels.html' %}
-</div>
-
-<details style="margin-top: var(--s-4)"><summary>Process log ({{ account.log_name }})</summary>
+<details><summary>Process log ({{ account.log_name }})</summary>
   <div hx-get="{% url 'agent-log' %}?name={{ account.log_name }}" hx-trigger="load, every 10s" hx-swap="innerHTML"></div>
 </details>
 {% endblock %}

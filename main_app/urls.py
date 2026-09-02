@@ -6,6 +6,9 @@ urlpatterns = [
     path('', views.dashboard, name='dashboard'),
     path('partials/dashboard/', views.dashboard_panels, name='dashboard-panels'),
     path('partials/agent-log/', views.agent_log, name='agent-log'),
+    path('partials/status/', views.status_strip, name='status-strip'),
+    path('alerts/<int:pk>/ack/', views.alert_ack, name='alert-ack'),
+    path('cards/<int:pk>/<str:verdict>/', views.card_decide, name='card-decide'),
     path('api/equity/<str:mode>/', views.api_equity, name='api-equity'),
     path('agent/start/', views.agent_start, name='agent-start'),
     path('agent/stop/', views.agent_stop, name='agent-stop'),
@@ -21,6 +24,7 @@ urlpatterns = [
 
     path('strategies/', views.strategy_list, name='strategy-list'),
     path('strategies/create-missing/', views.strategy_create_missing, name='strategy-create-missing'),
+    path('strategies/<str:market>/portfolio-backtest/', views.portfolio_backtest, name='portfolio-backtest'),
     path('strategies/<str:market>/<str:key>/', views.strategy_detail, name='strategy-detail'),
     path('strategies/<str:market>/<str:key>/backtest/', views.strategy_backtest, name='strategy-backtest'),
 

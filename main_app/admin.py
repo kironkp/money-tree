@@ -7,6 +7,6 @@ for model in (
     models.Position, models.Order, models.Fill, models.Trade, models.EquitySnapshot,
     models.Signal, models.RiskEvent, models.AgentRun, models.Strategy, models.Experiment,
     models.BacktestRun, models.BacktestTrade, models.JournalEntry, models.ApiUsage, models.FeedEvent,
-    models.SignupInvite,
+    models.SignupInvite, models.TradeCard, models.SymbolState,
 ):
     admin.site.register(model)

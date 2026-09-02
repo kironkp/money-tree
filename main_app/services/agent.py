@@ -1,10 +1,14 @@
 """The agent loop: live (sim / paper / live) and replay.
 
 One process per account, guarded by a file lock. Each tick:
-  sync the newest COMPLETED bars → engine.process_bar per new bar →
-  persist the ledger → equity snapshot → heartbeat.
-Catch-up after a laptop sleep evaluates stops on the missed bars without
-opening anything new. SIGTERM/SIGINT flatten (sim/paper) and stop cleanly.
+  reconcile with the broker (paper/live) → sync the newest COMPLETED bars →
+  engine.process_bar per new bar → persist the ledger and the risk state →
+  equity snapshot → heartbeat.
+Between ticks the loop polls its controls every 2 s: stop requests, the kill
+switch, trading on/off, risk-setting changes and operator approvals, so
+"kill" means now, not next bar. Catch-up after a laptop sleep evaluates stops
+on the missed bars without opening anything new. SIGTERM/SIGINT flatten
+sim/paper and stop cleanly; live keeps positions unless LIVE_FLATTEN_ON_EXIT.
 """
 from __future__ import annotations
 
@@ -13,13 +17,14 @@ import logging
 import os
 import signal
 import time
+from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 
 from django.conf import settings
 from django.utils import timezone
 
 from main_app.models import (Account, AgentConfig, AgentRun, FeedEvent, Instrument, Market, Mode, RiskEvent, Stage,
-                             Strategy)
+                             Strategy, TradeCard)
 
 from .backtest import date_bounds
 from .broker.sim import SimBroker
@@ -28,16 +33,18 @@ from .data import get_provider
 from .data.store import complete_bars_only, load_frame, quality_gate, synthetic_symbols, upsert_bars
 from .engine import Engine, EngineConfig
 from .indicators import minutes_to_close as _mtc
-from .ledger import DBRecorder, hydrate_broker, open_orders_from_db, persist_broker
+from .ledger import DBRecorder, hydrate_broker, hydrate_cards, open_orders_from_db, persist_broker
 from .narrator import Narrator
 from .risk import RiskConfig, RiskManager
 from .strategies import make_strategy
-from .timeframes import floor_to_bar, tf_delta
+from .timeframes import floor_to_bar, tf_delta, tf_minutes
 
 log = logging.getLogger('moneytree.agent')
 
-WINDOW_BARS = 420          # trailing bars loaded per symbol each tick (≈ 5 sessions of 5-min)
+WINDOW_BARS = 420          # trailing bars loaded per symbol each tick
 SNAPSHOT_EVERY = timedelta(minutes=5)
+CONTROL_POLL_S = 2
+STRATEGY_CHECK_S = 60
 STAGE_FOR_MODE = {
     Mode.SIM: (Stage.SPROUT, Stage.SAPLING, Stage.TREE),
     Mode.PAPER: (Stage.SAPLING, Stage.TREE),
@@ -65,16 +72,22 @@ class Agent:
         self.last_tick: datetime | None = None
         self.last_snapshot: datetime | None = None
         self.last_processed: dict[str, datetime] = {}
+        self.last_bar_ts: datetime | None = None
         self.eod_done: date | None = None
         self.run_row: AgentRun | None = None
         self._lock_fh = None
+        self._last_control_poll = 0.0
+        self._last_strategy_check = 0.0
+        self._config_flagged = False
+        self.exclude_sources: list = []
+        self.provider = None
 
     # --- setup --------------------------------------------------------------
     def setup(self) -> None:
         self.cfg = AgentConfig.get()
         if self.mode == Mode.LIVE and not (settings.LIVE_TRADING_ARMED and self.cfg.mode == Mode.LIVE):
             raise RuntimeError('live mode refused: set LIVE_TRADING_ARMED=1 in .env AND arm live mode in Settings')
-        if self.mode in (Mode.PAPER, Mode.LIVE) and not settings.ALPACA_ENABLED and self.mode == Mode.PAPER:
+        if self.mode == Mode.PAPER and not settings.ALPACA_ENABLED:
             raise RuntimeError('paper mode needs Alpaca keys in .env')
         self._acquire_lock()
         self.account = Account.for_mode(self.mode, self.market)
@@ -82,6 +95,7 @@ class Agent:
             self.account.reset()
         self.narrator = Narrator(self.account, echo=not self.quiet)
         self.timeframe = self.cfg.timeframe_for(self.market)
+        self.step = tf_delta(self.timeframe)
         self.instruments = {i.symbol: i for i in Instrument.objects.filter(in_watchlist=True, active=True,
                                                                          asset_class__in=self.account.asset_classes)}
         if not self.instruments:
@@ -92,16 +106,27 @@ class Agent:
         rows = list(Strategy.objects.filter(enabled=True, stage__in=stages, market=self.market))
         self.strategies = []
         self.strategy_symbols: dict[str, set] = {}
+        allocations = {}
         for row in rows:
             strat = make_strategy(row.key, row.params)
+            strat.name = row.name
             self.strategies.append(strat)
             syms = set(row.symbols or self.instruments)
             self.strategy_symbols[row.key] = {s for s in syms if s in self.instruments and strat.supports(self.asset_classes[s])}
+            allocations[row.key] = float(row.allocation_pct)
+        self.strategy_snapshot = self._strategy_snapshot()
         risk_cfg = RiskConfig.from_model(self.cfg)
         self.risk = RiskManager(risk_cfg, self.qty_increments)
         self.risk.kill_switch = self.cfg.kill_switch
         self.risk.trading_enabled = self.cfg.trading_enabled
-        engine_cfg = EngineConfig(timeframe=self.timeframe, mode=self.mode, asset_classes=self.asset_classes, risk=risk_cfg)
+        if self.mode != Mode.REPLAY:
+            self.provider = get_provider(self.provider_name, live_feed=True)
+            self.exclude_sources = [] if self.provider.name == 'synthetic' else ['synthetic']
+        data_source = 'stored bars' if self.mode == Mode.REPLAY else self.provider.name
+        engine_cfg = EngineConfig(timeframe=self.timeframe, mode=self.mode, asset_classes=self.asset_classes, risk=risk_cfg,
+                                  allocations=allocations, data_source=data_source,
+                                  confirm_entries=(self.mode == Mode.LIVE and self.cfg.live_confirm_orders),
+                                  confirm_minutes=int(self.cfg.live_confirm_minutes))
         fee_bps = {'stock': float(self.cfg.fee_bps_stock), 'etf': float(self.cfg.fee_bps_stock), 'crypto': float(self.cfg.fee_bps_crypto)}
         if self.mode in (Mode.SIM, Mode.REPLAY):
             self.broker = SimBroker(float(self.account.cash), immediate_fills=(self.mode == Mode.SIM),
@@ -117,17 +142,22 @@ class Agent:
             self.broker = AlpacaBroker(paper=(self.mode == Mode.PAPER), asset_classes=self.asset_classes,
                                        qty_increments=self.qty_increments, mode_is_live=(self.cfg.mode == Mode.LIVE))
             hydrate_broker(self.account, self.broker)
-            info = self.broker.sync()
-            log.info('alpaca sync: %s', info)
-            for sym in info.get('adopted', []):
-                RiskEvent.objects.create(account=self.account, kind='external_position',
-                                         message=f'{sym}: position found at the broker but not on our books — adopted as external')
         self.recorder = DBRecorder(self.account, self.instruments)
         self.engine = Engine(self.strategies, self.broker, engine_cfg, self.recorder, self.risk, narrator=self.narrator)
-        persist_broker(self.account, self.broker, self.instruments)
+        # Risk state survives restarts: pick the day up where the last process left it.
+        today = cal.session_date(timezone.now()) if self.market != Market.CRYPTO else timezone.now().astimezone(cal.ET).date()
+        if self.mode != Mode.REPLAY and self.account.day_start_date == today:
+            self.risk.restore(today, float(self.account.day_start_equity), self.account.day_entries,
+                              self.account.day_halted, self.account.day_halted_reason)
+            self.engine.current_day = today
+        n_cards = hydrate_cards(self.account, self.engine)
+        if self.mode in (Mode.PAPER, Mode.LIVE):
+            self.reconcile(timezone.now(), announce=True)
+        persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
         self.run_row = AgentRun.objects.create(account=self.account, mode=self.mode, market=self.market, pid=os.getpid(),
-                                               replay_date=self.replay_date, speed=self.speed,
-                                               message='starting')
+                                               replay_date=self.replay_date, speed=self.speed, message='starting',
+                                               expected_interval_s=int(self.step.total_seconds()) + 60,
+                                               state='starting', data_source=data_source)
         AgentRun.objects.filter(account=self.account, status='running').exclude(pk=self.run_row.pk).update(
             status='stopped', stopped_at=timezone.now(), message='superseded')
         signal.signal(signal.SIGTERM, self._on_signal)
@@ -136,17 +166,26 @@ class Agent:
         log.info('MoneyTree agent up: mode=%s market=%s account=%s equity=%.2f strategies=%s', self.mode, self.market,
                  self.account.name, float(self.account.equity), names)
         FeedEvent.prune()
-        self.say('system', f'{self.market.capitalize()} agent up in {self.mode} mode — seed ${float(self.account.equity):,.2f}, '
-                 f'{len(self.instruments)} symbols ({", ".join(self.instruments)}), {self.timeframe} bars. Strategies: {names}.')
+        self.say('system', f'{self.market.capitalize()} agent up in {self.mode} mode — equity ${float(self.account.equity):,.2f}, '
+                 f'{len(self.instruments)} symbols ({", ".join(self.instruments)}), {self.timeframe} bars. Strategies: {names}.'
+                 + (f' Restored today\'s risk state: {self.risk.day.entries} entries so far'
+                    + (f', HALTED ({self.risk.day.halted_reason})' if self.risk.day.halted else '') + '.'
+                    if self.account.day_start_date == today and self.mode != Mode.REPLAY else '')
+                 + (f' {n_cards} open trade card(s) picked up.' if n_cards else ''))
         if not self.strategies:
             self.say('risk', 'No strategy is enabled for this market at a stage this mode allows — I will watch bars '
-                     'but never trade. Enable one on the Strategies page.')
+                     'but never trade. Enable one on the Strategies page.', phase='alert')
         if self.mode != Mode.REPLAY:
             fake = synthetic_symbols(self.instruments.values(), self.timeframe)
             if fake:
                 self.say('risk', f'Stored history for {", ".join(fake)} is synthetic (a seeded random walk). I ignore it for '
-                         'live decisions, so indicators warm up from real bars only — sync real history on the Data page.')
+                         'live decisions, so indicators warm up from real bars only — sync real history on the Data page.',
+                         phase='alert')
         self.narrator.flush()
+
+    def _strategy_snapshot(self) -> dict:
+        rows = Strategy.objects.filter(market=self.market)
+        return {r.key: (r.version, r.enabled, r.stage, tuple(sorted(r.symbols or [])), float(r.allocation_pct)) for r in rows}
 
     def _acquire_lock(self) -> None:
         settings.RUN_DIR.mkdir(exist_ok=True)
@@ -179,7 +218,7 @@ class Agent:
     def say(self, level: str, text: str, **kw) -> None:
         self.narrator.say(level, text, **kw)
 
-    def heartbeat(self, message: str = '') -> None:
+    def heartbeat(self, message: str = '', state: str | None = None, next_action_at: datetime | None = None) -> None:
         self.narrator.flush()
         if self.run_row is None:
             return
@@ -187,56 +226,163 @@ class Agent:
         self.run_row.ticks += 1
         if message:
             self.run_row.message = message[:300]
-        self.run_row.save(update_fields=['last_tick_at', 'ticks', 'message'])
+        if state:
+            self.run_row.state = state
+        if next_action_at is not None:
+            self.run_row.next_action_at = next_action_at
+        if self.last_bar_ts is not None:
+            self.run_row.last_bar_ts = self.last_bar_ts
+        self.run_row.save(update_fields=['last_tick_at', 'ticks', 'message', 'state', 'next_action_at', 'last_bar_ts'])
 
     def _sleep(self, seconds: float) -> None:
         end = time.monotonic() + max(0.0, seconds)
-        while time.monotonic() < end:
+        while True:
             if self.stop_requested:
                 raise AgentStop()
-            time.sleep(min(1.0, end - time.monotonic()))
+            if time.monotonic() - self._last_control_poll >= CONTROL_POLL_S:
+                self.poll_controls(timezone.now())
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(1.0, remaining))
         if self.stop_requested:
             raise AgentStop()
 
-    def refresh_flags(self, now: datetime) -> None:
-        cfg = AgentConfig.get()
-        if cfg.kill_switch and not self.risk.kill_switch:
-            n = self.engine.flatten_all(now, 'kill')
-            self.recorder.on_risk_event('kill_switch', f'kill switch engaged from Settings — flattened {n} positions', now)
-            self.say('risk', f'KILL SWITCH engaged from the dashboard — flattened {n} position(s); no entries until it is reset.')
-            persist_broker(self.account, self.broker, self.instruments)
-        elif not cfg.kill_switch and self.risk.kill_switch:
-            self.say('system', 'Kill switch reset — entries allowed again.')
-        if cfg.trading_enabled != self.risk.trading_enabled:
-            self.say('system', 'Trading ' + ('enabled' if cfg.trading_enabled else 'disabled') + ' in Settings.')
-        self.risk.kill_switch = cfg.kill_switch
-        self.risk.trading_enabled = cfg.trading_enabled
-        self.cfg = cfg
+    # --- controls (polled every 2 s, even while sleeping) --------------------
+    def poll_controls(self, now: datetime) -> None:
+        self._last_control_poll = time.monotonic()
+        try:
+            if self.run_row is not None:
+                self.run_row.refresh_from_db(fields=['stop_requested'])
+                if self.run_row.stop_requested:
+                    self.stop_requested = True
+                    return
+            cfg = AgentConfig.get()
+            if cfg.kill_switch and not self.risk.kill_switch:
+                self.risk.kill_switch = True
+                n = self.engine.flatten_all(now, 'kill')
+                self.recorder.on_risk_event('kill_switch', f'kill switch engaged — flattened {n} positions', now)
+                self.say('risk', f'KILL SWITCH engaged — flattened {n} position(s) immediately; no entries until it is reset.',
+                         phase='alert')
+                if self.mode in (Mode.PAPER, Mode.LIVE):
+                    self.reconcile(now, announce=True)
+                persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
+            elif not cfg.kill_switch and self.risk.kill_switch:
+                self.risk.kill_switch = False
+                self.say('system', 'Kill switch reset — entries allowed again.')
+            if cfg.trading_enabled != self.risk.trading_enabled:
+                self.risk.trading_enabled = cfg.trading_enabled
+                self.say('system', 'Trading ' + ('enabled' if cfg.trading_enabled else 'disabled') + ' in Settings.')
+            new_risk = RiskConfig.from_model(cfg)
+            if new_risk != self.risk.cfg:
+                old = asdict(self.risk.cfg)
+                changes = [f'{k} {old[k]} → {v}' for k, v in asdict(new_risk).items() if old.get(k) != v]
+                self.risk.cfg = new_risk
+                self.engine.cfg.risk = new_risk
+                self.say('system', 'Risk settings updated (applied between bars): ' + '; '.join(changes)[:400])
+            self.cfg = cfg
+            self._process_approvals(now)
+            if time.monotonic() - self._last_strategy_check >= STRATEGY_CHECK_S:
+                self._last_strategy_check = time.monotonic()
+                if not self._config_flagged and self._strategy_snapshot() != self.strategy_snapshot:
+                    self._config_flagged = True
+                    self.recorder.on_risk_event('config_changed', 'strategy configuration changed — restart the agent to apply it', now)
+                    self.say('risk', 'Strategy configuration changed on the Strategies page. This process still runs the old '
+                             'configuration — restart the agent to apply it.', phase='alert')
+            self.narrator.flush()
+        except AgentStop:
+            raise
+        except Exception:
+            log.exception('control poll failed')
 
+    def _process_approvals(self, now: datetime) -> None:
+        if not self.engine.cfg.confirm_entries:
+            return
+        expired = self.engine.expire_cards(now)
+        approved = TradeCard.objects.filter(account=self.account, status='approved').exclude(approved_by='')
+        for row in approved:
+            card = self.engine.cards.get(row.entry_order_id)
+            if card is None or card.status != 'awaiting_approval':
+                continue
+            self.say('order', f'Operator {row.approved_by} approved the {card.symbol} entry.', symbol=card.symbol,
+                     strategy_key=card.strategy_key, phase='submit', card_id=card.id)
+            card.status = 'approved'
+            self.engine.submit_card(card.id, now)
+        rejected = TradeCard.objects.filter(account=self.account, status='rejected', error='rejected by operator')
+        for row in rejected:
+            card = self.engine.cards.get(row.entry_order_id)
+            if card is not None and card.status == 'awaiting_approval':
+                card.status, card.error = 'rejected', 'rejected by operator'
+                self.engine.card_by_symbol.pop(card.symbol, None)
+                self.say('order', f'Operator rejected the {card.symbol} entry.', symbol=card.symbol, phase='submit', card_id=card.id)
+        if expired or approved or rejected:
+            persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
+
+    # --- broker reconciliation (paper/live) -----------------------------------
+    def reconcile(self, now: datetime, announce: bool = False) -> bool:
+        if self.mode not in (Mode.PAPER, Mode.LIVE):
+            return True
+        try:
+            info = self.broker.sync()
+        except Exception as exc:
+            self.account.reconcile_ok = False
+            self.account.reconcile_note = f'sync failed: {exc!r}'[:300]
+            self.account.save(update_fields=['reconcile_ok', 'reconcile_note'])
+            self.risk.blocks['reconcile'] = 'broker reconciliation failed — no new entries until it succeeds'
+            self.recorder.on_risk_event('reconcile', f'broker sync failed: {exc!r}'[:300], now)
+            self.say('error', f'Could not reconcile with Alpaca: {exc!r} — entries blocked until it works.'[:400], phase='alert')
+            return False
+        for symbol in info.get('adopted', []):
+            self.recorder.on_risk_event('external_position', f'{symbol}: position found at the broker but not on our books — adopted as external', now)
+            self.say('risk', f'{symbol} is open at the broker but not on my books — adopted as external, I will not touch it.',
+                     symbol=symbol, phase='alert')
+        diverged = info.get('diverged', [])
+        if diverged:
+            note = '; '.join(f'{s}: ours {a:g} vs broker {b:g}' for s, a, b in diverged)
+            self.risk.blocks['reconcile'] = 'books diverged from the broker — no new entries until reconciled'
+            self.recorder.on_risk_event('reconcile', f'books diverged: {note}'[:300], now, {'diverged': diverged})
+            self.say('risk', f'RECONCILIATION: my books disagreed with Alpaca ({note}). I adopted the broker\'s quantities and '
+                     'paused new entries.', phase='alert')
+        else:
+            self.risk.blocks.pop('reconcile', None)
+        self.account.last_reconcile_at = now
+        self.account.reconcile_ok = not diverged
+        self.account.reconcile_note = ('diverged: ' + note)[:300] if diverged else \
+            f'{len(self.broker.positions)} positions, {info.get("open_orders", 0)} open orders, {info.get("fills", 0)} new fills'
+        self.account.save(update_fields=['last_reconcile_at', 'reconcile_ok', 'reconcile_note'])
+        self.engine._emit_broker_events()
+        if announce or info.get('fills') or info.get('closed'):
+            self.say('system', f'Reconciled with Alpaca: equity {info.get("equity", 0):,.2f}, cash {info.get("cash", 0):,.2f}, '
+                     f'{len(self.broker.positions)} position(s), {info.get("open_orders", 0)} open order(s), '
+                     f'{info.get("fills", 0)} new fill(s).', phase='manage')
+        return not diverged
+
+    # --- live loop ---------------------------------------------------------------
     def strategies_for(self, symbol: str) -> list:
         return [s for s in self.strategies if symbol in self.strategy_symbols[s.key]]
 
     def run_live(self) -> None:
-        provider = get_provider(self.provider_name, live_feed=True)
-        self.exclude_sources = [] if provider.name == 'synthetic' else ['synthetic']
+        provider = self.provider
         grace = 5 if provider.name == 'alpaca' else 20
         stock_syms = [s for s, ac in self.asset_classes.items() if ac != 'crypto']
         crypto_syms = [s for s, ac in self.asset_classes.items() if ac == 'crypto']
-        step = tf_delta(self.timeframe)
+        step = self.step
+        tfm = tf_minutes(self.timeframe)
+        cadence = f'{tfm} minutes' if tfm < 60 else ('hour' if tfm == 60 else f'{tfm // 60} hours')
         log.info('live loop: provider=%s timeframe=%s stocks=%d crypto=%d', provider.name, self.timeframe,
                  len(stock_syms), len(crypto_syms))
         feed_note = {'alpaca': 'Alpaca (IEX real-time)', 'yahoo': 'Yahoo (free, ~20 s late, rate-limited)',
                      'synthetic': 'SYNTHETIC random walk'}.get(provider.name, provider.name)
         self.say('system', f'Quotes from {feed_note}. ' + (
-            'Crypto trades around the clock; I check every 5 minutes, a few seconds after each bar closes.'
+            f'Crypto trades around the clock; I evaluate every {cadence} ({self.timeframe} bars), {grace} s after each bar closes.'
             if self.market == Market.CRYPTO else
-            'US stocks trade 09:30–16:00 ET Mon–Fri (early closes 13:00 ET); I sleep outside the session.'))
+            f'US stocks trade 09:30–16:00 ET Mon–Fri (early closes 13:00 ET); I evaluate every {cadence} during the session and sleep outside it.'))
         self.narrator.flush()
         closed_note_at = None
         announced_bar = None
         while True:
             now = timezone.now()
-            self.refresh_flags(now)
+            self.poll_controls(now)
             stocks_open = bool(stock_syms) and cal.is_open(now)
             if not stocks_open and self.eod_done != cal.session_date(now) and cal.session_for(cal.session_date(now)) \
                     and now > cal.session_for(cal.session_date(now)).close_utc and self.last_tick is not None:
@@ -246,20 +392,27 @@ class Agent:
                 nxt = cal.next_open(now)
                 if closed_note_at is None or now - closed_note_at > timedelta(hours=1):
                     self.say('system', f'Market closed — next open {nxt.astimezone(cal.ET):%a %b %-d %H:%M} ET '
-                             f'({(nxt - now).total_seconds() / 3600:.1f} h). Sleeping; the crypto agent is the one that never sleeps.')
+                             f'({(nxt - now).total_seconds() / 3600:.1f} h). Sleeping until then; controls are still polled every 2 s.')
                     closed_note_at = now
-                self.heartbeat(f'market closed — next open {nxt.astimezone(cal.ET):%a %H:%M} ET')
+                if self.run_row.expected_interval_s != 120:
+                    self.run_row.expected_interval_s = 120
+                    self.run_row.save(update_fields=['expected_interval_s'])
+                self.heartbeat(f'market closed — next open {nxt.astimezone(cal.ET):%a %H:%M} ET', state='sleeping', next_action_at=nxt)
                 self._sleep(min(60.0, max(1.0, (nxt - now).total_seconds())))
                 if self.once:
                     return
                 continue
             closed_note_at = None
+            expected = int(step.total_seconds()) + 60
+            if self.run_row.expected_interval_s != expected:
+                self.run_row.expected_interval_s = expected
+                self.run_row.save(update_fields=['expected_interval_s'])
             wake = floor_to_bar(now, self.timeframe) + step + timedelta(seconds=grace)
             if announced_bar != wake:
-                self.say('system', f'Waiting for the {(wake - step - timedelta(seconds=grace)).astimezone(cal.ET):%H:%M} ET bar to close '
-                         f'(I read it at {wake.astimezone(cal.ET):%H:%M:%S}).')
+                self.say('system', f'Waiting for the {(wake - step - timedelta(seconds=grace)).astimezone(cal.ET):%H:%M} ET bar to close; '
+                         f'next evaluation {wake.astimezone(cal.ET):%H:%M:%S} ET.')
                 announced_bar = wake
-            self.heartbeat(f'waiting for the {wake.astimezone(cal.ET):%H:%M:%S} ET bar')
+            self.heartbeat(f'waiting for the {wake.astimezone(cal.ET):%H:%M:%S} ET bar', state='waiting', next_action_at=wake)
             self._sleep((wake - now).total_seconds())
             now = timezone.now()
             try:
@@ -269,20 +422,23 @@ class Agent:
             except Exception as exc:
                 log.exception('tick failed')
                 self.recorder.on_risk_event('error', f'tick failed: {exc!r}'[:300], now)
-                self.say('error', f'Tick failed: {exc!r} — retrying next bar.'[:400])
-                self.heartbeat(f'error: {exc!r}'[:300])
+                self.say('error', f'Tick failed: {exc!r} — retrying next bar.'[:400], phase='alert')
+                self.heartbeat(f'error: {exc!r}'[:300], state='waiting')
                 self._sleep(10)
             if self.once:
                 return
 
     def tick(self, now: datetime, provider, symbols: list, grace: int) -> None:
-        step = tf_delta(self.timeframe)
+        step = self.step
+        self.heartbeat('evaluating', state='ticking')
         missed = self.last_tick is not None and (now - self.last_tick) > 2 * step
         if missed:
             self.recorder.on_risk_event('missed_ticks', f'no tick for {(now - self.last_tick).total_seconds() / 60:.0f} min — '
                                         'catch-up: stops evaluated, no new entries from stale bars', now)
             self.say('risk', f'I missed {(now - self.last_tick).total_seconds() / 60:.0f} minutes (laptop asleep?). Catching up: '
-                     'stops and targets are checked on the missed bars, but no new entries from stale data.')
+                     'stops and targets are checked on the missed bars, but no new entries from stale data.', phase='alert')
+        if self.mode in (Mode.PAPER, Mode.LIVE):
+            self.reconcile(now)
         by_class: dict[str, list] = {}
         for s in symbols:
             by_class.setdefault(self.asset_classes[s], []).append(s)
@@ -295,7 +451,7 @@ class Agent:
             except Exception as exc:
                 log.warning('provider %s failed for %s: %s', provider.name, ac, exc)
                 self.recorder.on_risk_event('error', f'data fetch failed ({provider.name}, {ac}): {exc!r}'[:300], now)
-                self.say('error', f'Could not fetch {ac} bars from {provider.name}: {exc!r}'[:400])
+                self.say('error', f'Could not fetch {ac} bars from {provider.name}: {exc!r}'[:400], phase='alert')
                 continue
             source = getattr(provider, 'source_label', lambda a: provider.name)(ac)
             fetched = []
@@ -306,8 +462,11 @@ class Agent:
                     added = upsert_bars(self.instruments[s], self.timeframe, df, source)
                     if added:
                         fetched.append(f'{s} {float(df["close"].iloc[-1]):,.2f}')
+                        self.last_bar_ts = max(self.last_bar_ts or df.index[-1].to_pydatetime(), df.index[-1].to_pydatetime())
+            age = f'{(now - self.last_bar_ts - step).total_seconds():.0f} s after the bar closed' if self.last_bar_ts else ''
             self.say('system', f'{now.astimezone(cal.ET):%H:%M:%S} — {len(fetched)} new {ac} bar(s) from {provider.name}'
-                     + (': ' + ', '.join(fetched) if fetched else ' (nothing new yet — the feed lags a little)'))
+                     + (f' ({age})' if age and fetched else '')
+                     + (': ' + ', '.join(fetched) if fetched else ' (nothing new yet — the feed lags a little)'), phase='observe')
         processed = 0
         for s in symbols:
             strategies = self.strategies_for(s)
@@ -318,7 +477,6 @@ class Agent:
                 continue
             last = self.last_processed.get(s)
             if last is None:
-                # First sight of this symbol: act on the newest bar only.
                 new_positions = [len(window) - 1]
             else:
                 new_positions = [i for i, ts in enumerate(window.index) if ts.to_pydatetime() > last]
@@ -327,7 +485,8 @@ class Agent:
             ac = self.asset_classes[s]
             need = max((st.warmup_bars for st in strategies), default=0)
             if strategies and len(window) < need:
-                self.say('bar', f'{s}: {len(window)}/{need} real bars stored — indicators still warming up, no decisions yet.', symbol=s)
+                self.say('bar', f'{s}: {len(window)}/{need} real bars stored — indicators still warming up, no decisions yet.', symbol=s,
+                         phase='observe')
             prepared = {st.key: st.prepare(window, ac, self.timeframe) for st in strategies}
             rows = {k: list(df.itertuples(index=True)) for k, df in prepared.items()}
             base_rows = list(window.itertuples(index=True))
@@ -336,25 +495,29 @@ class Agent:
             for i in new_positions:
                 ts = window.index[i].to_pydatetime()
                 if i in stale:
-                    was = self.risk.trading_enabled
-                    self.risk.trading_enabled = False
+                    self.risk.blocks['catchup'] = 'catching up on missed bars — no entries from stale data'
                     try:
                         self.engine.process_bar(s, ts, base_rows[i], {k: r[i] for k, r in rows.items()}, prepared, i, mtc[i])
                     finally:
-                        self.risk.trading_enabled = was
+                        self.risk.blocks.pop('catchup', None)
                 else:
                     self.engine.process_bar(s, ts, base_rows[i], {k: r[i] for k, r in rows.items()}, prepared, i, mtc[i])
                 self.last_processed[s] = ts
                 processed += 1
-        persist_broker(self.account, self.broker, self.instruments)
+        if self.mode in (Mode.PAPER, Mode.LIVE):
+            self.reconcile(now)
+        persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
         if self.last_snapshot is None or now - self.last_snapshot >= SNAPSHOT_EVERY:
             self.engine.record_equity(now)
             self.last_snapshot = now
         a = self.broker.account()
         n_pos = len([p for p in self.broker.positions.values() if p.qty])
+        risk_open = sum(abs(p.qty) * abs(p.avg_price - p.stop) for p in self.broker.positions.values() if p.qty and p.stop)
+        nxt = floor_to_bar(now, self.timeframe) + step + timedelta(seconds=grace)
         self.say('system', f'Equity ${a.equity:,.2f} (day {self.risk.day_pnl(a.equity):+,.2f}), cash ${a.cash:,.2f}, '
-                 f'{n_pos} open position(s). Next check in {tf_delta(self.timeframe).seconds // 60} min.')
-        self.heartbeat(f'tick ok — {processed} bars, equity {a.equity:,.2f}, {n_pos} positions')
+                 f'{n_pos} open position(s), ${risk_open:,.2f} at risk to stops. Next evaluation {nxt.astimezone(cal.ET):%H:%M:%S} ET.',
+                 phase='manage')
+        self.heartbeat(f'tick ok — {processed} bars, equity {a.equity:,.2f}, {n_pos} positions', state='waiting', next_action_at=nxt)
         self.last_tick = now
         if not self.quiet:
             log.info('tick %s: %d bars processed, equity %.2f', now.astimezone(cal.ET).strftime('%H:%M:%S'), processed, a.equity)
@@ -366,15 +529,17 @@ class Agent:
         n = self.engine.flatten_all(now, 'eod')
         if n:
             self.recorder.on_risk_event('flatten', f'end of day: flattened {n} leftover positions', now)
-        persist_broker(self.account, self.broker, self.instruments)
+        if self.mode in (Mode.PAPER, Mode.LIVE):
+            self.reconcile(now)
+        persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
         self.engine.record_equity(now)
         try:
             entry = write_eod_journal(self.account, d)
             log.info('journal written: %s', entry.title)
-            self.say('journal', f'END OF DAY {d}: {entry.title}. ' + entry.body.split('\n\n')[0][:300])
+            self.say('journal', f'END OF DAY {d}: {entry.title}. ' + entry.body.split('\n\n')[0][:300], phase='system')
         except Exception:
             log.exception('journal failed')
-            self.say('error', 'Journal failed — see the agent log.')
+            self.say('error', 'Journal failed — see the agent log.', phase='alert')
         FeedEvent.prune()
         if settings.COACH_ENABLED:
             try:
@@ -382,15 +547,14 @@ class Agent:
                 coach_review(self.account, d)
             except Exception:
                 log.exception('coach failed')
-        self.heartbeat(f'end of day {d} done')
+        self.heartbeat(f'end of day {d} done', state='sleeping')
 
     # --- replay -------------------------------------------------------------
     def run_replay(self) -> None:
         from .journal import write_eod_journal
         d = self.replay_date
-        session = cal.session_for(d)
         a, b = date_bounds(d, d)
-        warm_start = a - timedelta(days=5)
+        warm_start = a - timedelta(days=5 if tf_minutes(self.timeframe) < 60 else 30)
         frames = {}
         for s, inst in self.instruments.items():
             df = load_frame(inst, self.timeframe, warm_start, b)
@@ -410,28 +574,31 @@ class Agent:
                 if ts >= a:
                     events.append((ts.to_pydatetime(), s, i))
         events.sort(key=lambda e: (e[0], e[1]))
-        pause = tf_delta(self.timeframe).total_seconds() / self.speed
+        pause = self.step.total_seconds() / self.speed
         log.info('replay %s: %d bars across %d symbols at %.0fx (%.1fs per bar)', d, len(events), len(frames), self.speed, pause)
         self.say('system', f'REPLAY of {d:%A %b %-d}: {len(events)} bars across {len(frames)} symbols at {self.speed:.0f}× '
                  f'({pause:.1f} s per bar). Same engine as live; fills at the next bar\'s open.')
-        self.heartbeat(f'replaying {d} at {self.speed:.0f}x')
+        self.run_row.expected_interval_s = int(min(pause, 10.0)) + 60
+        self.run_row.save(update_fields=['expected_interval_s'])
+        self.heartbeat(f'replaying {d} at {self.speed:.0f}x', state='ticking')
         last_ts = None
         for ts, s, i in events:
             if last_ts is not None and ts != last_ts:
-                persist_broker(self.account, self.broker, self.instruments)
+                persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
                 self.engine.record_equity(last_ts)
                 acct = self.broker.account()
-                self.heartbeat(f'replay {ts.astimezone(cal.ET):%H:%M} ET — equity {acct.equity:,.2f}')
+                self.last_bar_ts = last_ts
+                self.heartbeat(f'replay {ts.astimezone(cal.ET):%H:%M} ET — equity {acct.equity:,.2f}', state='ticking')
                 self._sleep(min(pause, 10.0))
             self.engine.process_bar(s, ts, base_rows[s][i], {k: r[i] for k, r in rows[s].items()}, prepared[s], i, mtc[s][i])
             last_ts = ts
         if last_ts is not None:
             self.engine.flatten_all(last_ts, 'end')
-            persist_broker(self.account, self.broker, self.instruments)
+            persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
             self.engine.record_equity(last_ts)
         entry = write_eod_journal(self.account, d)
-        self.say('journal', f'REPLAY DONE — {entry.title}. ' + entry.body.split('\n\n')[0][:300])
-        self.heartbeat(f'replay {d} finished')
+        self.say('journal', f'REPLAY DONE — {entry.title}. ' + entry.body.split('\n\n')[0][:300], phase='system')
+        self.heartbeat(f'replay {d} finished', state='stopping')
         log.info('replay finished: equity %.2f, %d trades', self.broker.account().equity, len(self.broker.trades))
 
     # --- teardown -----------------------------------------------------------
@@ -447,19 +614,27 @@ class Agent:
                     self.say('system', f'Stopped by request — {n} position(s) closed. Bye.')
                 elif self.stop_requested:
                     self.broker.cancel_open_orders()
-                    self.recorder.on_risk_event('flatten', 'agent stopped — live positions LEFT OPEN (LIVE_FLATTEN_ON_EXIT=0)', now)
-                    self.say('risk', 'Stopped by request — LIVE positions left open (LIVE_FLATTEN_ON_EXIT=0).')
+                    self.recorder.on_risk_event('flatten', 'agent stopped — LIVE positions LEFT OPEN (LIVE_FLATTEN_ON_EXIT=0); '
+                                                'their broker-side stops still stand', now)
+                    self.say('risk', 'Stopped by request — LIVE positions left OPEN on purpose (LIVE_FLATTEN_ON_EXIT=0). '
+                             'Their broker-side stops still stand; the watchdog will not touch them while they are protected.', phase='alert')
                 else:
                     self.say('system', 'Agent exiting.')
-                persist_broker(self.account, self.broker, self.instruments)
+                if self.mode in (Mode.PAPER, Mode.LIVE):
+                    try:
+                        self.reconcile(now)
+                    except Exception:
+                        log.exception('final reconcile failed')
+                persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
         except Exception:
             log.exception('shutdown flatten failed')
         if hasattr(self, 'narrator'):
             self.narrator.flush()
         if self.run_row is not None:
             self.run_row.status = 'stopped'
+            self.run_row.state = 'stopped'
             self.run_row.stopped_at = now
-            self.run_row.save(update_fields=['status', 'stopped_at'])
+            self.run_row.save(update_fields=['status', 'state', 'stopped_at'])
         if self._lock_fh is not None:
             try:
                 fcntl.flock(self._lock_fh, fcntl.LOCK_UN)

@@ -61,6 +61,21 @@ class Param:
 
 
 @dataclass
+class Rule:
+    """One evaluated condition, in plain English, with its numbers."""
+    name: str
+    ok: bool
+    text: str
+    value: float | None = None
+    threshold: float | None = None
+
+    def as_dict(self, strategy: str = '') -> dict:
+        return {'strategy': strategy, 'rule': self.name, 'ok': bool(self.ok), 'text': self.text,
+                'value': None if self.value is None else round(float(self.value), 4),
+                'threshold': None if self.threshold is None else round(float(self.threshold), 4)}
+
+
+@dataclass
 class Signal:
     action: str  # buy (open long) | sell (open short) | close (exit)
     symbol: str

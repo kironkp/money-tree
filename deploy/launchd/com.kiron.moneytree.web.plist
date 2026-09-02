@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Dev server on :8003 plus the Tailscale TLS proxy on :8446, kept alive.
+       Optional — `pipenv run python manage.py runserver 0.0.0.0:8003` in a
+       terminal does the same thing. -->
+  <key>Label</key><string>com.kiron.moneytree.web</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string><string>-c</string>
+    <string>python3 /Users/kironkp/.local/share/moneytree-tls/proxy.py &amp; exec /Users/kironkp/.local/bin/pipenv run python manage.py runserver 0.0.0.0:8003</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/launchd-web.log</string>
+  <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/launchd-web.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/kironkp/.local/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>

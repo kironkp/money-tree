@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Signals · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Signals</h1>
+  <div class="tabs"><a href="?account={{ account.mode }}&days={{ f.days }}" class="{% if not which %}active{% endif %}">all</a>
+    <a href="?account={{ account.mode }}&which=acted&days={{ f.days }}" class="{% if which == 'acted' %}active{% endif %}">acted</a>
+    <a href="?account={{ account.mode }}&which=blocked&days={{ f.days }}" class="{% if which == 'blocked' %}active{% endif %}">blocked</a></div></div>
+{% include 'trading/_tabs.html' %}
+{% include 'trading/_filters.html' %}
+{% if blocked_counts %}
+<p class="pill-row small">{% for r, n in blocked_counts %}<span class="badge">{{ r }} ×{{ n }}</span>{% endfor %}</p>
+{% endif %}
+<div class="card">
+  {% if page.object_list %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Bar</th><th>Strategy</th><th>Symbol</th><th>Action</th><th class="num">Price</th><th class="num">Stop</th><th class="num">Target</th><th>Reason</th><th>Result</th></tr></thead>
+    <tbody>
+    {% for s in page.object_list %}
+      <tr>
+        <td class="small">{{ s.ts|et:'%b %d %H:%M' }}</td><td>{{ s.strategy_key }}</td><td><strong>{{ s.instrument.symbol }}</strong></td><td>{{ s.action }}</td>
+        <td class="num">{{ s.price|num:2 }}</td><td class="num">{{ s.stop_price|num:2 }}</td><td class="num">{{ s.target_price|num:2 }}</td>
+        <td class="small">{{ s.reason }}</td>
+        <td>{% if s.acted %}<span class="badge ok">order</span> {% if s.order %}<small>{{ s.order.status }}</small>{% endif %}{% else %}<span class="badge bad">blocked</span> <small>{{ s.blocked_reason }}</small>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% include 'partials/pagination.html' %}
+  {% else %}<p class="empty">no signals in this window</p>{% endif %}
+</div>
+{% endblock %}

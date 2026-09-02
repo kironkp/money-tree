@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Compare · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Compare backtests</h1></div>
+<div class="card"><div id="cmp" class="chart tall"></div></div>
+<div class="card" style="margin-top: var(--s-4)">
+  <table><thead><tr><th>metric</th>{% for r in runs %}<th class="num"><a href="{% url 'backtest-detail' r.pk %}">#{{ r.pk }}</a><br><small>{{ r.strategy_key }} {{ r.start }}→{{ r.end }}</small></th>{% endfor %}</tr></thead>
+  <tbody>{% for k, vals in rows %}<tr><td>{{ k }}</td>{% for v in vals %}<td class="num">{{ v|floatformat:2 }}</td>{% endfor %}</tr>{% endfor %}</tbody></table>
+  <p class="small muted">Params: {% for r in runs %}#{{ r.pk }} {{ r.params|json }} {% endfor %}</p>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  var curves = {{ curves|safe }};
+  MTCharts.lineChart(document.getElementById('cmp'), curves.map(function (c) { return { data: c.data, label: c.label }; }));
+</script>
+{% endblock %}

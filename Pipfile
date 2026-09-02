@@ -1,0 +1,27 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+django = "~=6.1.0"
+django-environ = "*"
+python-dotenv = "*"
+whitenoise = "*"
+gunicorn = "*"
+dj-database-url = "*"
+psycopg2-binary = "*"
+requests = "*"
+numpy = "*"
+pandas = "*"
+# Broker + market data (paper and live share the same client).
+alpaca-py = "*"
+# Keyless fallback for history: 7 days of 1-min, 60 days of 5-min. Flaky.
+yfinance = "*"
+# The coach (end-of-day review). Dormant without ANTHROPIC_API_KEY.
+anthropic = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.12"

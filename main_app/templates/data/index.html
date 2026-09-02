@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Data · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Data</h1><div class="actions"><span class="small">{{ total_bars }} bars stored · market {% if market_open %}<span class="up">open</span>{% else %}closed, opens {{ next_open|et:'%a %b %d %H:%M' }} ET{% endif %}</span></div></div>
+<div class="grid cols-2">
+  <div class="card span-2">
+    <h3>Watchlist &amp; coverage ({{ cfg.timeframe }})</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Symbol</th><th>Name</th><th>Class</th><th>Watch</th><th>First bar</th><th>Last bar</th><th class="num">Bars</th><th>Source</th><th></th></tr></thead>
+      <tbody>{% for r in rows %}<tr>
+        <td><a href="{% url 'instrument-chart' r.inst.slug %}"><strong>{{ r.inst.symbol }}</strong></a></td><td>{{ r.inst.name }}</td><td>{{ r.inst.asset_class }}</td>
+        <td>{% if r.inst.in_watchlist %}<span class="badge ok">yes</span>{% else %}<span class="badge">no</span>{% endif %}</td>
+        <td class="small">{{ r.cov.first|et:'%Y-%m-%d %H:%M' }}</td><td class="small">{{ r.cov.last|et:'%Y-%m-%d %H:%M' }}</td><td class="num">{{ r.cov.count }}</td><td class="small">{{ r.cov.sources|joinlist }}</td>
+        <td class="pill-row"><form method="post" action="{% url 'instrument-toggle' r.inst.slug %}" class="inline">{% csrf_token %}<button class="btn small">{% if r.inst.in_watchlist %}unwatch{% else %}watch{% endif %}</button></form>
+          <form method="post" action="{% url 'instrument-delete' r.inst.slug %}" class="inline" data-confirm="Delete {{ r.inst.symbol }} and its bars?">{% csrf_token %}<button class="btn small">✕</button></form></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <h3>Sync history</h3>
+    <p class="small muted">Provider: {% if providers.alpaca %}<span class="up">Alpaca</span> (years of split-adjusted SIP bars){% else %}<span class="warn">Yahoo</span> (no Alpaca keys — 60 days of 5-min, 7 days of 1-min, rate-limited){% endif %}. Synthetic = seeded random walk for a keyless demo.</p>
+    <form method="post" action="{% url 'data-sync' %}">
+      {% csrf_token %}
+      <div class="form-grid">
+        <div class="field"><label>Days back</label><input type="number" name="days" value="60" min="1" max="1500"></div>
+        <div class="field"><label>Timeframe</label><select name="timeframe">{% for t in timeframes %}<option value="{{ t }}" {% if t == cfg.timeframe %}selected{% endif %}>{{ t }}</option>{% endfor %}</select></div>
+        <div class="field"><label>Provider</label><select name="provider"><option value="">default ({{ providers.default }})</option>{% if providers.alpaca %}<option value="alpaca">alpaca</option>{% endif %}<option value="yahoo">yahoo</option><option value="synthetic">synthetic</option></select></div>
+        <div class="field"><label>Symbols (optional)</label><input type="text" name="symbols" placeholder="QQQ,SPY"></div>
+      </div>
+      <label class="small"><input type="checkbox" name="resync"> wipe and refetch (after a split, or to switch provider)</label>
+      <p><button class="btn primary">Sync</button></p>
+    </form>
+    <div hx-get="{% url 'sync-log' %}" hx-trigger="every 5s" hx-swap="innerHTML"><pre class="log">{{ log|default:'(no sync log yet)' }}</pre></div>
+  </div>
+  <div class="card">
+    <h3>Add instrument</h3>
+    <form method="post" action="{% url 'instrument-add' %}">
+      {% csrf_token %}
+      <div class="form-grid">
+        <div class="field"><label>Symbol</label>{{ form.symbol }}</div>
+        <div class="field"><label>Name</label>{{ form.name }}</div>
+        <div class="field"><label>Class</label>{{ form.asset_class }}</div>
+        <div class="field"><label>Qty increment</label>{{ form.qty_increment }}</div>
+      </div>
+      <button class="btn">Add</button> <span class="small muted">crypto symbols look like BTC/USD</span>
+    </form>
+    <h3 style="margin-top: var(--s-4)">Calendar</h3>
+    <p class="small">Now {{ now|et:'%a %b %d %H:%M:%S' }} ET. {% if upcoming %}Early closes ahead: {% for s in upcoming %}{{ s.date }} (13:00){% if not forloop.last %}, {% endif %}{% endfor %}.{% endif %} Session offsets in Settings (no entries {{ cfg.no_entries_before_close_min }} min before close, flat {{ cfg.flat_before_close_min }} min before).</p>
+  </div>
+</div>
+{% endblock %}

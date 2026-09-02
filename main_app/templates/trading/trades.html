@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Trades · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Trades</h1>
+  <div class="actions"><a class="btn small" href="{% url 'trades-csv' %}?account={{ account.mode }}&strategy={{ f.strategy }}&symbol={{ f.symbol }}&days={{ f.days }}">Export CSV</a></div></div>
+{% include 'trading/_tabs.html' %}
+{% include 'trading/_filters.html' %}
+<div class="tiles">
+  <div class="tile"><div class="label">Closed trades</div><div class="value">{{ count }}</div></div>
+  <div class="tile"><div class="label">Net P&amp;L</div><div class="value {{ total|sign_class }}">{{ total|signed_money }}</div></div>
+  <div class="tile"><div class="label">Win rate</div><div class="value">{{ win_rate|floatformat:0 }}%</div></div>
+</div>
+<div class="card">
+  {% if page.object_list %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Exit</th><th>Symbol</th><th>Strategy</th><th>Side</th><th class="num">Qty</th><th class="num">Entry</th><th class="num">Exit</th><th class="num">P&amp;L</th><th class="num">%</th><th class="num">Fees</th><th class="num">Bars</th><th>Reason</th></tr></thead>
+    <tbody>
+    {% for t in page.object_list %}
+      <tr>
+        <td class="small">{{ t.exit_ts|et:'%b %d %H:%M' }}</td><td><strong>{{ t.instrument.symbol }}</strong></td><td>{{ t.strategy_key }}</td><td>{{ t.side }}</td>
+        <td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.entry_price|num:2 }}</td><td class="num">{{ t.exit_price|num:2 }}</td>
+        <td class="num {{ t.pnl|sign_class }}">{{ t.pnl|signed_money }}</td><td class="num {{ t.pnl_pct|sign_class }}">{{ t.pnl_pct|pct }}</td>
+        <td class="num small">{{ t.fees|num:2 }}</td><td class="num">{{ t.bars_held }}</td><td><span class="badge">{{ t.exit_reason }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% include 'partials/pagination.html' %}
+  {% else %}<p class="empty">no trades in this window</p>{% endif %}
+</div>
+{% endblock %}

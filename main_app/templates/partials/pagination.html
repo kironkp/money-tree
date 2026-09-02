@@ -1,0 +1,8 @@
+{% load mt_tags %}
+{% if page.paginator.num_pages > 1 %}
+<p class="small">
+  {% if page.has_previous %}<a href="{% qs_replace request 'page' page.previous_page_number %}">← newer</a>{% endif %}
+  page {{ page.number }} / {{ page.paginator.num_pages }}
+  {% if page.has_next %}<a href="{% qs_replace request 'page' page.next_page_number %}">older →</a>{% endif %}
+</p>
+{% endif %}

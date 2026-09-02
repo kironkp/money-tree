@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Settings · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Settings</h1><div class="actions"><span class="small muted">v{{ VERSION }}</span></div></div>
+<div class="grid cols-2">
+  <div class="card">
+    <h3>Risk &amp; fill model</h3>
+    <form method="post">
+      {% csrf_token %}
+      <div class="form-grid">
+      {% for field in form %}
+        <div class="field"><label for="{{ field.id_for_label }}">{{ field.label }}</label>{{ field }}{{ field.errors }}</div>
+      {% endfor %}
+      </div>
+      <button class="btn primary">Save</button>
+      <p class="small muted">Percentages are of account equity. Session offsets are minutes before the close, so early-close days work. Crypto has no close: positions age out after max hold minutes.</p>
+    </form>
+  </div>
+  <div class="card">
+    <h3>Mode</h3>
+    <p>Current: <span class="badge {{ cfg.mode }}">{{ cfg.mode }}</span>{% if cfg.mode == 'live' %} armed {{ cfg.live_armed_at|et }}{% endif %}{% if run %} · agent running ({{ run.mode }}){% endif %}</p>
+    <div class="pill-row">
+      <form method="post" action="{% url 'set-mode' %}" class="inline">{% csrf_token %}<input type="hidden" name="mode" value="sim"><button class="btn small" {% if cfg.mode == 'sim' %}disabled{% endif %}>sim (fake currency)</button></form>
+      <form method="post" action="{% url 'set-mode' %}" class="inline">{% csrf_token %}<input type="hidden" name="mode" value="paper"><button class="btn small" {% if not keys.alpaca_paper or cfg.mode == 'paper' %}disabled{% endif %}>paper (Alpaca)</button></form>
+    </div>
+    <details style="margin-top: var(--s-3)"><summary>Arm LIVE trading (v2, real money)</summary>
+      <form method="post" action="{% url 'set-mode' %}" data-confirm="This arms REAL MONEY trading. Continue?">{% csrf_token %}<input type="hidden" name="mode" value="live">
+        <p class="small">Needs live keys in .env, <code>LIVE_TRADING_ARMED=1</code>, a server restart, and the phrase below. Start small; the first sessions run with halved limits in spirit — set them yourself above.</p>
+        <div class="field"><label>Type ARM LIVE</label><input type="text" name="confirm" autocomplete="off"></div>
+        <button class="btn danger small" {% if not keys.live_armed_env or not keys.alpaca_live %}disabled{% endif %}>Arm live mode</button>
+        <span class="small muted">env armed: {{ keys.live_armed_env|yesno }} · live keys: {{ keys.alpaca_live|yesno }}</span>
+      </form>
+    </details>
+    <h3 style="margin-top: var(--s-4)">Keys</h3>
+    <dl class="kv">
+      <dt>Alpaca paper</dt><dd>{% if keys.alpaca_paper %}<span class="up">configured</span>{% else %}<span class="warn">missing — free at app.alpaca.markets</span>{% endif %}</dd>
+      <dt>Alpaca live</dt><dd>{% if keys.alpaca_live %}<span class="up">configured</span>{% else %}not set{% endif %}</dd>
+      <dt>Coach</dt><dd>{% if keys.coach %}<span class="up">{{ keys.coach_model }}</span>{% else %}dormant (ANTHROPIC_API_KEY)</dd>{% endif %}
+    </dl>
+    <h3 style="margin-top: var(--s-4)">Accounts</h3>
+    <table><thead><tr><th>Account</th><th class="num">Seed</th><th class="num">Equity</th><th class="num">Cash</th><th></th></tr></thead><tbody>
+    {% for a in accounts %}<tr><td>{{ a.name }}</td><td class="num">{{ a.starting_cash|money }}</td><td class="num {{ a.total_pnl|sign_class }}">{{ a.equity|money }}</td><td class="num">{{ a.cash|money }}</td>
+      <td>{% if a.mode != 'live' %}<form method="post" action="{% url 'reset-account' %}" class="inline" data-confirm="Reset {{ a.name }}? Positions, orders, trades and snapshots are wiped.">{% csrf_token %}<input type="hidden" name="mode" value="{{ a.mode }}"><button class="btn small">reset</button></form>{% endif %}</td></tr>{% endfor %}
+    </tbody></table>
+    <p class="small muted">Reset uses the starting cash above. Alpaca's paper balance is reset in their dashboard — set it to the same seed so Sprout and Sapling compare.</p>
+  </div>
+</div>
+{% endblock %}

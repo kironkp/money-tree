@@ -1,0 +1,139 @@
+"""The risk manager: every entry passes through here, and every 'no' is
+recorded with its reason. Pure Python so the backtester shares it."""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+
+from .broker.sim import round_qty
+from .strategies.base import Context, Signal
+
+
+@dataclass
+class RiskConfig:
+    risk_per_trade_pct: float = 0.5
+    max_position_pct: float = 20.0
+    max_open_positions: int = 4
+    max_daily_loss_pct: float = 2.0
+    max_trades_per_day: int = 12
+    no_entries_before_close_min: int = 30
+    flat_before_close_min: int = 5
+    allow_short: bool = False
+    max_hold_minutes: int = 240
+    slippage_bps: float = 3.0
+    default_stop_pct: float = 2.0  # when a signal carries no stop
+
+    @classmethod
+    def from_model(cls, cfg) -> 'RiskConfig':
+        return cls(
+            risk_per_trade_pct=float(cfg.risk_per_trade_pct), max_position_pct=float(cfg.max_position_pct),
+            max_open_positions=int(cfg.max_open_positions), max_daily_loss_pct=float(cfg.max_daily_loss_pct),
+            max_trades_per_day=int(cfg.max_trades_per_day),
+            no_entries_before_close_min=int(cfg.no_entries_before_close_min),
+            flat_before_close_min=int(cfg.flat_before_close_min), allow_short=bool(cfg.allow_short),
+            max_hold_minutes=int(cfg.max_hold_minutes), slippage_bps=float(cfg.slippage_bps),
+        )
+
+    def as_dict(self) -> dict:
+        return dict(self.__dict__)
+
+
+@dataclass
+class Decision:
+    allowed: bool
+    qty: float = 0.0
+    reason: str = ''
+
+
+@dataclass
+class DayState:
+    date: object = None
+    start_equity: float = 0.0
+    entries: int = 0
+    halted: bool = False
+    halted_reason: str = ''
+
+
+class RiskManager:
+    def __init__(self, cfg: RiskConfig, qty_increments: dict | None = None):
+        self.cfg = cfg
+        self.qty_increments = qty_increments or {}
+        self.day = DayState()
+        self.kill_switch = False
+        self.trading_enabled = True
+
+    # --- day tracking -----------------------------------------------------
+    def new_day(self, date, equity: float) -> None:
+        self.day = DayState(date=date, start_equity=equity)
+
+    def record_entry(self) -> None:
+        self.day.entries += 1
+
+    def day_pnl(self, equity: float) -> float:
+        return equity - self.day.start_equity if self.day.start_equity else 0.0
+
+    def daily_loss_breached(self, equity: float) -> bool:
+        if not self.day.start_equity:
+            return False
+        limit = self.day.start_equity * self.cfg.max_daily_loss_pct / 100.0
+        return self.day_pnl(equity) <= -limit
+
+    def daily_loss_used_pct(self, equity: float) -> float:
+        if not self.day.start_equity or self.cfg.max_daily_loss_pct <= 0:
+            return 0.0
+        loss = -min(0.0, self.day_pnl(equity))
+        limit = self.day.start_equity * self.cfg.max_daily_loss_pct / 100.0
+        return min(100.0, loss / limit * 100.0) if limit else 0.0
+
+    def halt(self, reason: str) -> None:
+        self.day.halted = True
+        self.day.halted_reason = reason
+
+    # --- the gate ---------------------------------------------------------
+    def evaluate(self, sig: Signal, ctx: Context, account, positions: dict, asset_class: str,
+                 strategy_supports: bool = True) -> Decision:
+        c = self.cfg
+        if self.kill_switch:
+            return Decision(False, reason='kill switch is on')
+        if not self.trading_enabled:
+            return Decision(False, reason='trading disabled in settings')
+        if self.day.halted:
+            return Decision(False, reason=f'halted for the day: {self.day.halted_reason}')
+        if not strategy_supports:
+            return Decision(False, reason=f'strategy does not trade {asset_class}')
+        if sig.action == 'sell' and not c.allow_short:
+            return Decision(False, reason='shorting disabled')
+        if sig.action == 'sell' and asset_class == 'crypto':
+            return Decision(False, reason='crypto cannot be shorted')
+        if sig.symbol in positions and positions[sig.symbol].qty != 0:
+            return Decision(False, reason='already in a position')
+        live = [p for p in positions.values() if p.qty != 0]
+        if len(live) >= c.max_open_positions:
+            return Decision(False, reason=f'max open positions ({c.max_open_positions})')
+        if self.day.entries >= c.max_trades_per_day:
+            return Decision(False, reason=f'max trades per day ({c.max_trades_per_day})')
+        if ctx.minutes_to_close is not None and ctx.minutes_to_close <= c.no_entries_before_close_min:
+            return Decision(False, reason=f'inside the last {c.no_entries_before_close_min} min of the session')
+        if self.daily_loss_breached(account.equity):
+            self.halt('daily loss limit')
+            return Decision(False, reason='daily loss limit reached')
+        price = float(sig.price)
+        if price <= 0 or math.isnan(price):
+            return Decision(False, reason='no price')
+        stop = sig.stop
+        stop_dist = abs(price - stop) if stop else price * c.default_stop_pct / 100.0
+        if stop_dist <= 0:
+            return Decision(False, reason='stop equals entry')
+        equity = account.equity
+        risk_dollars = equity * c.risk_per_trade_pct / 100.0
+        qty_risk = risk_dollars / stop_dist
+        qty_cap = equity * c.max_position_pct / 100.0 / price
+        qty_cash = account.buying_power / (price * (1 + c.slippage_bps / 1e4))
+        qty = min(qty_risk, qty_cap, qty_cash)
+        inc = float(self.qty_increments.get(sig.symbol, 0.0001 if asset_class == 'crypto' else 1.0))
+        qty = round_qty(qty, inc)
+        if qty <= 0:
+            if qty_cash < inc:
+                return Decision(False, reason='insufficient cash')
+            return Decision(False, reason='price exceeds position cap (0 shares)')
+        return Decision(True, qty=qty, reason=f'risk ${risk_dollars:.0f} / stop {stop_dist:.2f}')

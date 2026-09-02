@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Risk events · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Risk events</h1></div>
+{% include 'trading/_tabs.html' %}
+<div class="card">
+  {% if page.object_list %}
+  <table><thead><tr><th>When</th><th>Kind</th><th>Message</th></tr></thead><tbody>
+  {% for e in page.object_list %}<tr><td class="small">{{ e.ts|et:'%b %d %H:%M:%S' }}</td><td><span class="badge {% if e.kind in 'daily_loss kill_switch error drift' %}bad{% elif e.kind in 'missed_ticks external_position' %}warn{% endif %}">{{ e.kind }}</span></td><td>{{ e.message }}</td></tr>{% endfor %}
+  </tbody></table>
+  {% include 'partials/pagination.html' %}
+  {% else %}<p class="empty">quiet — no risk events in the last {{ days }} days</p>{% endif %}
+</div>
+{% endblock %}

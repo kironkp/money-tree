@@ -1,0 +1,83 @@
+{% load static %}
+{% load asset_tags %}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
+    <title>{% block title %}MoneyTree{% endblock %}</title>
+    <script>
+      (function () {
+        var theme;
+        try { theme = localStorage.getItem('theme'); } catch (e) {}
+        document.documentElement.dataset.theme = theme === 'light' ? 'light' : 'dark';
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{% static_v 'css/base.css' %}" />
+    <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
+    <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
+    {% block head %}{% endblock %}
+  </head>
+  <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+    {% if user.is_authenticated %}
+    <header class="site-header">
+      <button type="button" id="menu-toggle" class="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="mobile-menu">☰</button>
+      <a href="{% url 'dashboard' %}" class="brand"><span class="leaf">🌳</span> MoneyTree
+        <span class="badge {{ cfg.mode }}">{{ cfg.mode }}</span>
+      </a>
+      <nav class="site-nav" aria-label="Main">
+        <ul>
+          <li><a href="{% url 'dashboard' %}" {% if request.resolver_match.url_name == 'dashboard' %}class="active"{% endif %}>Dashboard</a></li>
+          <li><a href="{% url 'trades' %}" {% if request.resolver_match.url_name in 'trades positions orders signals risk-events' %}class="active"{% endif %}>Trades</a></li>
+          <li><a href="{% url 'strategy-list' %}" {% if 'strategy' in request.resolver_match.url_name %}class="active"{% endif %}>Strategies</a></li>
+          <li><a href="{% url 'backtest-list' %}" {% if 'backtest' in request.resolver_match.url_name %}class="active"{% endif %}>Backtests</a></li>
+          <li><a href="{% url 'experiment-list' %}" {% if 'experiment' in request.resolver_match.url_name %}class="active"{% endif %}>Experiments</a></li>
+          <li><a href="{% url 'replay' %}" {% if request.resolver_match.url_name == 'replay' %}class="active"{% endif %}>Replay</a></li>
+          <li><a href="{% url 'data-index' %}" {% if 'data' in request.resolver_match.url_name or 'instrument' in request.resolver_match.url_name %}class="active"{% endif %}>Data</a></li>
+          <li><a href="{% url 'journal-list' %}" {% if 'journal' in request.resolver_match.url_name %}class="active"{% endif %}>Journal</a></li>
+          <li><a href="{% url 'settings' %}" {% if request.resolver_match.url_name == 'settings' %}class="active"{% endif %}>Settings</a></li>
+        </ul>
+      </nav>
+      <div class="header-tools">
+        <span class="small" title="agent heartbeat">
+          <span class="dot {% if agent_run %}{% if agent_run.heartbeat_age_s < 400 %}on{% else %}stale{% endif %}{% endif %}"></span>{% if agent_run %}{{ agent_run.mode }} agent{% else %}agent off{% endif %}
+        </span>
+        {% if cfg.kill_switch %}<span class="badge bad">kill switch</span>{% endif %}
+        <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch theme">☀</button>
+        <form action="{% url 'logout' %}" method="post" class="inline">{% csrf_token %}<button type="submit" class="linklike">Log out</button></form>
+      </div>
+    </header>
+    <nav id="mobile-menu" class="mobile-menu" hidden aria-label="Mobile menu">
+      <ul>
+        <li><a href="{% url 'dashboard' %}">Dashboard</a></li>
+        <li><a href="{% url 'trades' %}">Trades</a></li>
+        <li><a href="{% url 'positions' %}">Positions</a></li>
+        <li><a href="{% url 'signals' %}">Signals</a></li>
+        <li><a href="{% url 'strategy-list' %}">Strategies</a></li>
+        <li><a href="{% url 'backtest-list' %}">Backtests</a></li>
+        <li><a href="{% url 'experiment-list' %}">Experiments</a></li>
+        <li><a href="{% url 'replay' %}">Replay</a></li>
+        <li><a href="{% url 'data-index' %}">Data</a></li>
+        <li><a href="{% url 'journal-list' %}">Journal</a></li>
+        <li><a href="{% url 'settings' %}">Settings</a></li>
+      </ul>
+    </nav>
+    {% endif %}
+    <main class="site-main">
+      {% if messages %}
+        <ul class="messages" role="status" aria-live="polite">
+          {% for message in messages %}<li class="message {{ message.tags }}">{{ message }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="site-main small muted">MoneyTree v{{ VERSION }} · fake money until it earns its stripes · times in ET</footer>
+    <script src="{% static_v 'js/app.js' %}"></script>
+    <script src="{% static_v 'js/charts.js' %}"></script>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

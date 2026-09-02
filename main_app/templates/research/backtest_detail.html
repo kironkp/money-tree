@@ -1,0 +1,60 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Backtest #{{ run.pk }} · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Backtest #{{ run.pk }} <small class="muted">{{ run.strategy_key }} · {{ run.start }} → {{ run.end }} · {{ run.timeframe }} · {{ run.symbols|joinlist }}</small></h1>
+  <div class="actions">
+    {% for s in strategies %}
+    <form method="post" action="{% url 'backtest-promote' run.pk %}" class="inline" data-confirm="Install these params as {{ s.name }} v{{ s.version|add:1 }}?">{% csrf_token %}
+      <label class="small" style="display:inline"><input type="checkbox" name="symbols" value="yes"> also set symbols</label>
+      <button class="btn primary small">Promote params to {{ s.name }}</button></form>
+    {% endfor %}
+    <form method="post" action="{% url 'backtest-delete' run.pk %}" class="inline" data-confirm="Delete this run?">{% csrf_token %}<button class="btn small">Delete</button></form>
+  </div>
+</div>
+{% if run.status != 'done' %}<p class="message error">{{ run.status }}: {{ run.error }}</p>{% else %}
+<div class="tiles">
+  <div class="tile"><div class="label">Net P&amp;L</div><div class="value {{ m.net_pnl|sign_class }}">{{ m.net_pnl|signed_money }}</div><div class="sub">{{ m.return_pct|pct }} on {{ m.starting_cash|money:0 }}</div></div>
+  <div class="tile"><div class="label">Trades</div><div class="value">{{ m.trades }}</div><div class="sub">{{ m.wins }} W / {{ m.losses }} L · {{ m.win_rate|floatformat:0 }}%</div></div>
+  <div class="tile"><div class="label">Profit factor</div><div class="value">{{ m.profit_factor|floatformat:2 }}</div><div class="sub">expectancy {{ m.expectancy|signed_money }}</div></div>
+  <div class="tile"><div class="label">Sharpe</div><div class="value">{{ m.sharpe|floatformat:2 }}</div><div class="sub">Sortino {{ m.sortino|floatformat:2 }}</div></div>
+  <div class="tile"><div class="label">Max drawdown</div><div class="value down">{{ m.max_drawdown_pct|floatformat:2 }}%</div><div class="sub">{{ m.max_dd_days }} days under water</div></div>
+  <div class="tile"><div class="label">vs {{ m.benchmark_symbol|default:'benchmark' }}</div><div class="value {{ m.alpha_pct|sign_class }}">{{ m.alpha_pct|pct }}</div><div class="sub">buy &amp; hold {{ m.benchmark_return_pct|pct }} · exposure {{ m.exposure_pct|floatformat:0 }}%</div></div>
+  <div class="tile"><div class="label">Avg hold</div><div class="value">{{ m.avg_hold_minutes|floatformat:0 }}m</div><div class="sub">{{ m.avg_bars_held|floatformat:1 }} bars · fees {{ m.fees|money }}</div></div>
+  <div class="tile"><div class="label">Best / worst day</div><div class="value" style="font-size:15px"><span class="up">{{ m.best_day_pct|pct }}</span> / <span class="down">{{ m.worst_day_pct|pct }}</span></div><div class="sub">{{ m.days }} sessions · {{ run.duration_s|floatformat:1 }}s</div></div>
+</div>
+<div class="grid cols-2">
+  <div class="card span-2"><h3>Equity</h3><div id="eq" class="chart"></div><h3 style="margin-top:var(--s-3)">Drawdown</h3><div id="dd" class="chart short"></div></div>
+  <div class="card">
+    <h3>Params</h3><pre class="log">{{ params_json }}</pre>
+    <h3>Signals</h3><p class="small">{{ m.signals }} signals, {{ m.blocked_signals }} blocked{% if blocked %}: {% for r, n in blocked %}<span class="badge">{{ r }} ×{{ n }}</span> {% endfor %}{% endif %}</p>
+    <p class="small muted">Fill model: slippage {{ run.config_snapshot.risk.slippage_bps }} bps · fees {{ run.config_snapshot.fee_bps.stock }}/{{ run.config_snapshot.fee_bps.crypto }} bps · risk/trade {{ run.config_snapshot.risk.risk_per_trade_pct }}% · max position {{ run.config_snapshot.risk.max_position_pct }}%</p>
+  </div>
+  <div class="card">
+    {% for title, table in breakdowns %}
+      {% if table %}<h3>{{ title }}</h3>
+      <table class="heat"><thead><tr><th style="text-align:left">key</th><th>trades</th><th>P&amp;L</th><th>win</th><th>avg</th></tr></thead><tbody>
+      {% for k, v in table.items %}<tr><td style="text-align:left">{{ k }}</td><td>{{ v.trades }}</td><td class="{{ v.pnl|sign_class }}">{{ v.pnl|signed_money }}</td><td>{{ v.win_rate|floatformat:0 }}%</td><td class="{{ v.avg|sign_class }}">{{ v.avg|floatformat:2 }}</td></tr>{% endfor %}
+      </tbody></table>{% endif %}
+    {% endfor %}
+  </div>
+  <div class="card span-2">
+    <h3>Trades <span class="more">{{ trades|length }} most recent</span></h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th><th class="num">Qty</th><th class="num">In</th><th class="num">Out</th><th class="num">P&amp;L</th><th class="num">%</th><th class="num">Bars</th><th>Reason</th></tr></thead>
+      <tbody>{% for t in trades %}<tr><td><strong>{{ t.symbol }}</strong></td><td>{{ t.side }}</td><td class="small">{{ t.entry_ts|et }}</td><td class="small">{{ t.exit_ts|et }}</td><td class="num">{{ t.qty|qty }}</td><td class="num">{{ t.entry_price|num:2 }}</td><td class="num">{{ t.exit_price|num:2 }}</td><td class="num {{ t.pnl|sign_class }}">{{ t.pnl|signed_money }}</td><td class="num">{{ t.pnl_pct|pct }}</td><td class="num">{{ t.bars_held }}</td><td><span class="badge">{{ t.exit_reason }}</span></td></tr>{% endfor %}</tbody>
+    </table></div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+  var eq = {{ equity_json|safe }};
+  if (eq.length) {
+    MTCharts.lineChart(document.getElementById('eq'), [{ data: eq, label: 'equity' }], { baseline: {{ run.starting_cash }} });
+    MTCharts.drawdownChart(document.getElementById('dd'), eq);
+  }
+</script>
+{% endblock %}

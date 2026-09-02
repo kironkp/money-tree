@@ -1,0 +1,24 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}{{ inst.symbol }} · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>{{ inst.symbol }} <small class="muted">{{ inst.name }} · {{ tf }} · {{ bars }} bars shown · {{ first|et:'%b %d %H:%M' }} → {{ last|et:'%b %d %H:%M' }}</small></h1>
+  <div class="actions"><a class="btn small" href="?timeframe=1Min">1Min</a><a class="btn small" href="?timeframe=5Min">5Min</a><a class="btn small" href="?timeframe=15Min">15Min</a><a class="btn small" href="?timeframe={{ tf }}&bars=2000">more bars</a></div></div>
+{% if issues %}<p class="message warning">{% for i in issues %}{{ i }}{% if not forloop.last %} · {% endif %}{% endfor %}</p>{% endif %}
+<div class="card"><div id="candles" class="chart tall"></div></div>
+<div class="card" style="margin-top: var(--s-4)">
+  <h3>Trades on {{ inst.symbol }}</h3>
+  {% if trades %}<table><thead><tr><th>Account</th><th>Strategy</th><th>Entry</th><th>Exit</th><th class="num">P&amp;L</th><th>Reason</th></tr></thead><tbody>
+  {% for t in trades %}<tr><td>{{ t.account.mode }}</td><td>{{ t.strategy_key }}</td><td class="small">{{ t.entry_ts|et }}</td><td class="small">{{ t.exit_ts|et }}</td><td class="num {{ t.pnl|sign_class }}">{{ t.pnl|signed_money }}</td><td><span class="badge">{{ t.exit_reason }}</span></td></tr>{% endfor %}
+  </tbody></table>{% else %}<p class="empty">none yet</p>{% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  MTCharts.fetchJSON("{% url 'api-bars' inst.slug %}?timeframe={{ tf }}&bars={{ request.GET.bars|default:600 }}").then(function (d) {
+    var el = document.getElementById('candles');
+    if (!d.bars.length) { el.innerHTML = '<p class="empty">no bars — sync history first</p>'; return; }
+    MTCharts.candleChart(el, d.bars, d.markers);
+  });
+</script>
+{% endblock %}

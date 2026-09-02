@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Journal · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Journal</h1>
+  <div class="tabs"><a href="?account={{ account.mode }}" class="{% if not kind %}active{% endif %}">all</a><a href="?account={{ account.mode }}&kind=auto_eod" class="{% if kind == 'auto_eod' %}active{% endif %}">end of day</a><a href="?account={{ account.mode }}&kind=coach" class="{% if kind == 'coach' %}active{% endif %}">coach</a><a href="?account={{ account.mode }}&kind=manual" class="{% if kind == 'manual' %}active{% endif %}">notes</a></div>
+  <div class="actions">
+    <form method="post" action="{% url 'journal-eod' %}" class="inline">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><button class="btn small">Write today's EOD ({{ account.mode }})</button></form>
+    <form method="post" action="{% url 'journal-coach' %}" class="inline" data-confirm="Ask the coach ({{ coach_model }}) to review recent sessions? Costs a few cents.">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><button class="btn small primary" {% if not coach_enabled %}disabled title="set ANTHROPIC_API_KEY"{% endif %}>Ask the coach</button></form>
+  </div>
+</div>
+<p class="small muted">Coach: {% if coach_enabled %}{{ coach_model }} · {{ coach_calls }} calls · ${{ coach_cost|floatformat:3 }} so far{% else %}dormant — add ANTHROPIC_API_KEY to .env{% endif %}. End-of-day entries are written automatically by the agent; drift versus the backtest baseline auto-disables a strategy.</p>
+<div class="grid cols-2">
+  <div class="card span-2">
+    {% for e in page.object_list %}
+      <article style="padding: var(--s-3) 0; border-bottom: 1px solid var(--border)">
+        <h2 style="font-size:15px">{{ e.date }} <span class="badge {% if e.kind == 'coach' %}sapling{% elif e.kind == 'auto_eod' %}sprout{% endif %}">{{ e.kind }}</span> {{ e.title }}
+          <span class="more"><form method="post" action="{% url 'journal-delete' e.pk %}" class="inline" data-confirm="Delete this entry?">{% csrf_token %}<button class="linklike small">✕</button></form></span></h2>
+        <div class="md">{{ e.body|md }}</div>
+        {% if e.proposals %}
+          <h3>Proposed experiments</h3>
+          {% for p in e.proposals %}
+            <p><strong>{{ p.title }}</strong> <span class="badge">{{ p.strategy_key }}</span> <span class="badge">{{ p.method }}</span><br><small>{{ p.rationale }}</small><br>
+              <code class="small">{{ p.param_grid|json }}</code>
+              <form method="post" action="{% url 'journal-run-proposal' e.pk forloop.counter0 %}" class="inline">{% csrf_token %}<button class="btn small">Run this experiment</button></form></p>
+          {% endfor %}
+        {% endif %}
+      </article>
+    {% empty %}<p class="empty">nothing in the journal yet</p>{% endfor %}
+    {% include 'partials/pagination.html' %}
+  </div>
+  <div class="card">
+    <h3>Add a note</h3>
+    <form method="post" action="{% url 'journal-add' %}">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}">
+      <div class="form-grid"><div class="field"><label>Date</label>{{ form.date }}</div><div class="field"><label>Title</label>{{ form.title }}</div></div>
+      <div class="field"><label>Body</label>{{ form.body }}</div>
+      <button class="btn">Save note</button></form>
+  </div>
+</div>
+{% endblock %}

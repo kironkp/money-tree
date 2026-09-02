@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- MoneyTree trading agent (sim mode). Fires weekdays at 06:20 PT; the
+       command itself waits for the 09:30 ET open and keeps ticking through
+       the close (crypto symbols keep it alive 24/7 — remove them from the
+       watchlist if you want it to sleep). caffeinate keeps the Mac awake with
+       the lid closed on AC power. Install:
+         cp deploy/launchd/com.kiron.moneytree.agent.plist ~/Library/LaunchAgents/
+         launchctl load ~/Library/LaunchAgents/com.kiron.moneytree.agent.plist
+       Stop: launchctl unload …  (SIGTERM → the agent flattens sim/paper positions). -->
+  <key>Label</key><string>com.kiron.moneytree.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string><string>-s</string>
+    <string>/Users/kironkp/.local/bin/pipenv</string>
+    <string>run</string><string>python</string><string>manage.py</string>
+    <string>run_agent</string><string>--mode</string><string>sim</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+    <dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>6</integer><key>Minute</key><integer>20</integer></dict>
+  </array>
+  <key>ExitTimeOut</key><integer>45</integer>
+  <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/launchd-agent.log</string>
+  <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/launchd-agent.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/kironkp/.local/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>

@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Experiment #{{ exp.pk }} · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Experiment #{{ exp.pk }} <small class="muted">{{ exp.method }} · {{ exp.strategy_key }} · {{ exp.start }} → {{ exp.end }} · objective {{ exp.objective }}</small></h1>
+  <div class="actions">
+    {% if exp.status == 'running' %}<form method="post" action="{% url 'experiment-stop' exp.pk %}" class="inline">{% csrf_token %}<button class="btn warn small">Stop</button></form>{% endif %}
+    <form method="post" action="{% url 'experiment-delete' exp.pk %}" class="inline" data-confirm="Delete this experiment and its runs?">{% csrf_token %}<button class="btn small">Delete</button></form>
+  </div>
+</div>
+{% if exp.status in 'queued running' %}
+<div class="card" hx-get="{% url 'experiment-progress' exp.pk %}" hx-trigger="every 3s" hx-swap="innerHTML">{% include 'partials/experiment_progress.html' with log='' %}</div>
+{% elif exp.status == 'failed' %}<p class="message error">failed: {{ exp.error }}</p>{% if log %}<pre class="log">{{ log }}</pre>{% endif %}
+{% else %}
+<div class="grid cols-2">
+  {% if oos %}
+  <div class="card span-2">
+    <h3>Out-of-sample (stitched test windows)</h3>
+    <div class="tiles">
+      <div class="tile"><div class="label">OOS net</div><div class="value {{ oos.net_pnl|sign_class }}">{{ oos.net_pnl|signed_money }}</div><div class="sub">{{ oos.trades }} trades</div></div>
+      <div class="tile"><div class="label">OOS profit factor</div><div class="value">{{ oos.profit_factor|floatformat:2 }}</div><div class="sub">win {{ oos.win_rate|floatformat:0 }}%</div></div>
+      <div class="tile"><div class="label">OOS Sharpe</div><div class="value">{{ oos.sharpe|floatformat:2 }}</div><div class="sub">max DD {{ oos.max_drawdown_pct|floatformat:1 }}%</div></div>
+      <div class="tile"><div class="label">Decay (test ÷ train)</div><div class="value {% if s.decay and s.decay < 0.5 %}down{% elif s.decay and s.decay > 0.8 %}up{% endif %}">{{ s.decay|floatformat:2|default:'—' }}</div><div class="sub">train avg {{ s.train_avg_objective|floatformat:2 }} · test avg {{ s.test_avg_objective|floatformat:2 }}</div></div>
+    </div>
+    <div id="oos" class="chart"></div>
+    <p class="small muted">Decay near 1 means the training edge survived out of sample; below 0.5 smells like overfitting. Params picked per window: {% for k, n in freq %}<span class="badge">{{ k }} ×{{ n }}</span> {% endfor %}</p>
+  </div>
+  <div class="card span-2">
+    <h3>Windows</h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Train</th><th>Test</th><th>Chosen params</th><th class="num">Train obj</th><th class="num">Test obj</th><th class="num">Test trades</th><th class="num">Test net</th><th class="num">Test PF</th><th class="num">Test DD</th></tr></thead>
+      <tbody>{% for w in windows %}<tr>
+        {% if w.skipped %}<td>{{ w.n }}</td><td colspan="9" class="muted small">{{ w.skipped }}</td>{% else %}
+        <td>{{ w.n }}</td><td class="small">{{ w.train }}</td><td class="small">{{ w.test }}</td>
+        <td class="small">{% for k, v in w.params.items %}{{ k }}={{ v }} {% endfor %}</td>
+        <td class="num">{{ w.train_objective|floatformat:2 }}</td><td class="num {{ w.test_objective|sign_class }}">{{ w.test_objective|floatformat:2 }}</td>
+        <td class="num">{{ w.test_trades }}</td><td class="num {{ w.test_net_pnl|sign_class }}">{{ w.test_net_pnl|signed_money }}</td>
+        <td class="num">{{ w.test_profit_factor|floatformat:2 }}</td><td class="num">{{ w.test_max_dd|floatformat:1 }}%</td>{% endif %}
+      </tr>{% endfor %}</tbody>
+    </table></div>
+  </div>
+  {% endif %}
+  {% if ranked %}
+  <div class="card span-2">
+    <h3>Ranked combos <span class="more">{% if stability.score is not None %}stability {{ stability.score|floatformat:2 }} ({{ stability.neighbours }} neighbours){% else %}stability n/a{% endif %}</span></h3>
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th>{% for p in param_names %}<th class="num">{{ p }}</th>{% endfor %}<th class="num">{{ exp.objective }}</th><th class="num">trades</th><th class="num">net</th><th class="num">win</th><th class="num">PF</th><th class="num">Sharpe</th><th class="num">DD</th><th></th></tr></thead>
+      <tbody>{% for r in ranked %}<tr>
+        <td>{{ forloop.counter }}</td>{% for p in param_names %}<td class="num">{{ r.params|get:p }}</td>{% endfor %}
+        <td class="num"><strong>{{ r.objective|floatformat:3 }}</strong></td><td class="num">{{ r.trades }}</td><td class="num {{ r.net_pnl|sign_class }}">{{ r.net_pnl|signed_money }}</td>
+        <td class="num">{{ r.win_rate|floatformat:0 }}%</td><td class="num">{{ r.profit_factor|floatformat:2 }}</td><td class="num">{{ r.sharpe|floatformat:2 }}</td><td class="num">{{ r.max_drawdown_pct|floatformat:1 }}%</td>
+        <td><form method="post" action="{% url 'experiment-promote' exp.pk %}" class="inline">{% csrf_token %}<input type="hidden" name="params_json" value='{{ r.params|json }}'><button class="btn small">promote</button></form></td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    <p class="small muted">Stability = mean objective of the winner's one-step neighbours ÷ the winner's. Near 1 is a plateau (good); near 0 is a lonely spike (suspect).</p>
+  </div>
+  {% endif %}
+  <div class="card span-2">
+    <h3>Recommended params</h3>
+    {% if exp.best_params %}
+    <form method="post" action="{% url 'experiment-promote' exp.pk %}" data-confirm="Install these params on {{ strategy.name }}?">{% csrf_token %}
+      <div class="field"><textarea name="params_json" rows="3">{{ exp.best_params|json }}</textarea></div>
+      <div class="field"><input type="text" name="note" placeholder="note for the history (optional)"></div>
+      <button class="btn primary">Promote to {{ strategy.name|default:exp.strategy_key }}</button>
+      <span class="small muted">grid: {{ exp.param_grid|json }}</span>
+    </form>
+    {% else %}<p class="empty">no combo met the minimum trade count</p>{% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+  var oos = {{ oos_json|safe }};
+  if (oos && oos.length && document.getElementById('oos')) MTCharts.lineChart(document.getElementById('oos'), [{ data: oos, label: 'OOS equity' }]);
+</script>
+{% endblock %}

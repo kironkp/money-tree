@@ -1,0 +1,53 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Experiments · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Experiments</h1></div>
+<p class="small muted">Walk-forward is the honest one: pick params on a training window, judge them on the next window, roll forward. Grid and random search the whole range at once (fine for a first look, easy to overfit). {% if agent_running %}<span class="warn">An agent is running — experiments run niced, but it's better to research after the close.</span>{% endif %}</p>
+<div class="grid cols-2">
+  <div class="card">
+    <h3>Launch</h3>
+    <form method="post">
+      {% csrf_token %}
+      <div class="form-grid">
+        <div class="field"><label>Strategy</label><select name="strategy" data-strategy-select>{% for s in strategies %}<option value="{{ s.cls.key }}">{{ s.cls.name }}</option>{% endfor %}</select></div>
+        <div class="field"><label>Method</label><select name="method" data-method-select><option value="walk_forward">walk-forward</option><option value="grid">grid</option><option value="random">random</option></select></div>
+        <div class="field"><label>Objective</label><select name="objective">{% for o in objectives %}<option value="{{ o }}">{{ o }}</option>{% endfor %}</select></div>
+        <div class="field"><label>Min trades</label><input type="number" name="min_trades" value="10" min="1"></div>
+        <div class="field"><label>Start</label><input type="date" name="start" value="{{ default_start|date:'Y-m-d' }}"></div>
+        <div class="field"><label>End</label><input type="date" name="end" value="{{ default_end|date:'Y-m-d' }}"></div>
+        <div class="field" data-walk-forward-only><label>Train days</label><input type="number" name="train_days" value="40" min="5"></div>
+        <div class="field" data-walk-forward-only><label>Test days</label><input type="number" name="test_days" value="15" min="2"></div>
+        <div class="field"><label>Timeframe</label><select name="timeframe"><option value="5Min">5Min</option><option value="1Min">1Min</option><option value="15Min">15Min</option></select></div>
+      </div>
+      {% for s in strategies %}
+      <div data-params-for="{{ s.cls.key }}" hidden>
+        <h3>{{ s.cls.name }} grid <small class="muted">(comma-separated values; blank = the defaults shown)</small></h3>
+        <div class="form-grid">
+        {% for p in s.schema %}
+          <div class="field"><label>{{ p.name }}</label><input type="text" name="grid_{{ s.cls.key }}_{{ p.name }}" placeholder="{{ s.grid|get:p.name|joinlist }}"><div class="help">{{ p.help }}{% if p.min is not None %} · {{ p.min }}–{{ p.max }}{% endif %}</div></div>
+        {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+      {% include 'research/_symbols.html' %}
+      <button class="btn primary">Start experiment</button> <span class="small muted">runs in the background (2 workers), capped at 60 combos</span>
+    </form>
+  </div>
+  <div class="card">
+    <h3>Experiments</h3>
+    {% if page.object_list %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>#</th><th>Strategy</th><th>Method</th><th>Range</th><th>Status</th><th>Best params</th></tr></thead>
+      <tbody>{% for e in page.object_list %}<tr>
+        <td><a href="{% url 'experiment-detail' e.pk %}">#{{ e.pk }}</a></td><td>{{ e.strategy_key }}</td><td>{{ e.method }}<br><small>{{ e.objective }}</small></td>
+        <td class="small">{{ e.start }} → {{ e.end }}</td>
+        <td><span class="badge {% if e.status == 'done' %}ok{% elif e.status == 'failed' %}bad{% elif e.status == 'running' %}warn{% endif %}">{{ e.status }}</span>{% if e.status == 'running' %}<br><small>{{ e.progress|floatformat:0 }}%</small>{% endif %}</td>
+        <td class="small">{% for k, v in e.best_params.items %}{{ k }}={{ v }} {% endfor %}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% include 'partials/pagination.html' %}
+    {% else %}<p class="empty">no experiments yet</p>{% endif %}
+  </div>
+</div>
+{% endblock %}

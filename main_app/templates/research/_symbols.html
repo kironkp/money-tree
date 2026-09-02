@@ -1,0 +1,4 @@
+{% load mt_tags %}
+<div class="field"><label>Symbols <small class="muted">(blank = every watchlist symbol the strategy supports)</small></label>
+  <div class="checks">{% for i in instruments %}<label><input type="checkbox" name="symbols" value="{{ i.symbol }}"> {{ i.symbol }}{% if coverage|get:i.symbol %}{% with c=coverage|get:i.symbol %}{% if c.0 %}<small class="muted"> {{ c.0|date:'m/d' }}–{{ c.1|date:'m/d' }}</small>{% else %}<small class="down"> no bars</small>{% endif %}{% endwith %}{% endif %}</label>{% endfor %}</div>
+</div>

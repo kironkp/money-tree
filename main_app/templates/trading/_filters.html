@@ -1,0 +1,12 @@
+{% load mt_tags %}
+<form method="get" class="pill-row" style="margin-bottom: var(--s-3)">
+  <input type="hidden" name="account" value="{{ account.mode }}">
+  <select name="strategy" style="width:auto"><option value="">all strategies</option>{% for k in f.strategies %}<option value="{{ k }}" {% if k == f.strategy %}selected{% endif %}>{{ k }}</option>{% endfor %}</select>
+  <input type="text" name="symbol" placeholder="symbol" value="{{ f.symbol }}" style="width:110px">
+  <select name="days" style="width:auto">
+    <option value="1" {% if f.days == 1 %}selected{% endif %}>1 day</option><option value="7" {% if f.days == 7 %}selected{% endif %}>7 days</option>
+    <option value="30" {% if f.days == 30 %}selected{% endif %}>30 days</option><option value="90" {% if f.days == 90 %}selected{% endif %}>90 days</option>
+    <option value="365" {% if f.days == 365 %}selected{% endif %}>1 year</option>
+  </select>
+  <button class="btn small">Filter</button>
+</form>

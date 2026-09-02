@@ -1,0 +1,10 @@
+{% load mt_tags %}
+<div class="tabs">
+  <a href="{% url 'trades' %}?account={{ account.mode }}" class="{% if request.resolver_match.url_name == 'trades' %}active{% endif %}">Trades</a>
+  <a href="{% url 'positions' %}?account={{ account.mode }}" class="{% if request.resolver_match.url_name == 'positions' %}active{% endif %}">Positions</a>
+  <a href="{% url 'orders' %}?account={{ account.mode }}" class="{% if request.resolver_match.url_name == 'orders' %}active{% endif %}">Orders</a>
+  <a href="{% url 'signals' %}?account={{ account.mode }}" class="{% if request.resolver_match.url_name == 'signals' %}active{% endif %}">Signals</a>
+  <a href="{% url 'risk-events' %}?account={{ account.mode }}" class="{% if request.resolver_match.url_name == 'risk-events' %}active{% endif %}">Risk events</a>
+  <span class="small muted" style="align-self:center">account: {{ account.name }}
+    · <a href="?account=sim">sim</a> · <a href="?account=paper">paper</a> · <a href="?account=replay">replay</a></span>
+</div>

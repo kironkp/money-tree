@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Positions · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Positions</h1><div class="actions"><span class="small">unrealized <strong class="{{ unrealized|sign_class }}">{{ unrealized|signed_money }}</strong></span></div></div>
+{% include 'trading/_tabs.html' %}
+<div class="card">
+  {% if positions %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Symbol</th><th>Strategy</th><th>Side</th><th class="num">Qty</th><th class="num">Avg</th><th class="num">Last</th><th class="num">Value</th><th class="num">P&amp;L</th><th class="num">Stop</th><th class="num">Target</th><th class="num">Bars</th><th>Opened</th></tr></thead>
+    <tbody>
+    {% for p in positions %}
+      <tr>
+        <td><strong>{{ p.instrument.symbol }}</strong>{% if p.external %} <span class="badge warn">external</span>{% endif %}</td>
+        <td>{{ p.strategy_key|default:'—' }}</td><td>{{ p.side }}</td><td class="num">{{ p.qty|qty }}</td>
+        <td class="num">{{ p.avg_price|num:2 }}</td><td class="num">{{ p.last_price|num:2 }}</td><td class="num">{{ p.market_value|money }}</td>
+        <td class="num {{ p.unrealized_pnl|sign_class }}">{{ p.unrealized_pnl|signed_money }} <small>{{ p.unrealized_pct|pct }}</small></td>
+        <td class="num">{{ p.stop_price|num:2 }}</td><td class="num">{{ p.target_price|num:2 }}</td><td class="num">{{ p.bars_held }}</td><td class="small">{{ p.opened_at|et }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="empty">flat — no open positions on {{ account.name }}</p>{% endif %}
+</div>
+{% endblock %}

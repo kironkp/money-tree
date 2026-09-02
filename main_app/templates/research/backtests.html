@@ -1,0 +1,62 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Backtests · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Backtests</h1></div>
+<div class="grid cols-2">
+  <div class="card">
+    <h3>Run a backtest</h3>
+    <form method="post">
+      {% csrf_token %}
+      <div class="form-grid">
+        <div class="field"><label>Strategy</label><select name="strategy" data-strategy-select>{% for s in strategies %}<option value="{{ s.cls.key }}">{{ s.cls.name }}</option>{% endfor %}</select></div>
+        <div class="field"><label>Start</label><input type="date" name="start" value="{{ default_start|date:'Y-m-d' }}"></div>
+        <div class="field"><label>End</label><input type="date" name="end" value="{{ default_end|date:'Y-m-d' }}"></div>
+        <div class="field"><label>Timeframe</label><select name="timeframe"><option value="5Min" {% if cfg.timeframe == '5Min' %}selected{% endif %}>5Min</option><option value="1Min" {% if cfg.timeframe == '1Min' %}selected{% endif %}>1Min</option><option value="15Min" {% if cfg.timeframe == '15Min' %}selected{% endif %}>15Min</option></select></div>
+        <div class="field"><label>Starting cash</label><input type="number" name="cash" value="{{ cfg.starting_cash }}" step="100"></div>
+        <div class="field"><label>Tag</label><input type="text" name="tag" placeholder="optional"></div>
+      </div>
+      {% for s in strategies %}
+      <div data-params-for="{{ s.cls.key }}" hidden>
+        <h3>{{ s.cls.name }} params</h3>
+        <div class="form-grid">
+        {% for p in s.schema %}
+          <div class="field"><label>{{ p.name }}</label>
+            {% if p.type == 'bool' %}<input type="checkbox" name="param_{{ s.cls.key }}_{{ p.name }}" {% if s.params|get:p.name %}checked{% endif %}>
+            {% elif p.type == 'choice' %}<select name="param_{{ s.cls.key }}_{{ p.name }}">{% for c in p.choices %}<option value="{{ c }}" {% if s.params|get:p.name == c %}selected{% endif %}>{{ c }}</option>{% endfor %}</select>
+            {% else %}<input type="number" name="param_{{ s.cls.key }}_{{ p.name }}" value="{{ s.params|get:p.name }}" step="{{ p.step|default:'any' }}" min="{{ p.min }}" max="{{ p.max }}">{% endif %}
+            <div class="help">{{ p.help }}</div></div>
+        {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+      {% include 'research/_symbols.html' %}
+      <button class="btn primary">Run backtest</button> <span class="small muted">runs inline, a few seconds per symbol-month</span>
+    </form>
+  </div>
+  <div class="card">
+    <h3>Runs <span class="more"><span class="small muted">tick boxes, then</span> <button type="button" class="btn small" onclick="var ids=[...document.querySelectorAll('.cmp:checked')].map(e=>e.value); if(ids.length) location='{% url 'backtest-compare' %}?ids='+ids.join(',')">Compare</button></span></h3>
+    {% if page.object_list %}
+    <div class="table-wrap"><table>
+      <thead><tr><th></th><th>#</th><th>Strategy</th><th>Range</th><th class="num">Trades</th><th class="num">Net</th><th class="num">Win</th><th class="num">PF</th><th class="num">Sharpe</th><th class="num">DD</th><th class="num">vs SPY</th></tr></thead>
+      <tbody>
+      {% for r in page.object_list %}
+        <tr>
+          <td><input type="checkbox" class="cmp" value="{{ r.pk }}"></td>
+          <td><a href="{% url 'backtest-detail' r.pk %}">#{{ r.pk }}</a>{% if r.tag %}<br><small>{{ r.tag }}</small>{% endif %}</td>
+          <td>{{ r.strategy_key }}</td><td class="small">{{ r.start }} → {{ r.end }}<br>{{ r.symbols|length }} sym · {{ r.timeframe }}</td>
+          {% if r.status == 'done' %}
+          <td class="num">{{ r.metrics.trades }}</td><td class="num {{ r.metrics.net_pnl|sign_class }}">{{ r.metrics.net_pnl|signed_money }}</td>
+          <td class="num">{{ r.metrics.win_rate|floatformat:0 }}%</td><td class="num">{{ r.metrics.profit_factor|floatformat:2 }}</td>
+          <td class="num">{{ r.metrics.sharpe|floatformat:2 }}</td><td class="num">{{ r.metrics.max_drawdown_pct|floatformat:1 }}%</td>
+          <td class="num {{ r.metrics.alpha_pct|sign_class }}">{{ r.metrics.alpha_pct|pct:1 }}</td>
+          {% else %}<td colspan="7"><span class="badge bad">{{ r.status }}</span> <small>{{ r.error|truncatechars:80 }}</small></td>{% endif %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+    {% include 'partials/pagination.html' %}
+    {% else %}<p class="empty">no backtests yet — sync some bars on the Data page, then run one</p>{% endif %}
+  </div>
+</div>
+{% endblock %}

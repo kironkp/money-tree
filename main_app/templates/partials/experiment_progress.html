@@ -1,0 +1,6 @@
+{% load mt_tags %}
+<div class="progress"><span style="width: {{ exp.progress|floatformat:0 }}%"></span></div>
+<p class="small">{{ exp.status }} · {{ exp.done_runs }} / {{ exp.total_runs }} runs · {{ exp.progress|floatformat:0 }}%
+  {% if exp.status == 'running' %}<span class="muted">(updates every 3 s)</span>{% endif %}</p>
+{% if exp.status == 'done' %}<script>window.location.reload();</script>{% endif %}
+{% if log %}<pre class="log">{{ log }}</pre>{% endif %}

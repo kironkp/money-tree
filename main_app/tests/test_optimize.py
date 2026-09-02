@@ -23,12 +23,11 @@ class WalkForwardWindowsRollWithoutLeaking(SimpleTestCase):
 class GridsAreBoundedAndOverridable(SimpleTestCase):
     def test_grid_from_schema_uses_ranges_and_keeps_bools_fixed(self):
         g = grid_from_schema('orb')
-        self.assertEqual(g['trade_short'], [False])
+        self.assertNotIn('trade_short', g)
         self.assertEqual(g['range_minutes'], [5, 15, 30])
         self.assertTrue(all(0.5 <= v <= 2.0 for v in g['stop_atr_mult']))
-        g2 = grid_from_schema('orb', {'rr': [1.5, 3], 'trade_short': [True]})
+        g2 = grid_from_schema('orb', {'rr': [1.5, 3]})
         self.assertEqual(g2['rr'], [1.5, 3.0])
-        self.assertEqual(g2['trade_short'], [True])
 
     def test_combo_caps(self):
         g = {'a': [1, 2, 3, 4, 5], 'b': [1, 2, 3, 4, 5], 'c': [1, 2, 3]}

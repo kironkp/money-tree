@@ -90,10 +90,12 @@ class Bar(models.Model):
     source = models.CharField(max_length=32, default='')
 
     class Meta:
+        # One history per feed: the live loop reads IEX bars (what it trades on),
+        # backtests read the consolidated tape. Same timestamps, different rows.
         constraints = [
-            models.UniqueConstraint(fields=['instrument', 'timeframe', 'ts'], name='uniq_bar'),
+            models.UniqueConstraint(fields=['instrument', 'timeframe', 'source', 'ts'], name='uniq_bar'),
         ]
-        indexes = [models.Index(fields=['instrument', 'timeframe', 'ts'])]
+        indexes = [models.Index(fields=['instrument', 'timeframe', 'source', 'ts'])]
         ordering = ['ts']
 
     def __str__(self):

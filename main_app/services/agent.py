@@ -125,6 +125,10 @@ class Agent:
         if self.mode != Mode.REPLAY:
             self.provider = get_provider(self.provider_name, live_feed=True)
             self.exclude_sources = [] if self.provider.name == 'synthetic' else ['synthetic']
+            # Live decisions use the feed the loop trades on (IEX for stocks), so
+            # relative volume and every other indicator compare like with like.
+            self.live_source = {ac: getattr(self.provider, 'source_label', lambda a: self.provider.name)(ac)
+                                for ac in ('stock', 'etf', 'crypto')}
         data_source = 'stored bars' if self.mode == Mode.REPLAY else self.provider.name
         engine_cfg = EngineConfig(timeframe=self.timeframe, mode=self.mode, asset_classes=self.asset_classes, risk=risk_cfg,
                                   allocations=allocations, data_source=data_source,
@@ -556,7 +560,8 @@ class Agent:
         for s in symbols:
             strategies = self.strategies_for(s)
             inst = self.instruments[s]
-            window = load_frame(inst, self.timeframe, limit=WINDOW_BARS, exclude_sources=self.exclude_sources)
+            window = load_frame(inst, self.timeframe, limit=WINDOW_BARS, exclude_sources=self.exclude_sources,
+                                source=self.live_source.get(self.asset_classes[s]))
             window = complete_bars_only(window, self.timeframe, now, grace)
             if len(window) == 0:
                 continue
@@ -570,7 +575,8 @@ class Agent:
             ac = self.asset_classes[s]
             need = max((st.warmup_bars for st in strategies), default=0)
             if strategies and len(window) < need:
-                self.say('bar', f'{s}: {len(window)}/{need} real bars stored — indicators still warming up, no decisions yet.', symbol=s,
+                self.say('bar', f'{s}: {len(window)}/{need} {self.live_source.get(self.asset_classes[s], "")} bars stored — '
+                         'indicators still warming up, no decisions yet (sync this feed\'s history on the Data page).', symbol=s,
                          phase='observe')
             prepared = {st.key: st.prepare(window, ac, self.timeframe) for st in strategies}
             rows = {k: list(df.itertuples(index=True)) for k, df in prepared.items()}

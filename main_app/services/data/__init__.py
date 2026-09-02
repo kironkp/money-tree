@@ -14,6 +14,11 @@ def get_provider(name: str | None = None, live_feed: bool = False):
             raise RuntimeError('Alpaca keys are not configured (ALPACA_API_KEY / ALPACA_SECRET_KEY)')
         from .alpaca_data import AlpacaDataProvider
         return AlpacaDataProvider(live_feed=live_feed)
+    if name == 'alpaca-iex':
+        if not settings.ALPACA_ENABLED:
+            raise RuntimeError('Alpaca keys are not configured (ALPACA_API_KEY / ALPACA_SECRET_KEY)')
+        from .alpaca_data import AlpacaDataProvider
+        return AlpacaDataProvider(live_feed=True)
     if name == 'yahoo':
         return YahooProvider()
     raise ValueError(f'unknown provider {name!r}')

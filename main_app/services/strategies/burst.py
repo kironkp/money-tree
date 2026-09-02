@@ -52,13 +52,21 @@ class MomentumBurst(Strategy):
             return []
         if self._cooling(ctx, bar):
             return []
-        if bar.move_pct >= self.p['min_move_pct'] and bar.relvol >= self.p['min_relvol']:
+        if bar.relvol < self.p['min_relvol']:
+            return []
+        price = float(bar.close)
+        if bar.move_pct >= self.p['min_move_pct']:
             st = self.symbol_state(ctx.symbol)
             st['last_trade_bar'], st['last_session'] = int(bar.bar_pos), bar.session
-            price = float(bar.close)
             return [Signal('buy', ctx.symbol, ctx.ts, price, price * (1 - self.p['stop_pct'] / 100),
                            price * (1 + self.p['target_pct'] / 100), strength=min(1.0, bar.move_pct / (2 * self.p['min_move_pct'])),
                            reason=f'burst +{bar.move_pct:.2f}% in {int(self.p["lookback"])} bars on {bar.relvol:.1f}× volume')]
+        if ctx.asset_class != 'crypto' and bar.move_pct <= -self.p['min_move_pct']:
+            st = self.symbol_state(ctx.symbol)
+            st['last_trade_bar'], st['last_session'] = int(bar.bar_pos), bar.session
+            return [Signal('sell', ctx.symbol, ctx.ts, price, price * (1 + self.p['stop_pct'] / 100),
+                           price * (1 - self.p['target_pct'] / 100), strength=min(1.0, -bar.move_pct / (2 * self.p['min_move_pct'])),
+                           reason=f'burst {bar.move_pct:.2f}% in {int(self.p["lookback"])} bars on {bar.relvol:.1f}× volume (short)')]
         return []
 
     def rules(self, ctx: Context, bar) -> list[Rule]:
@@ -69,8 +77,10 @@ class MomentumBurst(Strategy):
         out = []
         if self._cooling(ctx, bar):
             out.append(Rule('cooldown', False, 'cooling down after the last trade here'))
-        moved = bar.move_pct >= self.p['min_move_pct']
-        out.append(Rule('move', bool(moved), f'moved {bar.move_pct:+.2f}% over {int(self.p["lookback"])} bars (needs +{self.p["min_move_pct"]:.1f}%)',
+        can_short = ctx.asset_class != 'crypto'
+        moved = bar.move_pct >= self.p['min_move_pct'] or (can_short and bar.move_pct <= -self.p['min_move_pct'])
+        need = f'needs +{self.p["min_move_pct"]:.1f}%' + (f' or −{self.p["min_move_pct"]:.1f}%' if can_short else '')
+        out.append(Rule('move', bool(moved), f'moved {bar.move_pct:+.2f}% over {int(self.p["lookback"])} bars ({need})',
                         value=bar.move_pct, threshold=self.p['min_move_pct']))
         vol = bar.relvol >= self.p['min_relvol']
         out.append(Rule('volume', bool(vol), f'relative volume {bar.relvol:.1f} vs {self.p["min_relvol"]:.1f} required',

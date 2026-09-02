@@ -24,7 +24,6 @@ class VwapReversion(Strategy):
         Param('stop_atr_mult', 'float', 1.5, 0.5, 2.5, 0.5, help='Stop distance in ATRs'),
         Param('min_bar_pos', 'int', 6, 3, 12, 3, help='Bars into the session before trading'),
         Param('max_bars_held', 'int', 24, 6, 48, 6, help='Give up after this many bars'),
-        Param('trade_short', 'bool', False, help='Also fade upside stretches'),
     )
     warmup_bars = 40
 
@@ -58,7 +57,7 @@ class VwapReversion(Strategy):
         if bar.z <= -self.p['entry_z'] and bar.svwap > bar.close:
             return [Signal('buy', ctx.symbol, ctx.ts, float(bar.close), float(bar.close - risk), float(bar.svwap),
                            strength=min(1.0, abs(bar.z) / 3), reason=f'z={bar.z:.2f} below VWAP {bar.svwap:.2f}')]
-        if self.p['trade_short'] and bar.z >= self.p['entry_z'] and bar.svwap < bar.close:
+        if ctx.asset_class != 'crypto' and bar.z >= self.p['entry_z'] and bar.svwap < bar.close:
             return [Signal('sell', ctx.symbol, ctx.ts, float(bar.close), float(bar.close + risk), float(bar.svwap),
                            strength=min(1.0, abs(bar.z) / 3), reason=f'z={bar.z:.2f} above VWAP {bar.svwap:.2f}')]
         return []
@@ -73,8 +72,9 @@ class VwapReversion(Strategy):
         out.append(Rule('session', bool(ready), 'far enough into the session' if ready
                         else f'too early in the session ({int(bar.bar_pos) + 1}/{self.p["min_bar_pos"]} bars)',
                         value=bar.bar_pos, threshold=self.p['min_bar_pos']))
-        stretched = bar.z <= -self.p['entry_z']
-        out.append(Rule('stretch', bool(stretched),
-                        f'z-score {bar.z:+.2f} vs VWAP {bar.svwap:,.2f}; this strategy buys at −{self.p["entry_z"]:.1f} or lower',
+        can_short = ctx.asset_class != 'crypto'
+        stretched = bar.z <= -self.p['entry_z'] or (can_short and bar.z >= self.p['entry_z'])
+        side_note = f'buys at −{self.p["entry_z"]:.1f} or lower' + (f', shorts at +{self.p["entry_z"]:.1f} or higher' if can_short else '')
+        out.append(Rule('stretch', bool(stretched), f'z-score {bar.z:+.2f} vs VWAP {bar.svwap:,.2f}; {side_note}',
                         value=bar.z, threshold=-self.p['entry_z']))
         return out

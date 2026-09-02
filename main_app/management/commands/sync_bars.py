@@ -16,7 +16,7 @@ class Command(BaseCommand):
         parser.add_argument('--symbols', default='', help='comma-separated; default = watchlist')
         parser.add_argument('--timeframe', default='', help='1Min/5Min/15Min/1Day; default = config')
         parser.add_argument('--days', type=int, default=60)
-        parser.add_argument('--provider', default='', help='alpaca | yahoo | synthetic (default: alpaca if keyed else yahoo)')
+        parser.add_argument('--provider', default='', help='alpaca | alpaca-iex | yahoo | synthetic (default: alpaca if keyed else yahoo)')
         parser.add_argument('--resync', action='store_true', help='wipe and refetch')
 
     def handle(self, *args, **o):

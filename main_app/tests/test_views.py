@@ -71,7 +71,7 @@ class PagesRenderWithData(TestCase):
         self.assertEqual(r.status_code, 302)
         self.row.refresh_from_db()
         self.assertEqual(self.row.params['range_minutes'], 30)
-        self.assertEqual(self.row.params['trade_short'], False)
+        self.assertNotIn('trade_short', self.row.params)
         self.assertEqual(self.row.symbols, ['QQQ'])
 
     def test_settings_saves_and_live_mode_needs_the_phrase(self):

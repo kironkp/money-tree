@@ -91,6 +91,18 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   `SymbolState.price`, writes `level='pulse'` feed lines (pruned after 24 h).
 - `manage.py auto_research` + `com.kiron.moneytree.research.plist` (02:10 nightly).
 
+## v1.4 — symmetric shorts, per-feed histories
+
+- No `allow_short` / `trade_short` any more: strategies emit long or short signals
+  symmetrically; `RiskManager` only vetoes crypto-spot shorts. Simulator shorts
+  use cash-account semantics (no borrow fees modelled yet — TODO before live).
+- `Bar` is unique per (instrument, timeframe, **source**, ts). The live loop reads
+  and writes the feed it trades on (`alpaca:iex` for stocks; `sync_bars --provider
+  alpaca-iex` keeps 60 days of it) so relative volume compares like with like;
+  backtests/replays default to the best source (`store.best_source`, SIP first).
+  Never `load_frame` without a source and expect one feed — the default picker
+  handles it.
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live

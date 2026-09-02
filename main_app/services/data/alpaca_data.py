@@ -114,7 +114,7 @@ class AlpacaDataProvider(BarProvider):
         from alpaca.data.enums import Adjustment, DataFeed
         from alpaca.data.requests import StockBarsRequest
         if self.live_feed:
-            feed, end_arg = DataFeed.IEX, None
+            feed, end_arg = DataFeed.IEX, end  # IEX has no 15-minute rule; history and live share one feed
         else:
             feed = DataFeed.SIP
             end_arg = min(end, datetime.now(UTC) - SIP_LAG)

@@ -97,12 +97,28 @@ def upsert_bars(instrument: Instrument, timeframe: str, df: pd.DataFrame, source
     return after - before
 
 
+SOURCE_PRIORITY = ['alpaca:sip:split', 'alpaca:crypto', 'yahoo', 'alpaca:iex', 'synthetic']
+
+
+def best_source(instrument: Instrument, timeframe: str, exclude_sources: list | None = None) -> str | None:
+    have = set(Bar.objects.filter(instrument=instrument, timeframe=timeframe).values_list('source', flat=True).distinct())
+    have -= set(exclude_sources or [])
+    for src in SOURCE_PRIORITY:
+        if src in have:
+            return src
+    return next(iter(sorted(have)), None)
+
+
 def load_frame(instrument: Instrument, timeframe: str, start: datetime | None = None,
                end: datetime | None = None, limit: int | None = None,
-               exclude_sources: list | None = None) -> pd.DataFrame:
-    qs = Bar.objects.filter(instrument=instrument, timeframe=timeframe)
-    if exclude_sources:
-        qs = qs.exclude(source__in=list(exclude_sources))
+               exclude_sources: list | None = None, source: str | None = None) -> pd.DataFrame:
+    """One feed's bars. Without `source`, the best available feed is used, so
+    two feeds for the same timestamps never get mixed."""
+    if source is None:
+        source = best_source(instrument, timeframe, exclude_sources)
+        if source is None:
+            return empty_frame()
+    qs = Bar.objects.filter(instrument=instrument, timeframe=timeframe, source=source)
     if start is not None:
         qs = qs.filter(ts__gte=start)
     if end is not None:
@@ -122,17 +138,23 @@ def load_frame(instrument: Instrument, timeframe: str, start: datetime | None = 
     return df
 
 
-def latest_ts(instrument: Instrument, timeframe: str) -> datetime | None:
-    row = Bar.objects.filter(instrument=instrument, timeframe=timeframe).order_by('-ts').values_list('ts', flat=True).first()
-    return row
+def latest_ts(instrument: Instrument, timeframe: str, source: str | None = None) -> datetime | None:
+    qs = Bar.objects.filter(instrument=instrument, timeframe=timeframe)
+    if source:
+        qs = qs.filter(source=source)
+    return qs.order_by('-ts').values_list('ts', flat=True).first()
 
 
 def coverage(instrument: Instrument, timeframe: str) -> dict:
     qs = Bar.objects.filter(instrument=instrument, timeframe=timeframe)
     first = qs.order_by('ts').values_list('ts', flat=True).first()
     last = qs.order_by('-ts').values_list('ts', flat=True).first()
-    sources = list(qs.values_list('source', flat=True).distinct())
-    return {'first': first, 'last': last, 'count': qs.count(), 'sources': sources}
+    per_source = {}
+    for src in qs.values_list('source', flat=True).distinct():
+        sq = qs.filter(source=src)
+        per_source[src] = {'count': sq.count(), 'first': sq.order_by('ts').values_list('ts', flat=True).first(),
+                           'last': sq.order_by('-ts').values_list('ts', flat=True).first()}
+    return {'first': first, 'last': last, 'count': qs.count(), 'sources': list(per_source), 'per_source': per_source}
 
 
 def sync_bars(instrument: Instrument, timeframe: str, start: datetime, end: datetime,
@@ -144,8 +166,8 @@ def sync_bars(instrument: Instrument, timeframe: str, start: datetime, end: date
     would burn the rate limit for nothing) — `resync` wipes and refetches.
     """
     source = source or getattr(provider, 'source_label', lambda ac: provider.name)(instrument.asset_class)
-    first = Bar.objects.filter(instrument=instrument, timeframe=timeframe).order_by('ts').values_list('ts', flat=True).first()
-    last = latest_ts(instrument, timeframe)
+    first = Bar.objects.filter(instrument=instrument, timeframe=timeframe, source=source).order_by('ts').values_list('ts', flat=True).first()
+    last = latest_ts(instrument, timeframe, source)
     ranges = []
     if first is None:
         ranges.append((start, end))
@@ -168,7 +190,8 @@ def sync_bars(instrument: Instrument, timeframe: str, start: datetime, end: date
 
 
 def resync(instrument: Instrument, timeframe: str, start: datetime, end: datetime, provider: BarProvider) -> dict:
-    Bar.objects.filter(instrument=instrument, timeframe=timeframe).delete()
+    source = getattr(provider, 'source_label', lambda ac: provider.name)(instrument.asset_class)
+    Bar.objects.filter(instrument=instrument, timeframe=timeframe, source=source).delete()
     return sync_bars(instrument, timeframe, start, end, provider)
 
 

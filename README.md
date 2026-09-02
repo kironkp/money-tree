@@ -87,6 +87,14 @@ tap for the audit). Kill switch and Stop reach a sleeping agent within 2 seconds
    every enabled strategy on trailing real bars; promote only when the search's
    out-of-sample profit factor beats the current params' and clears costs; journal it.
 
+## Direction is the strategy's call
+
+Every strategy evaluates longs and shorts on every bar and picks whichever
+setup is there (a breakdown shorts, a cross down shorts, a stretch above VWAP
+shorts). The only veto is the venue's: crypto spot cannot be shorted. There is
+no switch for the operator to set; the nightly walk-forward decides whether a
+strategy's shorts earn their keep.
+
 ## Accounts & people
 
 Sign-up (`/accounts/signup/`) is **invite-only**: emails in `SIGNUP_ALLOWED_EMAILS`

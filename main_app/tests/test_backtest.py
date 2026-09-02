@@ -34,6 +34,13 @@ class BacktestsAreIntradayAndBalanced(SimpleTestCase):
                 if self.ac[t.symbol] != 'crypto':
                     self.assertEqual(t.entry_ts.astimezone(ET).date(), t.exit_ts.astimezone(ET).date(), key)
 
+    def test_strategies_short_stocks_but_never_crypto(self):
+        for key, params in (('orb', {'min_relvol': 0.0}), ('ema_momentum', {'min_relvol': 0.0}), ('vwap_reversion', {})):
+            r = self._run(key, params)
+            sides = {t.side for t in r.trades}
+            self.assertIn('short', sides, key)
+            self.assertFalse(any(t.side == 'short' and self.ac[t.symbol] == 'crypto' for t in r.trades), key)
+
     def test_orb_trades_at_most_once_per_symbol_per_day(self):
         r = self._run('orb', {'min_relvol': 0.0, 'range_minutes': 15})
         seen = set()

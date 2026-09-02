@@ -65,14 +65,13 @@ class RiskManagerRefusesTradesThatCannotPayTheirFees(SimpleTestCase):
 
 class RiskManagerBlocksWhatItShould(SimpleTestCase):
     def setUp(self):
-        self.rm = RiskManager(RiskConfig(max_open_positions=2, max_trades_per_day=3, allow_short=False))
+        self.rm = RiskManager(RiskConfig(max_open_positions=2, max_trades_per_day=3))
         self.rm.new_day(T0.date(), 10000)
 
-    def test_shorting_disabled_and_crypto_short(self):
-        self.assertIn('short', self.rm.evaluate(sig(action='sell'), ctx(), acct(), {}, 'stock').reason)
-        rm2 = RiskManager(RiskConfig(allow_short=True))
-        rm2.new_day(T0.date(), 10000)
-        self.assertIn('crypto', rm2.evaluate(sig(action='sell'), ctx(None, ac='crypto'), acct(), {}, 'crypto').reason)
+    def test_stock_shorts_are_the_strategys_call_but_crypto_spot_cannot_short(self):
+        d = self.rm.evaluate(Signal('sell', 'X', T0, 100.0, 102.0, 96.0), ctx(), acct(), {}, 'stock')
+        self.assertTrue(d.allowed)
+        self.assertIn('crypto', self.rm.evaluate(sig(action='sell'), ctx(None, ac='crypto'), acct(), {}, 'crypto').reason)
 
     def test_already_in_position_and_max_positions(self):
         pos = {'X': Position('X', 10, 100, T0), 'Y': Position('Y', 10, 100, T0)}

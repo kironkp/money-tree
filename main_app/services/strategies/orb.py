@@ -28,7 +28,6 @@ class OpeningRangeBreakout(Strategy):
         Param('rr', 'float', 2.0, 1.0, 4.0, 0.5, help='Target as a multiple of risk'),
         Param('min_relvol', 'float', 1.0, 0.0, 2.0, 0.5, help='Minimum relative volume on the breakout bar'),
         Param('entry_window_minutes', 'int', 120, 60, 240, 60, help='Only enter this long after the open'),
-        Param('trade_short', 'bool', False, help='Also fade breakdowns (needs allow_short in Settings)'),
     )
     warmup_bars = 20
 
@@ -64,7 +63,7 @@ class OpeningRangeBreakout(Strategy):
             st['traded_session'] = bar.session
             return [Signal('buy', ctx.symbol, ctx.ts, float(bar.close), float(stop), float(target),
                            reason=f'ORB↑ close {bar.close:.2f} > range high {bar.or_high:.2f}')]
-        if self.p['trade_short'] and bar.close < bar.or_low:
+        if ctx.asset_class != 'crypto' and bar.close < bar.or_low:
             stop = bar.close + risk
             target = bar.close - self.p['rr'] * risk
             st['traded_session'] = bar.session
@@ -83,11 +82,15 @@ class OpeningRangeBreakout(Strategy):
         range_ok = not np.isnan(bar.or_high)
         if range_ok:
             out.append(Rule('range', True, f'opening range {bar.or_low:,.2f}–{bar.or_high:,.2f} is set'))
-            broke = bar.close > bar.or_high
-            out.append(Rule('breakout', bool(broke),
-                            f'close {bar.close:,.2f} broke above the range high {bar.or_high:,.2f}' if broke
-                            else f'close {bar.close:,.2f} is inside the range (needs above {bar.or_high:,.2f})',
-                            value=bar.close, threshold=bar.or_high))
+            broke_up = bar.close > bar.or_high
+            broke_down = bar.close < bar.or_low and ctx.asset_class != 'crypto'
+            if broke_up:
+                text = f'close {bar.close:,.2f} broke above the range high {bar.or_high:,.2f} (long)'
+            elif broke_down:
+                text = f'close {bar.close:,.2f} broke below the range low {bar.or_low:,.2f} (short)'
+            else:
+                text = f'close {bar.close:,.2f} is inside the range (long above {bar.or_high:,.2f}, short below {bar.or_low:,.2f})'
+            out.append(Rule('breakout', bool(broke_up or broke_down), text, value=bar.close, threshold=bar.or_high))
         else:
             out.append(Rule('range', False, f'opening range still forming ({int(bar.bar_pos) + 1} bars in)'))
         in_window = bar.minutes_since_open <= self.p['entry_window_minutes']

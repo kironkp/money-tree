@@ -25,7 +25,6 @@ class EmaMomentum(Strategy):
         Param('stop_atr_mult', 'float', 1.5, 0.5, 2.5, 0.5, help='Stop distance in ATRs'),
         Param('rr', 'float', 2.0, 1.0, 4.0, 0.5, help='Target as a multiple of risk'),
         Param('min_relvol', 'float', 1.0, 0.0, 2.0, 0.5, help='Minimum relative volume at entry'),
-        Param('trade_short', 'bool', False, help='Mirror for downside crosses'),
     )
     warmup_bars = 40
 
@@ -62,7 +61,7 @@ class EmaMomentum(Strategy):
             return [Signal('buy', ctx.symbol, ctx.ts, float(bar.close), float(bar.close - risk),
                            float(bar.close + self.p['rr'] * risk),
                            reason=f'EMA{int(self.p["fast"])}>{int(self.p["slow"])} cross, RSI {bar.rsi:.0f}')]
-        if self.p['trade_short'] and cross_down and (100 - self.p['rsi_max']) <= bar.rsi <= (100 - self.p['rsi_min']):
+        if ctx.asset_class != 'crypto' and cross_down and (100 - self.p['rsi_max']) <= bar.rsi <= (100 - self.p['rsi_min']):
             return [Signal('sell', ctx.symbol, ctx.ts, float(bar.close), float(bar.close + risk),
                            float(bar.close - self.p['rr'] * risk),
                            reason=f'EMA{int(self.p["fast"])}<{int(self.p["slow"])} cross, RSI {bar.rsi:.0f}')]
@@ -75,16 +74,23 @@ class EmaMomentum(Strategy):
         if ctx.position is not None:
             return [Rule('holding', True, f'holding; EMA{fast} {bar.ema_fast:,.2f} vs EMA{slow} {bar.ema_slow:,.2f} (exits on a cross down)')]
         cross_up = bar.ema_diff > 0 and bar.ema_diff_prev <= 0
+        cross_down = bar.ema_diff < 0 and bar.ema_diff_prev >= 0
+        can_short = ctx.asset_class != 'crypto'
         if cross_up:
-            cross_text = f'EMA{fast} just crossed above EMA{slow}'
+            cross_text = f'EMA{fast} just crossed above EMA{slow} (long setup)'
+        elif cross_down and can_short:
+            cross_text = f'EMA{fast} just crossed below EMA{slow} (short setup)'
         elif bar.ema_diff > 0:
             cross_text = f'EMA{fast} is above EMA{slow} (bullish) but did not newly cross'
         else:
-            cross_text = f'EMA{fast} is below EMA{slow} (bearish)'
-        out = [Rule('cross', bool(cross_up), cross_text, value=bar.ema_diff, threshold=0.0)]
-        in_band = self.p['rsi_min'] <= bar.rsi <= self.p['rsi_max']
+            cross_text = f'EMA{fast} is below EMA{slow} (bearish)' + (' but did not newly cross' if can_short else '')
+        out = [Rule('cross', bool(cross_up or (cross_down and can_short)), cross_text, value=bar.ema_diff, threshold=0.0)]
+        lo, hi = self.p['rsi_min'], self.p['rsi_max']
+        if cross_down and can_short:
+            lo, hi = 100 - self.p['rsi_max'], 100 - self.p['rsi_min']
+        in_band = lo <= bar.rsi <= hi
         out.append(Rule('rsi', bool(in_band), f'RSI {bar.rsi:.0f} ' + ('within' if in_band else 'outside') +
-                        f' the {self.p["rsi_min"]:.0f}–{self.p["rsi_max"]:.0f} band', value=bar.rsi, threshold=self.p['rsi_min']))
+                        f' the {lo:.0f}–{hi:.0f} band', value=bar.rsi, threshold=lo))
         vol_ok = bar.relvol >= self.p['min_relvol']
         out.append(Rule('volume', bool(vol_ok), f'relative volume {bar.relvol:.1f} vs {self.p["min_relvol"]:.1f} required',
                         value=bar.relvol, threshold=self.p['min_relvol']))

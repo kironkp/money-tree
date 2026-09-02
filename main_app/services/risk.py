@@ -18,7 +18,7 @@ class RiskConfig:
     max_trades_per_day: int = 12
     no_entries_before_close_min: int = 30
     flat_before_close_min: int = 5
-    allow_short: bool = False
+    allow_short: bool = True  # direction is the strategy's decision; only the venue can veto (crypto spot)
     max_hold_minutes: int = 240
     slippage_bps: float = 3.0
     default_stop_pct: float = 2.0  # when a signal carries no stop
@@ -34,7 +34,7 @@ class RiskConfig:
             max_open_positions=int(cfg.max_open_positions), max_daily_loss_pct=float(cfg.max_daily_loss_pct),
             max_trades_per_day=int(cfg.max_trades_per_day),
             no_entries_before_close_min=int(cfg.no_entries_before_close_min),
-            flat_before_close_min=int(cfg.flat_before_close_min), allow_short=bool(cfg.allow_short),
+            flat_before_close_min=int(cfg.flat_before_close_min), allow_short=True,
             max_hold_minutes=int(cfg.max_hold_minutes), slippage_bps=float(cfg.slippage_bps),
             min_reward_to_cost=float(cfg.min_reward_to_cost),
             fee_bps={'stock': float(cfg.fee_bps_stock), 'etf': float(cfg.fee_bps_stock), 'crypto': float(cfg.fee_bps_crypto)},
@@ -129,8 +129,6 @@ class RiskManager:
             return Decision(False, reason=f'halted for the day: {self.day.halted_reason}')
         if not strategy_supports:
             return Decision(False, reason=f'strategy does not trade {asset_class}')
-        if sig.action == 'sell' and not c.allow_short:
-            return Decision(False, reason='shorting disabled')
         if sig.action == 'sell' and asset_class == 'crypto':
             return Decision(False, reason='crypto cannot be shorted')
         if sig.symbol in positions and positions[sig.symbol].qty != 0:

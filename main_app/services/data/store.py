@@ -90,10 +90,14 @@ def upsert_bars(instrument: Instrument, timeframe: str, df: pd.DataFrame, source
             trade_count=None if np.isnan(tc) else int(tc),
             source=source,
         ))
-    before = Bar.objects.filter(instrument=instrument, timeframe=timeframe).count()
+    before = Bar.objects.filter(instrument=instrument, timeframe=timeframe, source=source).count()
     with transaction.atomic():
-        Bar.objects.bulk_create(rows, batch_size=BATCH, ignore_conflicts=True)
-    after = Bar.objects.filter(instrument=instrument, timeframe=timeframe).count()
+        # A bar fetched seconds after its close is often still filling in; a
+        # later fetch must be allowed to correct it.
+        Bar.objects.bulk_create(rows, batch_size=BATCH, update_conflicts=True,
+                                update_fields=['open', 'high', 'low', 'close', 'volume', 'vwap', 'trade_count'],
+                                unique_fields=['instrument', 'timeframe', 'source', 'ts'])
+    after = Bar.objects.filter(instrument=instrument, timeframe=timeframe, source=source).count()
     return after - before
 
 
@@ -182,6 +186,9 @@ def sync_bars(instrument: Instrument, timeframe: str, start: datetime, end: date
     for a, b in ranges:
         df = provider.get_bars(instrument.symbol, timeframe, a, b, instrument.asset_class)
         fetched += len(df)
+        # Never store the bar that is still forming: a history sync run mid-bar
+        # would freeze a partial bar into the record.
+        df = complete_bars_only(df, timeframe, datetime.now(UTC), 0)
         df, rep = quality_gate(df, timeframe, instrument.asset_class)
         issues.extend(rep.issues)
         added += upsert_bars(instrument, timeframe, df, source)

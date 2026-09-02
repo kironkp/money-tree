@@ -42,6 +42,11 @@ from .timeframes import floor_to_bar, tf_delta, tf_minutes
 log = logging.getLogger('moneytree.agent')
 
 WINDOW_BARS = 420          # trailing bars loaded per symbol each tick
+# Seconds after a bar closes before it is read. Probe 2026-09-02: Alpaca IEX
+# 5-minute bars were final 5 s after the close; 10 s leaves a margin. Yahoo is
+# simply late.
+GRACE_S = {'alpaca': 10, 'yahoo': 20, 'synthetic': 1}
+REFRESH_BARS = 3           # re-fetch this many recent bars each tick so revisions replace partial ones
 SNAPSHOT_EVERY = timedelta(minutes=5)
 CONTROL_POLL_S = 2
 STRATEGY_CHECK_S = 60
@@ -449,7 +454,7 @@ class Agent:
 
     def run_live(self) -> None:
         provider = self.provider
-        grace = 5 if provider.name == 'alpaca' else 20
+        grace = GRACE_S.get(provider.name, 20)
         stock_syms = [s for s, ac in self.asset_classes.items() if ac != 'crypto']
         crypto_syms = [s for s, ac in self.asset_classes.items() if ac == 'crypto']
         step = self.step
@@ -533,7 +538,7 @@ class Agent:
             by_class.setdefault(self.asset_classes[s], []).append(s)
         for ac, syms in by_class.items():
             since_candidates = [self.last_processed[s] for s in syms if s in self.last_processed]
-            since = (min(since_candidates) - step) if since_candidates else (now - 6 * step)
+            since = (min(since_candidates) - REFRESH_BARS * step) if since_candidates else (now - 6 * step)
             since = max(since, now - timedelta(days=3))
             try:
                 frames = provider.latest_bars(syms, self.timeframe, since, ac)

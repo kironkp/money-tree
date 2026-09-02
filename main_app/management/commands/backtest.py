@@ -4,7 +4,7 @@ from datetime import date, timedelta
 
 from django.core.management.base import BaseCommand, CommandError
 
-from main_app.models import AgentConfig, BacktestRun, Instrument
+from main_app.models import AgentConfig, BacktestRun, Instrument, market_for_symbols
 from main_app.services.backtest import run_backtest_for_model
 from main_app.services.strategies import STRATEGIES
 
@@ -36,7 +36,7 @@ class Command(BaseCommand):
         except json.JSONDecodeError as exc:
             raise CommandError(f'--params must be JSON: {exc}')
         run = BacktestRun.objects.create(strategy_key=cls.key, params={**cls.defaults(), **params}, symbols=symbols,
-                                         timeframe=o['timeframe'] or cfg.timeframe, start=start, end=end,
+                                         timeframe=o['timeframe'] or cfg.timeframe_for(market_for_symbols(symbols)), start=start, end=end,
                                          starting_cash=o['cash'] if o['cash'] else cfg.starting_cash, tag=o['tag'])
         run_backtest_for_model(run)
         run.refresh_from_db()

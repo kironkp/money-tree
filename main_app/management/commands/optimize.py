@@ -5,7 +5,7 @@ from datetime import date, timedelta
 
 from django.core.management.base import BaseCommand, CommandError
 
-from main_app.models import AgentConfig, Experiment, Instrument
+from main_app.models import AgentConfig, Experiment, Instrument, market_for_symbols
 from main_app.services.optimize import grid_from_schema, run_experiment
 from main_app.services.strategies import STRATEGIES
 
@@ -24,6 +24,7 @@ class Command(BaseCommand):
         parser.add_argument('--train-days', type=int, default=40)
         parser.add_argument('--test-days', type=int, default=15)
         parser.add_argument('--grid', default='', help='JSON {param: [values]} overrides')
+        parser.add_argument('--timeframe', default='', help='default: the market\'s timeframe (stocks/crypto) from settings')
 
     def handle(self, *args, **o):
         if o['experiment']:
@@ -40,8 +41,9 @@ class Command(BaseCommand):
             end = date.fromisoformat(o['end']) if o['end'] else date.today()
             start = date.fromisoformat(o['start']) if o['start'] else end - timedelta(days=90)
             grid = grid_from_schema(cls.key, json.loads(o['grid']) if o['grid'] else None)
+            timeframe = o['timeframe'] or cfg.timeframe_for(market_for_symbols(symbols))
             exp = Experiment.objects.create(strategy_key=cls.key, method=o['method'], param_grid=grid, symbols=symbols,
-                                            timeframe=cfg.timeframe, start=start, end=end, objective=o['objective'],
+                                            timeframe=timeframe, start=start, end=end, objective=o['objective'],
                                             windows={'train_days': o['train_days'], 'test_days': o['test_days']})
         run_experiment(exp)
         exp.refresh_from_db()

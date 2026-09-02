@@ -41,11 +41,19 @@ class AccountAdapter(DefaultAccountAdapter):
         return user
 
     def send_mail(self, template_prefix, email, context):
+        link = (context.get('activate_url') or context.get('password_reset_url') or context.get('key') or '')
         try:
             super().send_mail(template_prefix, email, context)
         except (SMTPException, OSError) as exc:
-            link = (context.get('activate_url') or context.get('password_reset_url') or context.get('key') or '')
             logger.warning('Auth email to %s failed: %s', email, exc)
             print(f'[email:fallback] could not send to {email} — {exc}\n[email:fallback] action link: {link}', flush=True)
-            if settings.DEBUG and self.request is not None and link:
-                messages.info(self.request, f'Email delivery is not configured on this server. Use this link instead: {link}')
+            self._show_link(link, 'Email delivery failed on this server.')
+            return
+        if not settings.EMAIL_HOST:
+            # Console backend: the mail only went to the server log. In dev the
+            # owner is the only reader, so put the link on the page too.
+            self._show_link(link, 'No email server is configured, so nothing was sent.')
+
+    def _show_link(self, link: str, why: str) -> None:
+        if settings.DEBUG and self.request is not None and link:
+            messages.info(self.request, f'{why} Use this link instead: {link}')

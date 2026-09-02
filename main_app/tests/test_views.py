@@ -146,6 +146,15 @@ class AuthPagesAndInvites(TestCase):
         self.assertFalse(AgentConfig.get().kill_switch)
         self.assertEqual(self.client.get(reverse('dashboard')).status_code, 200)
 
+    def test_password_reset_shows_the_link_when_no_mail_server(self):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user('owner', 'owner@example.com', 'owner-passw0rd!')
+        EmailAddress.objects.create(user=u, email='owner@example.com', verified=True, primary=True)
+        with self.settings(EMAIL_HOST='', DEBUG=True):
+            r = self.client.post('/accounts/password/reset/', {'email': 'owner@example.com'}, follow=True)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, '/accounts/password/reset/key/')
+
     def test_email_login_works_for_bootstrapped_owner(self):
         from django.contrib.auth import get_user_model
         u = get_user_model().objects.create_user('owner', 'owner@example.com', 'owner-passw0rd!')

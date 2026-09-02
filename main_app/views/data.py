@@ -25,17 +25,20 @@ def data_index(request):
     cfg = AgentConfig.get()
     rows = []
     for inst in Instrument.objects.all():
-        cov = coverage(inst, cfg.timeframe)
+        tf = cfg.timeframe_for('crypto' if inst.is_crypto else 'stocks')
+        cov = coverage(inst, tf)
+        cov['timeframe'] = tf
         rows.append({'inst': inst, 'cov': cov})
     now = timezone.now()
     s = cal.session_at(now)
     return render(request, 'data/index.html', {
         'rows': rows, 'cfg': cfg, 'form': InstrumentForm(), 'providers': provider_status(),
         'market_open': bool(s), 'next_open': cal.next_open(now), 'now': now,
-        'log': procs.tail('sync', 25), 'timeframes': ['1Min', '5Min', '15Min'],
+        'log': procs.tail('sync', 25), 'timeframes': ['1Min', '5Min', '15Min', '30Min', '1Hour'],
         'upcoming': [x for x in cal.sessions_between(now.date(), (now + timedelta(days=21)).date()) if x.early_close][:3],
         'total_bars': Bar.objects.count(),
-        'synthetic': synthetic_symbols(Instrument.objects.filter(in_watchlist=True), cfg.timeframe),
+        'synthetic': synthetic_symbols(Instrument.objects.filter(in_watchlist=True), cfg.timeframe)
+                     + synthetic_symbols(Instrument.objects.filter(in_watchlist=True, asset_class='crypto'), cfg.crypto_timeframe),
     })
 
 

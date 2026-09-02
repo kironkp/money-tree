@@ -118,6 +118,9 @@ class AgentConfig(models.Model):
     trading_enabled = models.BooleanField(default=True)
     kill_switch = models.BooleanField(default=False)
     timeframe = models.CharField(max_length=8, default='5Min')
+    # Crypto pays ~50 bps a round trip; 5-minute targets are smaller than that.
+    # Hourly bars give the trade room to clear its costs.
+    crypto_timeframe = models.CharField(max_length=8, default='1Hour')
     starting_cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))
 
     # Risk — percentages are of account equity.
@@ -139,6 +142,9 @@ class AgentConfig(models.Model):
     fee_bps_crypto = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('25'))
     # A fill may not exceed this share of the bar's volume; the rest is left unfilled.
     liquidity_cap_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('1'))
+    # An entry's target must be at least this many times the round-trip cost
+    # (fees + slippage, both sides); otherwise the trade cannot pay for itself.
+    min_reward_to_cost = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('3'))
 
     # Live-mode ritual (v2).
     live_armed_at = models.DateTimeField(null=True, blank=True)
@@ -162,6 +168,9 @@ class AgentConfig(models.Model):
 
     def fee_bps_for(self, instrument: Instrument) -> Decimal:
         return self.fee_bps_crypto if instrument.is_crypto else self.fee_bps_stock
+
+    def timeframe_for(self, market: str) -> str:
+        return self.crypto_timeframe if market == Market.CRYPTO else self.timeframe
 
 
 class Account(models.Model):

@@ -81,7 +81,7 @@ class Agent:
         if self.mode == Mode.REPLAY:
             self.account.reset()
         self.narrator = Narrator(self.account, echo=not self.quiet)
-        self.timeframe = self.cfg.timeframe
+        self.timeframe = self.cfg.timeframe_for(self.market)
         self.instruments = {i.symbol: i for i in Instrument.objects.filter(in_watchlist=True, active=True,
                                                                          asset_class__in=self.account.asset_classes)}
         if not self.instruments:

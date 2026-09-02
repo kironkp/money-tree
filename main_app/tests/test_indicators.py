@@ -39,6 +39,12 @@ class IndicatorsAreCausalAndBounded(SimpleTestCase):
         self.assertTrue((first == 1.0).all())
         self.assertGreater(rv.iloc[-1], 0)
 
+    def test_zero_volume_bars_read_as_neutral_relative_volume(self):
+        df = self.df.copy()
+        df.loc[df.index[-3:], 'volume'] = 0.0
+        rv = ind.relative_volume(df, self.session, 10)
+        self.assertTrue((rv.iloc[-3:] == 1.0).all())
+
     def test_minutes_to_close_counts_down(self):
         mtc = ind.minutes_to_close(self.df.index, 'stock')
         day = mtc[self.session == self.session.iloc[0]]

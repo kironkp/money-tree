@@ -252,7 +252,7 @@ COACH_MODEL = os.getenv('COACH_MODEL', 'claude-opus-5')
 COACH_ENABLED = bool(ANTHROPIC_API_KEY)
 
 # Timeframes the app knows how to store and trade on.
-TIMEFRAMES = ['1Min', '5Min', '15Min', '1Day']
+TIMEFRAMES = ['1Min', '5Min', '15Min', '30Min', '1Hour', '1Day']
 DEFAULT_TIMEFRAME = '5Min'
 
 LOGGING = {

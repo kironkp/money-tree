@@ -22,6 +22,10 @@ class RiskConfig:
     max_hold_minutes: int = 240
     slippage_bps: float = 3.0
     default_stop_pct: float = 2.0  # when a signal carries no stop
+    # Round-trip cost gate: |target − entry| / entry must be ≥ min_reward_to_cost ×
+    # (2 × fee + 2 × slippage). Below that the trade cannot pay for itself.
+    min_reward_to_cost: float = 3.0
+    fee_bps: dict = field(default_factory=lambda: {'stock': 0.5, 'etf': 0.5, 'crypto': 25.0})
 
     @classmethod
     def from_model(cls, cfg) -> 'RiskConfig':
@@ -32,7 +36,12 @@ class RiskConfig:
             no_entries_before_close_min=int(cfg.no_entries_before_close_min),
             flat_before_close_min=int(cfg.flat_before_close_min), allow_short=bool(cfg.allow_short),
             max_hold_minutes=int(cfg.max_hold_minutes), slippage_bps=float(cfg.slippage_bps),
+            min_reward_to_cost=float(cfg.min_reward_to_cost),
+            fee_bps={'stock': float(cfg.fee_bps_stock), 'etf': float(cfg.fee_bps_stock), 'crypto': float(cfg.fee_bps_crypto)},
         )
+
+    def round_trip_cost_pct(self, asset_class: str) -> float:
+        return 2 * (self.fee_bps.get(asset_class, 0.5) + self.slippage_bps) / 1e4 * 100
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -120,6 +129,11 @@ class RiskManager:
         price = float(sig.price)
         if price <= 0 or math.isnan(price):
             return Decision(False, reason='no price')
+        if sig.target is not None and c.min_reward_to_cost > 0:
+            reward_pct = abs(float(sig.target) - price) / price * 100
+            cost_pct = c.round_trip_cost_pct(asset_class)
+            if reward_pct < c.min_reward_to_cost * cost_pct:
+                return Decision(False, reason=f'target {reward_pct:.2f}% < {c.min_reward_to_cost:g}× round-trip cost {cost_pct:.2f}%')
         stop = sig.stop
         stop_dist = abs(price - stop) if stop else price * c.default_stop_pct / 100.0
         if stop_dist <= 0:

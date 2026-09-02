@@ -27,6 +27,8 @@ def _timeframe(timeframe: str):
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
     if timeframe == '1Day':
         return TimeFrame.Day
+    if timeframe == '1Hour':
+        return TimeFrame(1, TimeFrameUnit.Hour)
     return TimeFrame(tf_minutes(timeframe), TimeFrameUnit.Minute)
 
 

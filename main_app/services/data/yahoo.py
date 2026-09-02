@@ -14,7 +14,8 @@ from .providers import BarProvider, empty_frame, normalize_frame
 
 log = logging.getLogger('moneytree.data.yahoo')
 
-INTRADAY_LOOKBACK = {'1Min': timedelta(days=7), '5Min': timedelta(days=59), '15Min': timedelta(days=59)}
+INTRADAY_LOOKBACK = {'1Min': timedelta(days=7), '5Min': timedelta(days=59), '15Min': timedelta(days=59),
+                     '30Min': timedelta(days=59), '1Hour': timedelta(days=729)}
 
 
 def yahoo_symbol(symbol: str) -> str:

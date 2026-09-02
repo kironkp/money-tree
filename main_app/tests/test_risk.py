@@ -47,6 +47,22 @@ class RiskManagerSizesByStopDistance(SimpleTestCase):
         self.assertAlmostEqual(d.qty, 0.02)
 
 
+class RiskManagerRefusesTradesThatCannotPayTheirFees(SimpleTestCase):
+    def test_small_target_on_crypto_is_blocked_and_wide_target_passes(self):
+        rm = RiskManager(RiskConfig(min_reward_to_cost=3.0, slippage_bps=3.0), {'BTC/USD': 0.0001})
+        rm.new_day(T0.date(), 10000)
+        # round-trip cost on crypto = 2 × (25 + 3) bps = 0.56% → target must be ≥ 1.68% away
+        small = Signal('buy', 'BTC/USD', T0, 100000.0, 99800.0, 100400.0)
+        d = rm.evaluate(small, ctx(None, 'BTC/USD', 'crypto'), acct(), {}, 'crypto')
+        self.assertFalse(d.allowed)
+        self.assertIn('round-trip cost', d.reason)
+        wide = Signal('buy', 'BTC/USD', T0, 100000.0, 99000.0, 102000.0)
+        self.assertTrue(rm.evaluate(wide, ctx(None, 'BTC/USD', 'crypto'), acct(), {}, 'crypto').allowed)
+        # stocks: 2 × (0.5 + 3) bps = 0.07% → a 0.4% target clears 3× easily
+        stock = Signal('buy', 'X', T0, 100.0, 99.5, 100.4)
+        self.assertTrue(rm.evaluate(stock, ctx(), acct(), {}, 'stock').allowed)
+
+
 class RiskManagerBlocksWhatItShould(SimpleTestCase):
     def setUp(self):
         self.rm = RiskManager(RiskConfig(max_open_positions=2, max_trades_per_day=3, allow_short=False))

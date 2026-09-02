@@ -115,7 +115,7 @@ def persist_broker(account: Account, broker, instruments: dict[str, Instrument],
         account.day_start_date = today
         account.day_start_equity = account.equity
     account.last_synced_at = timezone.now()
-    account.save()
+    account.save(update_fields=['cash', 'equity', 'buying_power', 'day_start_date', 'day_start_equity', 'last_synced_at'])
     live = {s: p for s, p in broker.positions.items() if p.qty != 0}
     account.positions.exclude(instrument__symbol__in=list(live)).delete()
     for symbol, p in live.items():

@@ -26,12 +26,13 @@ class AgentConfigForm(forms.ModelForm):
     class Meta:
         model = AgentConfig
         fields = [
-            'trading_enabled', 'timeframe', 'starting_cash', 'risk_per_trade_pct', 'max_position_pct',
+            'trading_enabled', 'timeframe', 'crypto_timeframe', 'starting_cash', 'risk_per_trade_pct', 'max_position_pct',
             'max_open_positions', 'max_daily_loss_pct', 'max_trades_per_day', 'no_entries_before_close_min',
             'flat_before_close_min', 'allow_short', 'max_hold_minutes', 'slippage_bps', 'fee_bps_stock',
-            'fee_bps_crypto', 'liquidity_cap_pct',
+            'fee_bps_crypto', 'liquidity_cap_pct', 'min_reward_to_cost',
         ]
-        widgets = {'timeframe': forms.Select(choices=[(t, t) for t in ('1Min', '5Min', '15Min')])}
+        widgets = {'timeframe': forms.Select(choices=[(t, t) for t in ('1Min', '5Min', '15Min', '30Min', '1Hour')]),
+                   'crypto_timeframe': forms.Select(choices=[(t, t) for t in ('5Min', '15Min', '30Min', '1Hour')])}
 
 
 class InstrumentForm(forms.ModelForm):

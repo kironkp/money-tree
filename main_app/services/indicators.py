@@ -77,8 +77,9 @@ def relative_volume(df: pd.DataFrame, session: pd.Series, n_sessions: int = 10) 
     """Volume vs the average volume at the same bar position over the previous
     n sessions. Causal: the current session is excluded via shift(1)."""
     pos = bar_position(session)
-    base = df['volume'].groupby(pos).transform(lambda s: s.shift(1).rolling(n_sessions, min_periods=1).mean())
-    return (df['volume'] / base.replace(0, np.nan)).fillna(1.0)
+    vol = df['volume'].replace(0, np.nan)  # missing volume (Yahoo crypto) must not read as "no interest"
+    base = vol.groupby(pos).transform(lambda s: s.shift(1).rolling(n_sessions, min_periods=1).mean())
+    return (vol / base.replace(0, np.nan)).fillna(1.0)
 
 
 def bollinger(s: pd.Series, n: int = 20, k: float = 2.0) -> tuple[pd.Series, pd.Series, pd.Series]:

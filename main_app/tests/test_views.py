@@ -155,6 +155,22 @@ class AuthPagesAndInvites(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertContains(r, '/accounts/password/reset/key/')
 
+    def test_password_reset_key_logs_in_and_lands_on_the_dashboard(self):
+        import re
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user('owner', 'owner@example.com', 'owner-passw0rd!')
+        EmailAddress.objects.create(user=u, email='owner@example.com', verified=True, primary=True)
+        with self.settings(EMAIL_HOST='', DEBUG=True):
+            r = self.client.post('/accounts/password/reset/', {'email': 'owner@example.com'}, follow=True)
+            self.assertContains(r, 'Back to log in')
+            path = re.search(r'/accounts/password/reset/key/[^\s"<]+', r.content.decode()).group(0)
+            r = self.client.get(path, follow=True)  # allauth stores the key in the session and redirects
+            r = self.client.post(r.redirect_chain[-1][0] if r.redirect_chain else path,
+                                 {'password1': 'brand-new-passw0rd!', 'password2': 'brand-new-passw0rd!'})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r['Location'], reverse('dashboard'))
+        self.assertEqual(self.client.get(reverse('dashboard')).status_code, 200)
+
     def test_email_login_works_for_bootstrapped_owner(self):
         from django.contrib.auth import get_user_model
         u = get_user_model().objects.create_user('owner', 'owner@example.com', 'owner-passw0rd!')

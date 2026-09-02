@@ -1,0 +1,9 @@
+{% extends "account/base_entrance.html" %}
+{% load i18n %}
+{% load allauth %}
+{% block head_title %}{% trans "Verify Your Email Address" %}{% endblock head_title %}
+{% block content %}
+    {% element h1 %}{% trans "Verify Your Email Address" %}{% endelement %}
+    {% element p %}{% blocktrans %}We have sent an email to you for verification. Follow the link provided to finalize the signup process.{% endblocktrans %}{% endelement %}
+    <p><a class="btn primary" href="{% url 'account_login' %}">Log in →</a></p>
+{% endblock content %}

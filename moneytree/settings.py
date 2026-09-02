@@ -213,6 +213,8 @@ ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']
 # an invited user can log in right away (the console still prints the link).
 ACCOUNT_EMAIL_VERIFICATION = 'mandatory' if EMAIL_HOST else 'optional'
 ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
+# A finished password reset logs you in and lands on the dashboard — no dead end.
+ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
 ACCOUNT_LOGOUT_ON_GET = False
 # Sign-up is invite-only. These addresses are always allowed and become operators.
 SIGNUP_ALLOWED_EMAILS = [e.strip().lower() for e in

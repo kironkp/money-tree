@@ -12,25 +12,32 @@ from .ledger import DBRecorder, hydrate_broker, persist_broker
 from .risk import RiskConfig
 
 
-def running_agent(account: Account | None = None) -> AgentRun | None:
-    qs = AgentRun.objects.filter(status='running')
-    if account is not None:
-        qs = qs.filter(account=account)
-    for run in qs.order_by('-started_at'):
+def running_agents() -> list[AgentRun]:
+    """Live agent processes (one per account), marking dead rows stopped."""
+    out = []
+    for run in AgentRun.objects.filter(status='running').select_related('account').order_by('-started_at'):
         if run.is_alive:
-            return run
+            out.append(run)
+            continue
         run.status = 'stopped'
         run.stopped_at = timezone.now()
         run.message = (run.message + ' (process gone)')[:300]
         run.save(update_fields=['status', 'stopped_at', 'message'])
+    return out
+
+
+def running_agent(account: Account | None = None) -> AgentRun | None:
+    for run in running_agents():
+        if account is None or run.account_id == account.pk:
+            return run
     return None
 
 
-def flatten_account(mode: str, reason: str = 'manual') -> int:
+def flatten_account(mode: str, reason: str = 'manual', market: str = 'stocks') -> int:
     """Close every position on an account at the last known prices."""
     cfg = AgentConfig.get()
-    account = Account.for_mode(mode)
-    instruments = {i.symbol: i for i in Instrument.objects.all()}
+    account = Account.for_mode(mode, market)
+    instruments = {i.symbol: i for i in Instrument.objects.filter(asset_class__in=account.asset_classes)}
     ac = {s: i.asset_class for s, i in instruments.items()}
     if mode in ('sim', 'replay'):
         broker = SimBroker(float(account.cash), immediate_fills=True, slippage_bps=float(cfg.slippage_bps), asset_classes=ac)

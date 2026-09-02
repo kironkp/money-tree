@@ -62,3 +62,12 @@ class VwapReversion(Strategy):
             return [Signal('sell', ctx.symbol, ctx.ts, float(bar.close), float(bar.close + risk), float(bar.svwap),
                            strength=min(1.0, abs(bar.z) / 3), reason=f'z={bar.z:.2f} above VWAP {bar.svwap:.2f}')]
         return []
+
+    def explain(self, ctx: Context, bar) -> str:
+        if np.isnan(bar.z):
+            return 'warming up'
+        if ctx.position is not None:
+            return f'holding, z {bar.z:+.2f}, {ctx.position.bars_held} bars (exit at VWAP {bar.svwap:,.2f})'
+        if bar.bar_pos < self.p['min_bar_pos']:
+            return f'too early in the session ({int(bar.bar_pos) + 1}/{self.p["min_bar_pos"]} bars)'
+        return f'z {bar.z:+.2f} vs VWAP {bar.svwap:,.2f} (buy at ≤ −{self.p["entry_z"]:.1f})'

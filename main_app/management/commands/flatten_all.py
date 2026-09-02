@@ -9,7 +9,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--mode', default='sim')
+        parser.add_argument('--market', default='stocks')
 
     def handle(self, *args, **o):
-        n = flatten_account(o['mode'], 'manual')
+        n = flatten_account(o['mode'], 'manual', o['market'])
         self.stdout.write(self.style.SUCCESS(f'closed {n} positions on the {o["mode"]} account'))

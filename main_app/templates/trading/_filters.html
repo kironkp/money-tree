@@ -1,6 +1,7 @@
 {% load mt_tags %}
 <form method="get" class="pill-row" style="margin-bottom: var(--s-3)">
   <input type="hidden" name="account" value="{{ account.mode }}">
+  <input type="hidden" name="market" value="{{ account.market }}">
   <select name="strategy" style="width:auto"><option value="">all strategies</option>{% for k in f.strategies %}<option value="{{ k }}" {% if k == f.strategy %}selected{% endif %}>{{ k }}</option>{% endfor %}</select>
   <input type="text" name="symbol" placeholder="symbol" value="{{ f.symbol }}" style="width:110px">
   <select name="days" style="width:auto">

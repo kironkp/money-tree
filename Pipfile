@@ -20,6 +20,8 @@ alpaca-py = "*"
 yfinance = "*"
 # The coach (end-of-day review). Dormant without ANTHROPIC_API_KEY.
 anthropic = "*"
+django-allauth = {extras = ["socialaccount", "mfa"], version = ">=65.19.0"}
+cryptography = "==43.0.3"
 
 [dev-packages]
 

@@ -3,9 +3,9 @@
 {% block title %}Signals · MoneyTree{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Signals</h1>
-  <div class="tabs"><a href="?account={{ account.mode }}&days={{ f.days }}" class="{% if not which %}active{% endif %}">all</a>
-    <a href="?account={{ account.mode }}&which=acted&days={{ f.days }}" class="{% if which == 'acted' %}active{% endif %}">acted</a>
-    <a href="?account={{ account.mode }}&which=blocked&days={{ f.days }}" class="{% if which == 'blocked' %}active{% endif %}">blocked</a></div></div>
+  <div class="tabs"><a href="?{{ account.query }}&days={{ f.days }}" class="{% if not which %}active{% endif %}">all</a>
+    <a href="?{{ account.query }}&which=acted&days={{ f.days }}" class="{% if which == 'acted' %}active{% endif %}">acted</a>
+    <a href="?{{ account.query }}&which=blocked&days={{ f.days }}" class="{% if which == 'blocked' %}active{% endif %}">blocked</a></div></div>
 {% include 'trading/_tabs.html' %}
 {% include 'trading/_filters.html' %}
 {% if blocked_counts %}

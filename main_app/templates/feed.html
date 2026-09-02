@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Feed · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Live feed</h1>
+  <div class="tabs">{% for a in tabs %}<a href="?{{ a.query }}" class="{% if a.pk == account.pk %}active{% endif %}">{{ a.label }}</a>{% endfor %}</div></div>
+{% include 'partials/feed.html' with feed_class='tall' %}
+{% endblock %}

@@ -3,13 +3,13 @@
 {% block title %}{{ row.name }} · MoneyTree{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>{{ row.name }} <span class="badge {{ row.stage }}">{{ row.stage }}</span> <small class="muted">v{{ row.version }}</small></h1>
-  <div class="actions">
+  <h1>{{ row.name }} <span class="badge">{{ row.market }}</span> <span class="badge {{ row.stage }}">{{ row.stage }}</span> <small class="muted">v{{ row.version }}</small></h1>
+  {% if is_operator %}<div class="actions">
     <form method="post" class="inline">{% csrf_token %}<input type="hidden" name="action" value="toggle"><button class="btn {% if row.enabled %}warn{% else %}primary{% endif %}">{% if row.enabled %}Disable{% else %}Enable{% endif %}</button></form>
-    <form method="post" action="{% url 'strategy-backtest' row.key %}" class="inline">{% csrf_token %}
+    <form method="post" action="{% url 'strategy-backtest' row.market row.key %}" class="inline">{% csrf_token %}
       <select name="days" style="width:auto;display:inline-block"><option value="30">30d</option><option value="60" selected>60d</option><option value="120">120d</option><option value="250">250d</option></select>
       <button class="btn">Backtest current params</button></form>
-  </div>
+  </div>{% endif %}
 </div>
 <p class="small">{{ cls.description }} · trades {{ cls.asset_classes|joinlist }} · needs {{ cls.warmup_bars }} bars of warm-up{% if crypto %} · <span class="warn">crypto fees ≈ 50 bps round trip — scalps rarely survive them</span>{% endif %}</p>
 

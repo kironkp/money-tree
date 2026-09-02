@@ -87,7 +87,7 @@ def write_eod_journal(account: Account, d: date | None = None, auto_disable: boo
     d = d or timezone.localdate()
     s = day_summary(account, d)
     drifts = []
-    for row in Strategy.objects.filter(enabled=True):
+    for row in Strategy.objects.filter(enabled=True, market=account.market):
         dc = drift_check(account, row)
         drifts.append(dc)
         if dc['drift'] and auto_disable and account.mode != 'replay':

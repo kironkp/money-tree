@@ -32,15 +32,18 @@ def seed_db(symbols=('QQQ', 'NVDA'), with_bars=True, start=WEEK_START, end=WEEK_
     return cfg, instruments
 
 
-def make_user():
-    return get_user_model().objects.create_user('tester', 't@example.com', 'pw-tester-1')
+def make_user(staff=True):
+    u = get_user_model().objects.create_user('tester', 't@example.com', 'pw-tester-1')
+    u.is_staff = staff
+    u.save()
+    return u
 
 
-def enable_strategy(key='orb', params=None, symbols=None, stage='sprout'):
+def enable_strategy(key='orb', params=None, symbols=None, stage='sprout', market='stocks'):
     from main_app.services.strategies import get_strategy_class
     cls = get_strategy_class(key)
-    row, _ = Strategy.objects.get_or_create(key=key, defaults={'name': cls.name, 'params': cls.defaults(),
-                                                                'timeframe': cls.default_timeframe})
+    row, _ = Strategy.objects.get_or_create(key=key, market=market, defaults={'name': cls.name, 'params': cls.defaults(),
+                                                                               'timeframe': cls.default_timeframe})
     row.params = {**cls.defaults(), **(params or {})}
     row.symbols = symbols or list(Instrument.objects.values_list('symbol', flat=True))
     row.enabled = True

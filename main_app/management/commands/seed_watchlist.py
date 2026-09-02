@@ -5,7 +5,7 @@ from decimal import Decimal
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from main_app.models import Account, AgentConfig, AssetClass, Instrument, Mode, Strategy
+from main_app.models import Account, AgentConfig, AssetClass, Instrument, Market, Mode, Strategy
 from main_app.services.strategies import all_strategies
 
 DEFAULTS = [
@@ -34,16 +34,21 @@ class Command(BaseCommand):
         if settings.ALPACA_ENABLED:
             self.refresh_increments()
         for mode in (Mode.SIM, Mode.PAPER, Mode.REPLAY):
-            Account.for_mode(mode)
+            for market in (Market.STOCKS, Market.CRYPTO):
+                Account.for_mode(mode, market)
         stocks = [s for s, _, ac in DEFAULTS if ac != AssetClass.CRYPTO]
-        everything = [s for s, _, _ in DEFAULTS]
+        cryptos = [s for s, _, ac in DEFAULTS if ac == AssetClass.CRYPTO]
         for cls in all_strategies():
-            row, created = Strategy.objects.get_or_create(key=cls.key, defaults={
-                'name': cls.name, 'params': cls.defaults(), 'timeframe': cls.default_timeframe,
-                'symbols': stocks if 'crypto' not in cls.asset_classes else everything, 'notes': cls.description,
-            })
-            if created:
-                self.stdout.write(f'  + strategy {cls.key}')
+            markets = [(Market.STOCKS, stocks)]
+            if 'crypto' in cls.asset_classes:
+                markets.append((Market.CRYPTO, cryptos))
+            for market, symbols in markets:
+                row, created = Strategy.objects.get_or_create(key=cls.key, market=market, defaults={
+                    'name': cls.name, 'params': cls.defaults(), 'timeframe': cls.default_timeframe,
+                    'symbols': symbols, 'notes': cls.description,
+                })
+                if created:
+                    self.stdout.write(f'  + strategy {cls.key} ({market})')
         self.stdout.write(self.style.SUCCESS(
             f'watchlist: {Instrument.objects.filter(in_watchlist=True).count()} instruments, '
             f'{Strategy.objects.count()} strategies, config timeframe {cfg.timeframe}, starting cash {cfg.starting_cash}'))

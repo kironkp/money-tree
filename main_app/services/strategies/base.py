@@ -144,3 +144,7 @@ class Strategy:
 
     def on_session_end(self, symbol: str) -> None:
         self.state.pop(symbol, None)
+
+    def explain(self, ctx: Context, bar) -> str:
+        """One short clause on why nothing fired this bar (for the live feed)."""
+        return 

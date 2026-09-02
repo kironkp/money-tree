@@ -16,6 +16,12 @@ Same engine, same risk manager, same strategy code at every stage. Promotion
 is gated by a checklist (sessions, trades, profit factor, drawdown, live
 expectancy vs backtest, realized slippage) shown on each strategy page.
 
+Two agents, two piggy banks: the **stocks agent** trades the NYSE/Nasdaq
+session (09:30–16:00 ET, sleeps otherwise) and the **crypto agent** trades
+BTC/USD and ETH/USD around the clock. Each has its own account, strategy
+rows, process and **live feed** — a running commentary of what it sees,
+decides and does, streamed onto the dashboard.
+
 ## Run it
 
 ```bash
@@ -31,8 +37,9 @@ pipenv run python manage.py runserver 0.0.0.0:8003
 Then, in a second terminal, the agent:
 
 ```bash
-pipenv run python manage.py run_agent --mode sim        # fake currency, live quotes
-pipenv run python manage.py run_agent --replay 2026-08-28 --speed 30   # demo a past session
+pipenv run python manage.py run_agent --mode sim --market stocks   # fake currency, live quotes
+pipenv run python manage.py run_agent --mode sim --market crypto   # the one that never sleeps
+pipenv run python manage.py run_agent --replay 2026-08-28 --speed 30 --market stocks   # demo a past session
 ```
 
 Or start/stop it from the dashboard. One agent per account (file lock in
@@ -56,6 +63,14 @@ years of split-adjusted history and real-time IEX quotes.
 6. **Coach** — with `ANTHROPIC_API_KEY`, Claude reviews recent sessions and
    proposes experiments you can run with one click.
 7. **Graduate** — when the checklist is green, move the strategy up a stage.
+
+## Accounts & people
+
+Sign-up (`/accounts/signup/`) is **invite-only**: emails in `SIGNUP_ALLOWED_EMAILS`
+can always join as operators; everyone else needs an invite from
+Settings → People and is view-only until promoted. Password reset, email
+management and passkeys are django-allauth; without `EMAIL_HOST` the links
+print to the server console (and show on the page in dev).
 
 ## Commands
 

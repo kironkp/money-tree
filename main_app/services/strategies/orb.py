@@ -71,3 +71,19 @@ class OpeningRangeBreakout(Strategy):
             return [Signal('sell', ctx.symbol, ctx.ts, float(bar.close), float(stop), float(target),
                            reason=f'ORB↓ close {bar.close:.2f} < range low {bar.or_low:.2f}')]
         return []
+
+    def explain(self, ctx: Context, bar) -> str:
+        if ctx.position is not None:
+            pos = ctx.position
+            return f'holding {pos.side} from {pos.avg_price:,.2f}, stop {pos.stop:,.2f}, target {pos.target:,.2f}'
+        st = self.symbol_state(ctx.symbol)
+        if st.get('traded_session') == bar.session:
+            return 'done for today (one trade per session)'
+        if np.isnan(bar.or_high):
+            return f'opening range forming ({int(bar.bar_pos) + 1} bars in)'
+        if bar.minutes_since_open > self.p['entry_window_minutes']:
+            return 'entry window closed'
+        note = f'inside range {bar.or_low:,.2f}–{bar.or_high:,.2f}'
+        if bar.relvol < self.p['min_relvol']:
+            note += f', relvol {bar.relvol:.1f} < {self.p["min_relvol"]:.1f}'
+        return note

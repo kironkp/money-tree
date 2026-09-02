@@ -31,6 +31,25 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
 - Backtests run inline in the request; experiments, replays, syncs and the
   agent are `manage.py` subprocesses (`procs.spawn_manage`) logging to `run/`.
 
+## v1.1 additions
+
+- **Markets**: `Account`, `Strategy` and `AgentRun` carry `market` (stocks|crypto).
+  One agent process per account (`run_agent --market`), lock `run/agent-{mode}-{market}.lock`,
+  log `run/agent-{mode}-{market}.log`. Strategy URLs are `/strategies/<market>/<key>/`.
+  `market_for_symbols()` picks the promote target for a backtest/experiment.
+- **Live feed**: `FeedEvent` rows via `services/narrator.py` (buffered, flushed per
+  tick; backtests get no narrator). Engine narrates fills/trades/signals/blocks/time
+  exits; strategies implement `explain()` for the per-bar "thoughts" line. Poller:
+  `static/js/feed.js` → `/api/feed/?account=&market=&after=`.
+- **Auth**: django-allauth (email login, invite-only signup via `InviteSignupForm`
+  + `SignupInvite`, password reset, passkeys). `operator_required` /
+  `deny_observer` gate every mutating view; `is_staff` = operator. Owner rows are
+  verified by `bootstrap_admin`.
+- **Data hygiene**: live agents load frames with `exclude_sources=['synthetic']`;
+  the Data page offers a one-click replacement with real bars.
+- **Tabs**: `static/js/tabs.js` traveling indicator + `@view-transition` for
+  cross-page flow (Secretary's nav-tabs feel).
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live

@@ -36,14 +36,40 @@
     <dl class="kv">
       <dt>Alpaca paper</dt><dd>{% if keys.alpaca_paper %}<span class="up">configured</span>{% else %}<span class="warn">missing — free at app.alpaca.markets</span>{% endif %}</dd>
       <dt>Alpaca live</dt><dd>{% if keys.alpaca_live %}<span class="up">configured</span>{% else %}not set{% endif %}</dd>
-      <dt>Coach</dt><dd>{% if keys.coach %}<span class="up">{{ keys.coach_model }}</span>{% else %}dormant (ANTHROPIC_API_KEY)</dd>{% endif %}
+      <dt>Coach</dt><dd>{% if keys.coach %}<span class="up">{{ keys.coach_model }}</span>{% else %}dormant (ANTHROPIC_API_KEY){% endif %}</dd>
+      <dt>Email</dt><dd>{% if keys.email %}<span class="up">SMTP configured</span>{% else %}console only — reset/verification links print to the server log (and show on the page in dev){% endif %}</dd>
     </dl>
     <h3 style="margin-top: var(--s-4)">Accounts</h3>
     <table><thead><tr><th>Account</th><th class="num">Seed</th><th class="num">Equity</th><th class="num">Cash</th><th></th></tr></thead><tbody>
     {% for a in accounts %}<tr><td>{{ a.name }}</td><td class="num">{{ a.starting_cash|money }}</td><td class="num {{ a.total_pnl|sign_class }}">{{ a.equity|money }}</td><td class="num">{{ a.cash|money }}</td>
-      <td>{% if a.mode != 'live' %}<form method="post" action="{% url 'reset-account' %}" class="inline" data-confirm="Reset {{ a.name }}? Positions, orders, trades and snapshots are wiped.">{% csrf_token %}<input type="hidden" name="mode" value="{{ a.mode }}"><button class="btn small">reset</button></form>{% endif %}</td></tr>{% endfor %}
+      <td>{% if a.mode != 'live' and is_operator %}<form method="post" action="{% url 'reset-account' %}" class="inline" data-confirm="Reset {{ a.name }}? Positions, orders, trades and snapshots are wiped.">{% csrf_token %}<input type="hidden" name="mode" value="{{ a.mode }}"><input type="hidden" name="market" value="{{ a.market }}"><button class="btn small">reset</button></form>{% endif %}</td></tr>{% endfor %}
     </tbody></table>
     <p class="small muted">Reset uses the starting cash above. Alpaca's paper balance is reset in their dashboard — set it to the same seed so Sprout and Sapling compare.</p>
+  </div>
+  <div class="card span-2">
+    <h3>People — sign-up is invite-only</h3>
+    <p class="small muted">Always allowed (operators): {{ allowed_emails|joinlist }}. Everyone else needs an invite; invited people are view-only unless "operator" is ticked or the owner promotes them here. Sign-up page: <code>/accounts/signup/</code>.</p>
+    <div class="grid cols-2">
+      <div>
+        <table><thead><tr><th>User</th><th>Role</th><th>Last login</th><th></th></tr></thead><tbody>
+        {% for u in users %}<tr><td>{{ u.email|default:u.username }}</td><td>{% if u.is_superuser %}<span class="badge ok">owner</span>{% elif u.is_staff %}<span class="badge ok">operator</span>{% else %}<span class="badge">view-only</span>{% endif %}</td><td class="small">{{ u.last_login|et|default:'never' }}</td>
+          <td>{% if user.is_superuser and not u.is_superuser %}<form method="post" action="{% url 'people' %}" class="inline">{% csrf_token %}<input type="hidden" name="action" value="toggle_operator"><input type="hidden" name="id" value="{{ u.pk }}"><button class="btn small">{% if u.is_staff %}make view-only{% else %}make operator{% endif %}</button></form>{% endif %}</td></tr>{% endfor %}
+        </tbody></table>
+      </div>
+      <div>
+        {% if is_operator %}
+        <form method="post" action="{% url 'people' %}">{% csrf_token %}<input type="hidden" name="action" value="invite">
+          <div class="form-grid"><div class="field"><label>Email</label>{{ invite_form.email }}</div><div class="field"><label>Note</label>{{ invite_form.note }}</div></div>
+          <label class="small"><input type="checkbox" name="make_operator"> operator (can start/stop agents and change settings)</label>
+          <p><button class="btn primary small">Invite</button></p>
+        </form>
+        {% endif %}
+        {% if invites %}<table><thead><tr><th>Invite</th><th>Status</th><th></th></tr></thead><tbody>
+        {% for i in invites %}<tr><td>{{ i.email }}{% if i.make_operator %} <span class="badge ok">operator</span>{% endif %}<br><small>{{ i.note }}</small></td><td class="small">{% if i.used_at %}used {{ i.used_at|et }}{% else %}pending{% endif %}</td>
+          <td>{% if is_operator %}<form method="post" action="{% url 'people' %}" class="inline">{% csrf_token %}<input type="hidden" name="action" value="revoke"><input type="hidden" name="id" value="{{ i.pk }}"><button class="btn small">revoke</button></form>{% endif %}</td></tr>{% endfor %}
+        </tbody></table>{% endif %}
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}

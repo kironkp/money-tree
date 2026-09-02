@@ -67,3 +67,14 @@ class EmaMomentum(Strategy):
                            float(bar.close - self.p['rr'] * risk),
                            reason=f'EMA{int(self.p["fast"])}<{int(self.p["slow"])} cross, RSI {bar.rsi:.0f}')]
         return []
+
+    def explain(self, ctx: Context, bar) -> str:
+        if np.isnan(bar.ema_diff_prev):
+            return 'warming up'
+        rel = '>' if bar.ema_diff > 0 else '<'
+        note = f'EMA{int(self.p["fast"])} {bar.ema_fast:,.2f} {rel} EMA{int(self.p["slow"])} {bar.ema_slow:,.2f}, RSI {bar.rsi:.0f}'
+        if ctx.position is not None:
+            return f'holding, {note}'
+        if bar.relvol < self.p['min_relvol']:
+            note += f', relvol {bar.relvol:.1f} low'
+        return note + ' — waiting for a cross'

@@ -61,6 +61,11 @@ class ReplayMatchesTheBacktest(TestCase):
             self.assertAlmostEqual(x.qty, float(y.qty))
         run = AgentRun.objects.get()
         self.assertEqual(run.status, 'stopped')
+        from main_app.models import FeedEvent
+        levels = set(FeedEvent.objects.filter(account__mode='replay').values_list('level', flat=True))
+        self.assertIn('trade', levels)
+        self.assertIn('bar', levels)
+        self.assertTrue(FeedEvent.objects.filter(level='signal', text__startswith='BUY').exists())
         self.assertTrue(EquitySnapshot.objects.filter(account__mode='replay').exists())
         self.assertTrue(JournalEntry.objects.filter(kind='auto_eod').exists())
         self.assertTrue(Signal.objects.filter(account__mode='replay').exists())

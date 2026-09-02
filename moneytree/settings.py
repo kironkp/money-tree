@@ -29,7 +29,7 @@ environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 SECRET_KEY = env('SECRET_KEY')
 # Bump per release; tagged in git (v1.0, v1.1, …) with a matching
 # backups/db-<tag>.sqlite3 snapshot. Rollback recipe lives in CLAUDE.md.
-VERSION = '1.0'
+VERSION = '1.1'
 
 if 'ON_HEROKU' in os.environ:
     DEBUG = False
@@ -68,7 +68,25 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    # Auth surface as in kre8essence: email login, signup (invite-only here),
+    # password reset, passkeys (allauth.mfa), Google dormant until keyed.
+    'allauth',
+    'allauth.account',
+    'allauth.mfa',
+    'allauth.socialaccount',
 ]
+
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '')
+GOOGLE_ENABLED = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
+if GOOGLE_ENABLED:
+    INSTALLED_APPS.append('allauth.socialaccount.providers.google')
+    SOCIALACCOUNT_PROVIDERS = {
+        'google': {'APPS': [{'client_id': GOOGLE_CLIENT_ID, 'secret': GOOGLE_CLIENT_SECRET}],
+                   'SCOPE': ['profile', 'email']}
+    }
+    SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
+    SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = True
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -77,6 +95,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'allauth.account.middleware.AccountMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -166,9 +185,47 @@ WHITENOISE_MANIFEST_STRICT = False
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-LOGIN_URL = 'login'
+AUTHENTICATION_BACKENDS = [
+    'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
+]
+
+# Email — password reset and verification mail. Console backend by default;
+# Resend SMTP drops in via EMAIL_* (host smtp.resend.com, user "resend",
+# password = API key). The adapter never lets a send failure 500 a flow.
+EMAIL_HOST = os.getenv('EMAIL_HOST', '')
+if EMAIL_HOST:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+    EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+    EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', '1') == '1'
+    EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+    EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+else:
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'MoneyTree <onboarding@resend.dev>')
+
+# allauth (65.x settings family).
+ACCOUNT_ADAPTER = 'main_app.adapters.AccountAdapter'
+ACCOUNT_FORMS = {'signup': 'main_app.forms.InviteSignupForm'}
+ACCOUNT_LOGIN_METHODS = {'email'}
+ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']
+# Verification is only enforced once real email delivery exists; until then
+# an invited user can log in right away (the console still prints the link).
+ACCOUNT_EMAIL_VERIFICATION = 'mandatory' if EMAIL_HOST else 'optional'
+ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
+ACCOUNT_LOGOUT_ON_GET = False
+# Sign-up is invite-only. These addresses are always allowed and become operators.
+SIGNUP_ALLOWED_EMAILS = [e.strip().lower() for e in
+                         os.getenv('SIGNUP_ALLOWED_EMAILS', os.getenv('DJANGO_SUPERUSER_EMAIL', '')).split(',') if e.strip()]
+
+# Passkeys: WebAuthn needs a secure context; localhost is allowed in DEBUG.
+MFA_SUPPORTED_TYPES = ['webauthn', 'totp', 'recovery_codes']
+MFA_PASSKEY_LOGIN_ENABLED = True
+MFA_WEBAUTHN_ALLOW_INSECURE_ORIGIN = DEBUG
+
+LOGIN_URL = 'account_login'
 LOGIN_REDIRECT_URL = 'dashboard'
-LOGOUT_REDIRECT_URL = 'login'
+LOGOUT_REDIRECT_URL = 'account_login'
 
 # ---------------------------------------------------------------------------
 # MoneyTree

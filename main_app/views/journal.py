@@ -16,7 +16,7 @@ from main_app.services import procs
 from main_app.services.journal import write_eod_journal
 from main_app.services.optimize import grid_from_schema
 
-from .common import current_account
+from .common import current_account, operator_required
 
 
 @login_required
@@ -35,7 +35,7 @@ def journal_list(request):
                                                  'coach_cost': total_cost, 'coach_calls': ApiUsage.objects.count()})
 
 
-@login_required
+@operator_required
 @require_POST
 def journal_add(request):
     form = JournalForm(request.POST)
@@ -48,7 +48,7 @@ def journal_add(request):
     return redirect('journal-list')
 
 
-@login_required
+@operator_required
 @require_POST
 def journal_eod_now(request):
     account = current_account(request)
@@ -61,7 +61,7 @@ def journal_eod_now(request):
     return redirect('journal-list')
 
 
-@login_required
+@operator_required
 @require_POST
 def journal_coach_now(request):
     if not settings.COACH_ENABLED:
@@ -78,7 +78,7 @@ def journal_coach_now(request):
     return redirect('journal-list')
 
 
-@login_required
+@operator_required
 @require_POST
 def journal_run_proposal(request, pk, n):
     entry = get_object_or_404(JournalEntry, pk=pk)
@@ -91,7 +91,9 @@ def journal_run_proposal(request, pk, n):
     from main_app.models import Instrument
     from main_app.services.strategies import get_strategy_class
     cls = get_strategy_class(prop['strategy_key'])
-    symbols = [i.symbol for i in Instrument.objects.filter(in_watchlist=True, active=True) if cls.supports(i.asset_class)]
+    account = current_account(request)
+    symbols = [i.symbol for i in Instrument.objects.filter(in_watchlist=True, active=True, asset_class__in=account.asset_classes)
+               if cls.supports(i.asset_class)]
     end = timezone.localdate()
     exp = Experiment.objects.create(
         strategy_key=cls.key, method=prop.get('method', 'grid'), param_grid=grid_from_schema(cls.key, prop.get('param_grid')),
@@ -102,7 +104,7 @@ def journal_run_proposal(request, pk, n):
     return redirect('experiment-detail', pk=exp.pk)
 
 
-@login_required
+@operator_required
 @require_POST
 def journal_delete(request, pk):
     entry = get_object_or_404(JournalEntry, pk=pk)

@@ -98,8 +98,11 @@ def upsert_bars(instrument: Instrument, timeframe: str, df: pd.DataFrame, source
 
 
 def load_frame(instrument: Instrument, timeframe: str, start: datetime | None = None,
-               end: datetime | None = None, limit: int | None = None) -> pd.DataFrame:
+               end: datetime | None = None, limit: int | None = None,
+               exclude_sources: list | None = None) -> pd.DataFrame:
     qs = Bar.objects.filter(instrument=instrument, timeframe=timeframe)
+    if exclude_sources:
+        qs = qs.exclude(source__in=list(exclude_sources))
     if start is not None:
         qs = qs.filter(ts__gte=start)
     if end is not None:
@@ -176,3 +179,9 @@ def complete_bars_only(df: pd.DataFrame, timeframe: str, now: datetime, grace_s:
         return df
     cutoff = now - tf_delta(timeframe) - timedelta(seconds=grace_s)
     return df[df.index <= cutoff]
+
+
+def synthetic_symbols(instruments, timeframe: str) -> list[str]:
+    """Watchlist symbols whose stored history is (partly) synthetic."""
+    return sorted(set(Bar.objects.filter(instrument__in=list(instruments), timeframe=timeframe, source='synthetic')
+                      .values_list('instrument__symbol', flat=True)))

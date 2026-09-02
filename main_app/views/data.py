@@ -15,7 +15,9 @@ from main_app.models import AgentConfig, Bar, Instrument, Trade
 from main_app.services import procs
 from main_app.services.data import calendar as cal
 from main_app.services.data import provider_status
-from main_app.services.data.store import coverage, load_frame, quality_gate
+from main_app.services.data.store import coverage, load_frame, quality_gate, synthetic_symbols
+
+from .common import operator_required
 
 
 @login_required
@@ -33,10 +35,11 @@ def data_index(request):
         'log': procs.tail('sync', 25), 'timeframes': ['1Min', '5Min', '15Min'],
         'upcoming': [x for x in cal.sessions_between(now.date(), (now + timedelta(days=21)).date()) if x.early_close][:3],
         'total_bars': Bar.objects.count(),
+        'synthetic': synthetic_symbols(Instrument.objects.filter(in_watchlist=True), cfg.timeframe),
     })
 
 
-@login_required
+@operator_required
 @require_POST
 def instrument_add(request):
     form = InstrumentForm(request.POST)
@@ -48,7 +51,7 @@ def instrument_add(request):
     return redirect('data-index')
 
 
-@login_required
+@operator_required
 @require_POST
 def instrument_toggle(request, slug):
     inst = get_object_or_404(Instrument, symbol=Instrument.symbol_from_slug(slug))
@@ -58,7 +61,7 @@ def instrument_toggle(request, slug):
     return redirect('data-index')
 
 
-@login_required
+@operator_required
 @require_POST
 def instrument_delete(request, slug):
     inst = get_object_or_404(Instrument, symbol=Instrument.symbol_from_slug(slug))
@@ -70,7 +73,7 @@ def instrument_delete(request, slug):
     return redirect('data-index')
 
 
-@login_required
+@operator_required
 @require_POST
 def data_sync(request):
     cfg = AgentConfig.get()

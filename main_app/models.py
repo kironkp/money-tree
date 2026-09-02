@@ -28,6 +28,11 @@ class Mode(models.TextChoices):
     REPLAY = 'replay', 'Replay'  # a past session replayed into its own account
 
 
+class Market(models.TextChoices):
+    STOCKS = 'stocks', 'Stocks'   # NYSE/Nasdaq session, 09:30–16:00 ET
+    CRYPTO = 'crypto', 'Crypto'   # 24/7
+
+
 class Stage(models.TextChoices):
     SEED = 'seed', 'Seed'          # backtest only
     SPROUT = 'sprout', 'Sprout'    # trades fake currency on the simulator
@@ -160,7 +165,10 @@ class AgentConfig(models.Model):
 
 
 class Account(models.Model):
-    mode = models.CharField(max_length=8, choices=Mode.choices, unique=True)
+    """One ledger per (mode, market): the stocks agent and the crypto agent are
+    separate piggy banks with separate processes."""
+    mode = models.CharField(max_length=8, choices=Mode.choices)
+    market = models.CharField(max_length=8, choices=Market.choices, default=Market.STOCKS)
     name = models.CharField(max_length=40)
     starting_cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))
     cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))
@@ -174,20 +182,42 @@ class Account(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     reset_at = models.DateTimeField(null=True, blank=True)
 
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['mode', 'market'], name='uniq_account_mode_market')]
+        ordering = ['market', 'mode']
+
     def __str__(self):
-        return f'{self.name} ({self.mode})'
+        return f'{self.name}'
 
     @classmethod
-    def for_mode(cls, mode: str) -> 'Account':
+    def for_mode(cls, mode: str, market: str = Market.STOCKS) -> 'Account':
         cfg_cash = AgentConfig.get().starting_cash
         names = {Mode.SIM: 'Sprout (sim)', Mode.PAPER: 'Sapling (paper)',
                  Mode.LIVE: 'Tree (live)', Mode.REPLAY: 'Replay'}
         obj, _ = cls.objects.get_or_create(
-            mode=mode,
-            defaults={'name': names.get(mode, mode), 'starting_cash': cfg_cash, 'cash': cfg_cash,
+            mode=mode, market=market,
+            defaults={'name': f'{names.get(mode, mode)} · {market}', 'starting_cash': cfg_cash, 'cash': cfg_cash,
                       'equity': cfg_cash, 'buying_power': cfg_cash, 'day_start_equity': cfg_cash},
         )
         return obj
+
+    @property
+    def label(self) -> str:
+        return f'{self.get_market_display()} · {self.mode}'
+
+    @property
+    def asset_classes(self) -> tuple:
+        return (AssetClass.CRYPTO,) if self.market == Market.CRYPTO else (AssetClass.STOCK, AssetClass.ETF)
+
+    @property
+    def query(self) -> str:
+        """Query string that selects this account on any page."""
+        return f'account={self.mode}&market={self.market}'
+
+    @property
+    def log_name(self) -> str:
+        return f'agent-{self.mode}-{self.market}'
+
 
     @property
     def day_pnl(self) -> Decimal:
@@ -214,6 +244,12 @@ class Account(models.Model):
         self.day_start_date = None
         self.reset_at = timezone.now()
         self.save()
+
+
+def market_for_symbols(symbols) -> str:
+    """crypto when every symbol is a pair like BTC/USD, else stocks."""
+    symbols = list(symbols or [])
+    return Market.CRYPTO if symbols and all('/' in s for s in symbols) else Market.STOCKS
 
 
 class Position(models.Model):
@@ -415,6 +451,7 @@ class RiskEvent(models.Model):
 class AgentRun(models.Model):
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='runs')
     mode = models.CharField(max_length=8, choices=Mode.choices)
+    market = models.CharField(max_length=8, choices=Market.choices, default=Market.STOCKS)
     started_at = models.DateTimeField(default=timezone.now)
     last_tick_at = models.DateTimeField(null=True, blank=True)
     stopped_at = models.DateTimeField(null=True, blank=True)
@@ -447,8 +484,10 @@ class AgentRun(models.Model):
 
 
 class Strategy(models.Model):
-    """Persisted configuration for a strategy class in the registry."""
-    key = models.CharField(max_length=40, unique=True)
+    """Persisted configuration for a strategy class in the registry — one row
+    per (strategy, market), so the crypto agent tunes its own copy."""
+    key = models.CharField(max_length=40)
+    market = models.CharField(max_length=8, choices=Market.choices, default=Market.STOCKS)
     name = models.CharField(max_length=80)
     params = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=False)
@@ -463,11 +502,12 @@ class Strategy(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ['name']
+        ordering = ['market', 'name']
         verbose_name_plural = 'strategies'
+        constraints = [models.UniqueConstraint(fields=['key', 'market'], name='uniq_strategy_key_market')]
 
     def __str__(self):
-        return f'{self.name} v{self.version}'
+        return f'{self.name} ({self.market}) v{self.version}'
 
 
 class Experiment(models.Model):
@@ -579,3 +619,44 @@ class ApiUsage(models.Model):
 
     class Meta:
         ordering = ['-ts']
+
+
+class FeedEvent(models.Model):
+    """The running commentary: what the agent sees, decides and does. One row
+    per line; the dashboard streams them. Pruned after two weeks."""
+    LEVELS = ('system', 'bar', 'signal', 'order', 'fill', 'trade', 'risk', 'journal', 'error')
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, null=True, blank=True, related_name='feed')
+    ts = models.DateTimeField(default=timezone.now)
+    level = models.CharField(max_length=8, default='system')
+    symbol = models.CharField(max_length=16, blank=True)
+    strategy_key = models.CharField(max_length=40, blank=True)
+    text = models.CharField(max_length=400)
+    data = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-id']
+        indexes = [models.Index(fields=['account', 'id'])]
+
+    def __str__(self):
+        return f'[{self.level}] {self.text[:60]}'
+
+    @classmethod
+    def prune(cls, days: int = 14) -> int:
+        n, _ = cls.objects.filter(ts__lt=timezone.now() - timezone.timedelta(days=days)).delete()
+        return n
+
+
+class SignupInvite(models.Model):
+    """Sign-up is invite-only: an email on this list may create an account."""
+    email = models.EmailField(unique=True)
+    note = models.CharField(max_length=120, blank=True)
+    make_operator = models.BooleanField(default=False, help_text='Can start/stop the agent and change settings')
+    invited_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.email

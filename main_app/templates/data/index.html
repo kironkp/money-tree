@@ -3,6 +3,11 @@
 {% block title %}Data · MoneyTree{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Data</h1><div class="actions"><span class="small">{{ total_bars }} bars stored · market {% if market_open %}<span class="up">open</span>{% else %}closed, opens {{ next_open|et:'%a %b %d %H:%M' }} ET{% endif %}</span></div></div>
+{% if synthetic %}
+<div class="message warning">Stored history for <strong>{{ synthetic|joinlist }}</strong> is <em>synthetic</em> (a seeded random walk for demos). Live agents ignore it, so their indicators warm up from real bars only. Replace it with real bars:
+  {% if is_operator %}<form method="post" action="{% url 'data-sync' %}" class="inline">{% csrf_token %}<input type="hidden" name="days" value="59"><input type="hidden" name="timeframe" value="{{ cfg.timeframe }}"><input type="hidden" name="resync" value="1"><input type="hidden" name="symbols" value="{{ synthetic|joinlist:',' }}"><button class="btn small primary">Replace with real {{ providers.default }} bars</button></form>{% endif %}
+</div>
+{% endif %}
 <div class="grid cols-2">
   <div class="card span-2">
     <h3>Watchlist &amp; coverage ({{ cfg.timeframe }})</h3>

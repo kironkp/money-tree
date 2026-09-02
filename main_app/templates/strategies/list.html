@@ -3,23 +3,26 @@
 {% block title %}Strategies · MoneyTree{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Strategies</h1>
-  <div class="actions">{% if missing %}<form method="post" action="{% url 'strategy-create-missing' %}">{% csrf_token %}<button class="btn small">Create rows for {{ missing|length }} new strateg{{ missing|length|pluralize:'y,ies' }}</button></form>{% endif %}</div></div>
-<p class="small muted">The ladder: <span class="badge seed">seed</span> backtests only → <span class="badge sprout">sprout</span> trades fake currency on the simulator → <span class="badge sapling">sapling</span> trades the Alpaca paper account → <span class="badge tree">tree</span> real money. An enabled strategy only trades in modes its stage allows.</p>
+  <div class="actions">{% if missing and is_operator %}<form method="post" action="{% url 'strategy-create-missing' %}">{% csrf_token %}<button class="btn small">Create rows for {{ missing|length }} new strateg{{ missing|length|pluralize:'y,ies' }}</button></form>{% endif %}</div></div>
+<p class="small muted">The ladder: <span class="badge seed">seed</span> backtests only → <span class="badge sprout">sprout</span> trades fake currency on the simulator → <span class="badge sapling">sapling</span> trades the Alpaca paper account → <span class="badge tree">tree</span> real money. The stocks agent and the crypto agent each run their own copies.</p>
+{% for market, rows in groups.items %}
+<h2 style="margin-top: var(--s-4)">{{ market|capfirst }} agent</h2>
 <div class="grid cols-2">
 {% for r in rows %}
   <div class="card">
-    <h2><a href="{% url 'strategy-detail' r.row.key %}">{{ r.row.name }}</a> <span class="badge {{ r.row.stage }}">{{ r.row.stage }}</span>
+    <h2><a href="{% url 'strategy-detail' r.row.market r.row.key %}">{{ r.row.name }}</a> <span class="badge {{ r.row.stage }}">{{ r.row.stage }}</span>
       <span class="more">{% if r.row.enabled %}<span class="badge ok">enabled</span>{% else %}<span class="badge">off</span>{% endif %} v{{ r.row.version }}</span></h2>
     <p class="small">{{ r.cls.description }}</p>
     <dl class="kv">
       <dt>Params</dt><dd class="small">{% for k, v in r.row.params.items %}{{ k }}={{ v }}{% if not forloop.last %} · {% endif %}{% endfor %}</dd>
       <dt>Symbols</dt><dd class="small">{{ r.row.symbols|joinlist }}</dd>
       <dt>Assets</dt><dd class="small">{{ r.cls.asset_classes|joinlist }}{% if r.crypto %} <span class="warn">(crypto pays ~50 bps round trip)</span>{% endif %}</dd>
-      <dt>Last 30d ({{ r.account.mode }})</dt><dd class="small">{{ r.stats.trades }} trades · {{ r.stats.net_pnl|default:0|signed_money }} · win {{ r.stats.win_rate|default:0|floatformat:0 }}% · PF {{ r.stats.profit_factor|default:0|floatformat:2 }}</dd>
+      <dt>Last 30d ({{ r.account.label }})</dt><dd class="small">{{ r.stats.trades }} trades · {{ r.stats.net_pnl|default:0|signed_money }} · win {{ r.stats.win_rate|default:0|floatformat:0 }}% · PF {{ r.stats.profit_factor|default:0|floatformat:2 }}</dd>
     </dl>
   </div>
 {% empty %}
-  <div class="card"><p class="empty">no strategies yet — run <code>manage.py seed_watchlist</code> or click the button above</p></div>
+  <div class="card"><p class="empty">no {{ market }} strategies yet — run <code>manage.py seed_watchlist</code></p></div>
 {% endfor %}
 </div>
+{% endfor %}
 {% endblock %}

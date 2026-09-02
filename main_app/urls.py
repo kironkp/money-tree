@@ -1,4 +1,3 @@
-from django.contrib.auth import views as auth_views
 from django.urls import path
 
 from . import views
@@ -22,8 +21,8 @@ urlpatterns = [
 
     path('strategies/', views.strategy_list, name='strategy-list'),
     path('strategies/create-missing/', views.strategy_create_missing, name='strategy-create-missing'),
-    path('strategies/<str:key>/', views.strategy_detail, name='strategy-detail'),
-    path('strategies/<str:key>/backtest/', views.strategy_backtest, name='strategy-backtest'),
+    path('strategies/<str:market>/<str:key>/', views.strategy_detail, name='strategy-detail'),
+    path('strategies/<str:market>/<str:key>/backtest/', views.strategy_backtest, name='strategy-backtest'),
 
     path('backtests/', views.backtest_list, name='backtest-list'),
     path('backtests/compare/', views.backtest_compare, name='backtest-compare'),
@@ -60,6 +59,7 @@ urlpatterns = [
     path('settings/mode/', views.set_mode, name='set-mode'),
     path('settings/reset/', views.reset_account, name='reset-account'),
 
-    path('accounts/login/', auth_views.LoginView.as_view(template_name='registration/login.html'), name='login'),
-    path('accounts/logout/', auth_views.LogoutView.as_view(), name='logout'),
+    path('settings/people/', views.people, name='people'),
+    path('feed/', views.feed_page, name='feed'),
+    path('api/feed/', views.api_feed, name='api-feed'),
 ]

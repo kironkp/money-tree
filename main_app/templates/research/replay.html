@@ -2,22 +2,24 @@
 {% load mt_tags %}
 {% block title %}Replay · MoneyTree{% endblock %}
 {% block content %}
-<div class="page-head"><h1>Replay a session</h1></div>
+<div class="page-head"><h1>Replay a session</h1>
+  <div class="tabs"><a href="?market=stocks" class="{% if market == 'stocks' %}active{% endif %}">Stocks</a><a href="?market=crypto" class="{% if market == 'crypto' %}active{% endif %}">Crypto</a></div></div>
 <div class="grid cols-2">
   <div class="card">
-    <p class="small">Replays a stored session through the live loop into the <strong>Replay</strong> account (reset each run): every enabled strategy, the risk manager, fills at the next bar's open. Watch it on the <a href="{% url 'dashboard' %}?account=replay">dashboard</a>.</p>
-    {% if not enabled %}<p class="message warning">No strategy is enabled — enable one on the Strategies page or the replay will just watch.</p>{% endif %}
-    {% if run %}<p class="message warning">An agent is running ({{ run.mode }}, pid {{ run.pid }}). Stop it from the dashboard first.</p>{% endif %}
+    <p class="small">Replays a stored {{ market }} session through the live loop into the <strong>Replay · {{ market }}</strong> account (reset each run): every enabled {{ market }} strategy, the risk manager, fills at the next bar's open, and the full commentary in the <a href="{% url 'feed' %}?account=replay&market={{ market }}">live feed</a>.</p>
+    {% if not enabled %}<p class="message warning">No {{ market }} strategy is enabled — enable one on the Strategies page or the replay will just watch and explain.</p>{% endif %}
+    {% if run %}<p class="message warning">A {{ market }} replay is running (pid {{ run.pid }}). Stop it from the dashboard first.</p>{% endif %}
     <form method="post">
       {% csrf_token %}
+      <input type="hidden" name="market" value="{{ market }}">
       <div class="form-grid">
         <div class="field"><label>Session</label>
-          <select name="date">{% for d in dates %}<option value="{{ d|date:'Y-m-d' }}">{{ d|date:'D M d, Y' }}</option>{% empty %}<option value="">no bars stored for {{ cfg.timeframe }}</option>{% endfor %}</select></div>
+          <select name="date">{% for d in dates %}<option value="{{ d|date:'Y-m-d' }}">{{ d|date:'D M d, Y' }}</option>{% empty %}<option value="">no {{ market }} bars stored for {{ cfg.timeframe }}</option>{% endfor %}</select></div>
         <div class="field"><label>Speed</label><select name="speed"><option value="10">10× (30 s per 5-min bar)</option><option value="30" selected>30× (10 s per bar)</option><option value="60">60× (5 s per bar)</option><option value="600">600× (as fast as it goes)</option></select></div>
       </div>
-      <button class="btn primary" {% if not dates or run %}disabled{% endif %}>▶ Replay</button>
+      <button class="btn primary" {% if not dates or run or not is_operator %}disabled{% endif %}>▶ Replay</button>
     </form>
   </div>
-  <div class="card"><h3>Replay log</h3><div hx-get="{% url 'agent-log' %}?name=agent-replay" hx-trigger="load, every 5s" hx-swap="innerHTML"><pre class="log">{{ log }}</pre></div></div>
+  <div class="card"><h3>Replay log</h3><div hx-get="{% url 'agent-log' %}?name=agent-replay-{{ market }}" hx-trigger="load, every 5s" hx-swap="innerHTML"><pre class="log">{{ log }}</pre></div></div>
 </div>
 {% endblock %}

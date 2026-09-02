@@ -12,11 +12,12 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--mode', default='sim')
+        parser.add_argument('--market', default='stocks')
         parser.add_argument('--date', default='')
         parser.add_argument('--coach', action='store_true', help='also run the coach review')
 
     def handle(self, *args, **o):
-        account = Account.for_mode(o['mode'])
+        account = Account.for_mode(o['mode'], o['market'])
         d = date.fromisoformat(o['date']) if o['date'] else timezone.localdate()
         entry = write_eod_journal(account, d)
         self.stdout.write(self.style.SUCCESS(f'{entry.title}\n{entry.body}'))

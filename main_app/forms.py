@@ -1,6 +1,25 @@
+from allauth.account.forms import SignupForm
 from django import forms
 
 from .models import AgentConfig, Instrument, Mode
+
+
+class InviteSignupForm(SignupForm):
+    """allauth's signup form, gated: the email must be invited (or on the
+    always-allowed list)."""
+
+    def clean_email(self):
+        email = super().clean_email()
+        from .adapters import signup_allowed
+        if not signup_allowed(email):
+            raise forms.ValidationError('MoneyTree is invite-only. Ask the owner for an invite for this address.')
+        return email
+
+
+class InviteForm(forms.Form):
+    email = forms.EmailField()
+    note = forms.CharField(max_length=120, required=False)
+    make_operator = forms.BooleanField(required=False)
 
 
 class AgentConfigForm(forms.ModelForm):

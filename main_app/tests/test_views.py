@@ -3,7 +3,9 @@ from datetime import date
 from django.test import TestCase
 from django.urls import reverse
 
-from main_app.models import BacktestRun, Experiment, JournalEntry
+from allauth.account.models import EmailAddress
+
+from main_app.models import BacktestRun, Experiment, JournalEntry, SignupInvite
 from main_app.services.backtest import run_backtest_for_model
 from main_app.tests.helpers import enable_strategy, make_user, seed_db
 
@@ -40,11 +42,11 @@ class PagesRenderWithData(TestCase):
     def test_every_page_returns_200(self):
         urls = [reverse('dashboard'), reverse('dashboard-panels'), reverse('api-equity', args=['sim']), reverse('positions'),
                 reverse('orders'), reverse('trades'), reverse('trades-csv'), reverse('signals'), reverse('risk-events'),
-                reverse('strategy-list'), reverse('strategy-detail', args=['orb']), reverse('backtest-list'),
+                reverse('strategy-list'), reverse('strategy-detail', args=['stocks', 'orb']), reverse('backtest-list'),
                 reverse('backtest-detail', args=[self.bt.pk]), reverse('api-backtest-equity', args=[self.bt.pk]),
                 reverse('backtest-compare') + f'?ids={self.bt.pk}', reverse('experiment-list'),
                 reverse('experiment-detail', args=[self.exp.pk]), reverse('experiment-progress', args=[self.exp.pk]),
-                reverse('replay'), reverse('data-index'), reverse('instrument-chart', args=['QQQ']), reverse('api-bars', args=['QQQ']),
+                reverse('replay'), reverse('replay') + '?market=crypto', reverse('feed'), reverse('api-feed'), reverse('data-index'), reverse('instrument-chart', args=['QQQ']), reverse('api-bars', args=['QQQ']),
                 reverse('journal-list'), reverse('settings'), reverse('agent-log'), reverse('sync-log')]
         for url in urls:
             r = self.client.get(url)
@@ -63,7 +65,7 @@ class PagesRenderWithData(TestCase):
         self.assertEqual(self.row.history[-1]['source'], f'backtest #{self.bt.pk}')
 
     def test_strategy_form_saves_params(self):
-        r = self.client.post(reverse('strategy-detail', args=['orb']), {
+        r = self.client.post(reverse('strategy-detail', args=['stocks', 'orb']), {
             'action': 'save', 'range_minutes': '30', 'stop_atr_mult': '1.5', 'rr': '3', 'min_relvol': '0.5',
             'entry_window_minutes': '120', 'symbols': ['QQQ'], 'allocation_pct': '100', 'notes': 'n'})
         self.assertEqual(r.status_code, 302)
@@ -115,3 +117,56 @@ class TemplatesUseSafeComments(TestCase):
                 if end == -1 or '\n' in text[m.end():end]:
                     offenders.append(str(path.relative_to(root)))
         self.assertEqual(offenders, [])
+
+
+class AuthPagesAndInvites(TestCase):
+    def test_login_signup_and_reset_pages_render(self):
+        for url in ('/accounts/login/', '/accounts/signup/', '/accounts/password/reset/'):
+            self.assertEqual(self.client.get(url).status_code, 200, url)
+
+    def test_signup_is_invite_only(self):
+        data = {'email': 'stranger@example.com', 'password1': 'a-long-passw0rd!', 'password2': 'a-long-passw0rd!'}
+        r = self.client.post('/accounts/signup/', data)
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, 'invite-only')
+        SignupInvite.objects.create(email='stranger@example.com', make_operator=False)
+        r = self.client.post('/accounts/signup/', data)
+        self.assertEqual(r.status_code, 302)
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.get(email='stranger@example.com')
+        self.assertFalse(u.is_staff)  # view-only unless invited as operator
+        self.assertIsNotNone(SignupInvite.objects.get(email='stranger@example.com').used_at)
+
+    def test_observer_cannot_change_settings(self):
+        u = make_user(staff=False)
+        self.client.force_login(u)
+        r = self.client.post(reverse('kill-switch'), {'state': 'on'})
+        self.assertEqual(r.status_code, 302)
+        from main_app.models import AgentConfig
+        self.assertFalse(AgentConfig.get().kill_switch)
+        self.assertEqual(self.client.get(reverse('dashboard')).status_code, 200)
+
+    def test_email_login_works_for_bootstrapped_owner(self):
+        from django.contrib.auth import get_user_model
+        u = get_user_model().objects.create_user('owner', 'owner@example.com', 'owner-passw0rd!')
+        EmailAddress.objects.create(user=u, email='owner@example.com', verified=True, primary=True)
+        r = self.client.post('/accounts/login/', {'login': 'owner@example.com', 'password': 'owner-passw0rd!'})
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(self.client.get(reverse('dashboard')).status_code, 200)
+
+
+class FeedStreamsNarration(TestCase):
+    def test_feed_api_returns_events_in_order_and_after_cursor(self):
+        from main_app.models import Account, FeedEvent
+        cls_user = make_user()
+        self.client.force_login(cls_user)
+        account = Account.for_mode('sim', 'stocks')
+        e1 = FeedEvent.objects.create(account=account, level='system', text='hello')
+        e2 = FeedEvent.objects.create(account=account, level='trade', text='CLOSED QQQ', symbol='QQQ')
+        r = self.client.get(reverse('api-feed') + '?account=sim&market=stocks')
+        data = r.json()
+        self.assertEqual([e['id'] for e in data['events']], [e1.id, e2.id])
+        r = self.client.get(reverse('api-feed') + f'?account=sim&market=stocks&after={e1.id}')
+        self.assertEqual([e['text'] for e in r.json()['events']], ['CLOSED QQQ'])
+        r = self.client.get(reverse('api-feed') + '?account=sim&market=stocks&levels=trade')
+        self.assertEqual(len(r.json()['events']), 1)

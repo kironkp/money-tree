@@ -3,7 +3,7 @@
 {% block title %}Trades · MoneyTree{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Trades</h1>
-  <div class="actions"><a class="btn small" href="{% url 'trades-csv' %}?account={{ account.mode }}&strategy={{ f.strategy }}&symbol={{ f.symbol }}&days={{ f.days }}">Export CSV</a></div></div>
+  <div class="actions"><a class="btn small" href="{% url 'trades-csv' %}?{{ account.query }}&strategy={{ f.strategy }}&symbol={{ f.symbol }}&days={{ f.days }}">Export CSV</a></div></div>
 {% include 'trading/_tabs.html' %}
 {% include 'trading/_filters.html' %}
 <div class="tiles">

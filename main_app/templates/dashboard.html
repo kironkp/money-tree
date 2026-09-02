@@ -3,52 +3,60 @@
 {% block title %}Dashboard · MoneyTree{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>{{ account.name }}</h1>
+  <h1>{{ account.label }}</h1>
   <div class="tabs">
-    {% for m in accounts %}<a href="?account={{ m }}" class="{% if m == account.mode %}active{% endif %}">{{ m }}</a>{% endfor %}
+    {% for a in tabs %}<a href="?{{ a.query }}" class="{% if a.pk == account.pk %}active{% endif %}">{{ a.label }}</a>{% endfor %}
   </div>
+  {% if is_operator %}
   <div class="actions">
     {% if run %}
-      <form method="post" action="{% url 'agent-stop' %}" class="inline" data-confirm="Stop the agent? Open positions on sim/paper are flattened.">{% csrf_token %}<button class="btn">■ Stop agent</button></form>
-    {% else %}
+      <form method="post" action="{% url 'agent-stop' %}" class="inline" data-confirm="Stop the {{ account.market }} agent? Open positions on sim/paper are flattened.">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn">■ Stop {{ account.market }} agent</button></form>
+    {% elif account.mode != 'replay' %}
       <form method="post" action="{% url 'agent-start' %}" class="inline">{% csrf_token %}
+        <input type="hidden" name="market" value="{{ account.market }}">
         <select name="mode" style="width:auto;display:inline-block">
           <option value="sim" {% if cfg.mode == 'sim' %}selected{% endif %}>sim (fake $)</option>
           <option value="paper" {% if cfg.mode == 'paper' %}selected{% endif %} {% if not alpaca_enabled %}disabled{% endif %}>paper (Alpaca)</option>
           {% if mode_is_live %}<option value="live" selected>LIVE (real $)</option>{% endif %}
         </select>
-        <button class="btn primary">▶ Start agent</button>
+        <button class="btn primary">▶ Start {{ account.market }} agent</button>
       </form>
-    {% endif %}
-    <form method="post" action="{% url 'flatten-now' %}" class="inline" data-confirm="Close every open position on {{ account.name }} now?">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><button class="btn warn">Flatten all</button></form>
-    {% if cfg.kill_switch %}
-      <form method="post" action="{% url 'kill-switch' %}" class="inline">{% csrf_token %}<input type="hidden" name="state" value="off"><input type="hidden" name="account" value="{{ account.mode }}"><button class="btn">Reset kill switch</button></form>
     {% else %}
-      <form method="post" action="{% url 'kill-switch' %}" class="inline" data-confirm="KILL SWITCH: flatten everything and block all entries until reset?">{% csrf_token %}<input type="hidden" name="state" value="on"><input type="hidden" name="account" value="{{ account.mode }}"><button class="btn danger">Kill switch</button></form>
+      <a class="btn" href="{% url 'replay' %}?market={{ account.market }}">▶ New replay</a>
+    {% endif %}
+    <form method="post" action="{% url 'flatten-now' %}" class="inline" data-confirm="Close every open position on {{ account.name }} now?">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn warn">Flatten all</button></form>
+    {% if cfg.kill_switch %}
+      <form method="post" action="{% url 'kill-switch' %}" class="inline">{% csrf_token %}<input type="hidden" name="state" value="off"><input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn">Reset kill switch</button></form>
+    {% else %}
+      <form method="post" action="{% url 'kill-switch' %}" class="inline" data-confirm="KILL SWITCH: flatten every agent's positions and block all entries until reset?">{% csrf_token %}<input type="hidden" name="state" value="on"><input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn danger">Kill switch</button></form>
     {% endif %}
   </div>
+  {% endif %}
 </div>
+<p class="small muted">{{ market.label }} · {% if run %}<span class="dot on"></span>{{ account.market }} agent running (pid {{ run.pid }}, {{ run.ticks }} ticks, last tick {{ run.heartbeat_age_s|duration }} ago){% else %}<span class="dot"></span>no {{ account.market }} agent running{% endif %}</p>
 
-<div class="card" style="margin-bottom: var(--s-4)">
+{% include 'partials/feed.html' %}
+
+<div class="card" style="margin: var(--s-4) 0">
   <h3>Equity <span class="more">
-    {% for d in day_options %}<a href="?account={{ account.mode }}&days={{ d }}" {% if days == d %}style="font-weight:600"{% endif %}>{{ d }}d</a> {% endfor %}
+    {% for d in day_options %}<a href="?{{ account.query }}&days={{ d }}" {% if days == d %}style="font-weight:600"{% endif %}>{{ d }}d</a> {% endfor %}
   </span></h3>
   <div id="equity-chart" class="chart"></div>
 </div>
 
-<div id="panels" hx-get="{% url 'dashboard-panels' %}?account={{ account.mode }}" hx-trigger="every 15s" hx-swap="innerHTML">
+<div id="panels" hx-get="{% url 'dashboard-panels' %}?{{ account.query }}" hx-trigger="every 15s" hx-swap="innerHTML">
   {% include 'partials/dashboard_panels.html' %}
 </div>
 
-<details style="margin-top: var(--s-4)"><summary>Agent log</summary>
-  <div hx-get="{% url 'agent-log' %}" hx-trigger="load, every 10s" hx-swap="innerHTML"></div>
+<details style="margin-top: var(--s-4)"><summary>Process log ({{ account.log_name }})</summary>
+  <div hx-get="{% url 'agent-log' %}?name={{ account.log_name }}" hx-trigger="load, every 10s" hx-swap="innerHTML"></div>
 </details>
 {% endblock %}
 {% block scripts %}
 <script>
-  MTCharts.fetchJSON("{% url 'api-equity' account.mode %}?days={{ days }}").then(function (d) {
+  MTCharts.fetchJSON("{% url 'api-equity' account.mode %}?market={{ account.market }}&days={{ days }}").then(function (d) {
     var el = document.getElementById('equity-chart');
-    if (!d.equity.length) { el.innerHTML = '<p class="empty">no equity snapshots yet — start the agent or run a replay</p>'; return; }
+    if (!d.equity.length) { el.innerHTML = '<p class="empty">no equity snapshots yet — they appear a few minutes into a session or replay</p>'; return; }
     MTCharts.lineChart(el, [{ data: d.equity, label: 'equity' }], { baseline: d.starting_cash });
   });
 </script>

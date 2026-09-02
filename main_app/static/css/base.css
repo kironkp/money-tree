@@ -213,3 +213,73 @@ details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
   .mobile-menu a { display: block; padding: 8px; border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink); }
   .site-main { padding: var(--s-3); }
 }
+
+/* ---------- Live feed ---------- */
+.feed-card .chips { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; margin-bottom: var(--s-2); }
+.feed-card .chips button { font-size: 11px; padding: 2px 8px; }
+.feed-card .chips button.active { border-color: var(--accent); color: var(--accent); }
+.feed {
+  height: 380px; overflow-y: auto; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: var(--s-2) var(--s-3); font-family: var(--font-mono); font-size: 12px; line-height: 1.45;
+}
+.feed.tall { height: calc(100vh - 220px); min-height: 400px; }
+.fl { display: flex; gap: 8px; padding: 2px 0; border-bottom: 1px dashed var(--border); align-items: baseline; }
+.fl .ft { color: var(--muted); flex: 0 0 auto; }
+.fl .fs { color: var(--info); flex: 0 0 auto; min-width: 56px; }
+.fl .fx { white-space: pre-wrap; word-break: break-word; }
+.fl-bar .fx { color: var(--muted); }
+.fl-signal .fx { color: var(--ink); font-weight: 500; }
+.fl-order .fx { color: var(--warn); }
+.fl-fill .fx { color: var(--info); }
+.fl-trade .fx { color: var(--up); font-weight: 600; }
+.fl-risk .fx, .fl-error .fx { color: var(--down); font-weight: 600; }
+.fl-journal .fx { color: var(--accent); }
+.feed:empty::before { content: 'waiting for the first lines — start an agent or a replay'; color: var(--muted); }
+
+/* header fixes for phones */
+.header-tools form button, .header-tools .linklike { white-space: nowrap; }
+.header-tools .agents { font-size: 12px; white-space: nowrap; }
+.account-menu { position: relative; }
+.account-menu summary { list-style: none; cursor: pointer; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 8px; font-size: 12px; }
+.account-menu summary::-webkit-details-marker { display: none; }
+.account-menu ul { position: absolute; right: 0; top: 110%; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: var(--s-2); list-style: none; margin: 0; min-width: 180px; z-index: 30; box-shadow: var(--shadow-md); }
+.account-menu li a, .account-menu li button { display: block; padding: 6px 8px; color: var(--ink); width: 100%; text-align: left; background: none; border: 0; font: inherit; cursor: pointer; }
+.account-menu li a:hover, .account-menu li button:hover { background: var(--surface-2); text-decoration: none; }
+@media (max-width: 900px) {
+  .header-tools .agents .label { display: none; }
+  .brand .badge { display: none; }
+}
+
+/* ---------- allauth pages ---------- */
+.auth-page .site-main { max-width: 440px; }
+.auth-page .site-main h1 { font-size: 24px; text-align: center; margin-bottom: var(--s-4); }
+.auth-page .site-main form { margin-top: var(--s-3); }
+.auth-page .site-main form p, .auth-page .site-main form div:not(.checks) { display: flex; flex-direction: column; gap: var(--s-1); margin-bottom: var(--s-3); }
+.auth-page .site-main form p:has(input[type='checkbox']) { flex-direction: row; align-items: center; gap: var(--s-2); }
+.auth-page .site-main form p:has(input[type='checkbox']) input { width: auto; }
+.auth-page .site-main form input { width: 100%; }
+.auth-page .site-main form label { font-weight: 500; color: var(--ink); }
+.auth-page .site-main button[type='submit'], .auth-page .site-main form button {
+  font: inherit; font-weight: 600; width: 100%; background: var(--primary); color: #fff; border: 1px solid var(--primary);
+  border-radius: var(--radius-sm); padding: var(--s-3) var(--s-5); cursor: pointer; margin-top: var(--s-2);
+}
+.auth-page .site-main form button:hover { background: var(--primary-hover); }
+.auth-page .site-main ul { padding-left: var(--s-4); }
+.auth-page .site-main a { text-decoration: underline; }
+.auth-page .site-main .errorlist { color: var(--danger); list-style: none; padding: 0; }
+.auth-brand { text-align: center; font-size: 26px; font-weight: 700; margin: var(--s-6) 0 var(--s-2); }
+.auth-brand .leaf { color: var(--accent); }
+
+/* ---------- traveling tab indicator + page transitions ---------- */
+@view-transition { navigation: auto; }
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: 180ms; }
+.tabs, .site-nav ul { position: relative; }
+.tab-indicator {
+  position: absolute; height: 2px; border-radius: 2px; background: var(--accent); pointer-events: none;
+  left: 0; right: 100%; top: 0; opacity: 0;
+}
+.tabs.has-indicator a.active { border-color: var(--border); background: var(--surface-2); }
+.site-nav ul.has-indicator a.active { background: transparent; color: var(--accent); }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}

@@ -71,11 +71,11 @@ def build_context(account: Account, d: date, days: int = 10) -> dict:
         recent.append({k: m.get(k) for k in ('date', 'trades', 'net_pnl', 'win_rate', 'profit_factor', 'expectancy',
                                              'blocked', 'exit_reasons', 'per_strategy', 'slippage_median_bps', 'risk_events')})
     strategies = []
-    for row in Strategy.objects.all():
+    for row in Strategy.objects.filter(market=account.market):
         cls = get_strategy_class(row.key)
         check = graduation_checklist(row, account, cfg)
         strategies.append({
-            'key': row.key, 'name': row.name, 'enabled': row.enabled, 'stage': row.stage, 'version': row.version,
+            'key': row.key, 'market': row.market, 'name': row.name, 'enabled': row.enabled, 'stage': row.stage, 'version': row.version,
             'params': row.params, 'schema': cls.schema(), 'asset_classes': list(cls.asset_classes),
             'symbols': row.symbols, 'baseline_backtest': baseline_metrics(row), 'live_stats': check['stats'],
         })

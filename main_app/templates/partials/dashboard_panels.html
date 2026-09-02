@@ -12,12 +12,12 @@
   <div class="tile"><div class="label">Positions</div><div class="value">{{ positions_used }}</div>
     <div class="sub">{{ trades_today|length }} trades today · {{ wins_today }} wins</div></div>
   <div class="tile"><div class="label">Market</div><div class="value" style="font-size:14px">{{ market.label }}</div>
-    <div class="sub">{{ enabled_strategies }} strateg{{ enabled_strategies|pluralize:'y,ies' }} enabled</div></div>
+    <div class="sub">{{ enabled_strategies }} {{ account.market }} strateg{{ enabled_strategies|pluralize:'y,ies' }} enabled</div></div>
 </div>
 
 <div class="grid cols-2">
   <div class="card">
-    <h3>Open positions <span class="more"><a href="{% url 'positions' %}?account={{ account.mode }}">all</a></span></h3>
+    <h3>Open positions <span class="more"><a href="{% url 'positions' %}?{{ account.query }}">all</a></span></h3>
     {% if positions %}
     <div class="table-wrap"><table>
       <thead><tr><th>Symbol</th><th>Strategy</th><th class="num">Qty</th><th class="num">Avg</th><th class="num">Last</th><th class="num">P&amp;L</th><th class="num">Stop / Target</th><th>Since</th></tr></thead>
@@ -40,7 +40,7 @@
   </div>
 
   <div class="card">
-    <h3>Today's trades <span class="more"><a href="{% url 'trades' %}?account={{ account.mode }}">history</a></span></h3>
+    <h3>Today's trades <span class="more"><a href="{% url 'trades' %}?{{ account.query }}">history</a></span></h3>
     {% if trades_today %}
     <div class="table-wrap"><table>
       <thead><tr><th>Symbol</th><th>Strategy</th><th>Side</th><th class="num">Qty</th><th class="num">In → Out</th><th class="num">P&amp;L</th><th>Exit</th><th>When</th></tr></thead>
@@ -61,7 +61,7 @@
   </div>
 
   <div class="card">
-    <h3>Latest signals <span class="more"><a href="{% url 'signals' %}?account={{ account.mode }}">all</a></span></h3>
+    <h3>Latest signals <span class="more"><a href="{% url 'signals' %}?{{ account.query }}">all</a></span></h3>
     {% if signals %}
     <div class="table-wrap"><table>
       <thead><tr><th>Bar</th><th>Strategy</th><th>Symbol</th><th>Action</th><th>Result</th></tr></thead>
@@ -79,9 +79,9 @@
   </div>
 
   <div class="card">
-    <h3>Agent &amp; risk <span class="more"><a href="{% url 'risk-events' %}?account={{ account.mode }}">events</a></span></h3>
+    <h3>Agent &amp; risk <span class="more"><a href="{% url 'risk-events' %}?{{ account.query }}">events</a></span></h3>
     <dl class="kv">
-      <dt>Process</dt><dd>{% if run %}<span class="dot on"></span>{{ run.mode }} · pid {{ run.pid }} · {{ run.ticks }} ticks{% else %}<span class="dot"></span>not running{% endif %}</dd>
+      <dt>Process</dt><dd>{% if run %}<span class="dot on"></span>{{ run.market }} {{ run.mode }} · pid {{ run.pid }} · {{ run.ticks }} ticks{% else %}<span class="dot"></span>not running{% endif %}</dd>
       <dt>Heartbeat</dt><dd>{% if run %}{{ run.heartbeat_age_s|duration }} ago — {{ run.message }}{% else %}—{% endif %}</dd>
       <dt>Kill switch</dt><dd>{% if cfg.kill_switch %}<span class="down">ON — no entries, positions flattened</span>{% else %}off{% endif %}</dd>
       <dt>Trading</dt><dd>{% if cfg.trading_enabled %}enabled{% else %}<span class="warn">disabled in settings</span>{% endif %}</dd>

@@ -11,13 +11,15 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
-from main_app.models import AgentConfig, Bar, BacktestRun, Experiment, Instrument, Strategy
+from main_app.models import Account, AgentConfig, Bar, BacktestRun, Experiment, Instrument, Market, Mode, Strategy, market_for_symbols
 from main_app.services import control, procs
 from main_app.services.backtest import run_backtest_for_model
 from main_app.services.data import calendar as cal
 from main_app.services.optimize import grid_from_schema
 from main_app.services.promotion import promote
 from main_app.services.strategies import STRATEGIES, get_strategy_class
+
+from .common import deny_observer, operator_required
 
 
 def _symbols_for(request, cls):
@@ -65,6 +67,9 @@ def _launch_context():
 @login_required
 def backtest_list(request):
     if request.method == 'POST':
+        denied = deny_observer(request)
+        if denied is not None:
+            return denied
         cls = get_strategy_class(request.POST.get('strategy', 'orb'))
         cfg = AgentConfig.get()
         try:
@@ -95,7 +100,7 @@ def backtest_list(request):
 def backtest_detail(request, pk):
     run = get_object_or_404(BacktestRun, pk=pk)
     trades = run.trades.order_by('-exit_ts')[:300]
-    strategies = Strategy.objects.filter(key=run.strategy_key)
+    strategies = Strategy.objects.filter(key=run.strategy_key, market=market_for_symbols(run.symbols))
     m = run.metrics or {}
     breakdowns = [('By symbol', m.get('per_symbol', {})), ('By hour (ET)', m.get('per_hour', {})),
                   ('By weekday', m.get('per_weekday', {})), ('By exit', m.get('per_exit_reason', {}))]
@@ -112,11 +117,11 @@ def api_backtest_equity(request, pk):
     return JsonResponse({'equity': run.equity_curve, 'starting_cash': float(run.starting_cash)})
 
 
-@login_required
+@operator_required
 @require_POST
 def backtest_promote(request, pk):
     run = get_object_or_404(BacktestRun, pk=pk)
-    row = Strategy.objects.filter(key=run.strategy_key).first()
+    row = Strategy.objects.filter(key=run.strategy_key, market=market_for_symbols(run.symbols)).first()
     if row is None:
         messages.error(request, 'no strategy row to promote into — visit Strategies first')
         return redirect('backtest-detail', pk=pk)
@@ -125,10 +130,10 @@ def backtest_promote(request, pk):
         row.symbols = run.symbols
         row.save(update_fields=['symbols'])
     messages.success(request, f'{row.name} is now v{row.version} with these params')
-    return redirect('strategy-detail', key=row.key)
+    return redirect('strategy-detail', market=row.market, key=row.key)
 
 
-@login_required
+@operator_required
 @require_POST
 def backtest_delete(request, pk):
     run = get_object_or_404(BacktestRun, pk=pk)
@@ -153,6 +158,9 @@ def backtest_compare(request):
 @login_required
 def experiment_list(request):
     if request.method == 'POST':
+        denied = deny_observer(request)
+        if denied is not None:
+            return denied
         cls = get_strategy_class(request.POST.get('strategy', 'orb'))
         cfg = AgentConfig.get()
         try:
@@ -199,7 +207,7 @@ def experiment_detail(request, pk):
     s = exp.summary or {}
     ranked = s.get('ranked', [])
     param_names = list(exp.param_grid.keys())
-    strategy = Strategy.objects.filter(key=exp.strategy_key).first()
+    strategy = Strategy.objects.filter(key=exp.strategy_key, market=market_for_symbols(exp.symbols)).first()
     runs = exp.runs.order_by('window_label', '-created_at')[:60] if exp.method == 'walk_forward' else []
     return render(request, 'research/experiment_detail.html', {
         'exp': exp, 's': s, 'ranked': ranked[:40], 'param_names': param_names, 'strategy': strategy,
@@ -215,7 +223,7 @@ def experiment_progress(request, pk):
     return render(request, 'partials/experiment_progress.html', {'exp': exp, 'log': procs.tail(f'experiment-{exp.pk}', 8)})
 
 
-@login_required
+@operator_required
 @require_POST
 def experiment_promote(request, pk):
     exp = get_object_or_404(Experiment, pk=pk)
@@ -230,7 +238,7 @@ def experiment_promote(request, pk):
     if not params:
         messages.error(request, 'no params to promote')
         return redirect('experiment-detail', pk=pk)
-    row = Strategy.objects.filter(key=exp.strategy_key).first()
+    row = Strategy.objects.filter(key=exp.strategy_key, market=market_for_symbols(exp.symbols)).first()
     if row is None:
         messages.error(request, 'no strategy row to promote into')
         return redirect('experiment-detail', pk=pk)
@@ -238,10 +246,10 @@ def experiment_promote(request, pk):
     promote(row, params, source=f'experiment #{exp.pk} ({exp.method})', note=request.POST.get('note', ''),
             metrics=metrics if isinstance(metrics, dict) else {}, run_id=None)
     messages.success(request, f'{row.name} is now v{row.version}')
-    return redirect('strategy-detail', key=row.key)
+    return redirect('strategy-detail', market=row.market, key=row.key)
 
 
-@login_required
+@operator_required
 @require_POST
 def experiment_stop(request, pk):
     exp = get_object_or_404(Experiment, pk=pk)
@@ -254,7 +262,7 @@ def experiment_stop(request, pk):
     return redirect('experiment-detail', pk=pk)
 
 
-@login_required
+@operator_required
 @require_POST
 def experiment_delete(request, pk):
     exp = get_object_or_404(Experiment, pk=pk)
@@ -269,22 +277,32 @@ def experiment_delete(request, pk):
 @login_required
 def replay(request):
     cfg = AgentConfig.get()
+    market = request.GET.get('market') or request.POST.get('market') or Market.STOCKS
+    if market not in Market.values:
+        market = Market.STOCKS
+    replay_account = Account.for_mode(Mode.REPLAY, market)
     if request.method == 'POST':
+        denied = deny_observer(request)
+        if denied is not None:
+            return denied
         try:
             d = date.fromisoformat(request.POST.get('date', ''))
         except ValueError:
             messages.error(request, 'pick a date')
             return redirect('replay')
-        if control.running_agent():
-            messages.error(request, 'an agent is already running — stop it first (one process per account)')
-            return redirect('replay')
+        if control.running_agent(replay_account):
+            messages.error(request, f'a {market} replay is already running — stop it from the dashboard first')
+            return redirect(f"{request.build_absolute_uri('/replay/')}?market={market}")
         speed = request.POST.get('speed', '30')
-        pid = procs.spawn_manage(['run_agent', '--replay', d.isoformat(), '--speed', speed], 'agent-replay')
-        messages.success(request, f'replaying {d} at {speed}× (pid {pid}) — watch the dashboard on the Replay account')
-        return redirect(f"{request.build_absolute_uri('/')}?account=replay")
-    dates = Bar.objects.filter(timeframe=cfg.timeframe, instrument__in_watchlist=True).dates('ts', 'day', order='DESC')[:40]
-    # `.dates` uses the current timezone (ET) — good, those are session dates.
-    sessions = [d for d in dates if cal.session_for(d) or Instrument.objects.filter(asset_class='crypto', in_watchlist=True).exists()]
-    enabled = Strategy.objects.filter(enabled=True).count()
-    return render(request, 'research/replay.html', {'dates': sessions, 'cfg': cfg, 'enabled': enabled,
-                                                    'log': procs.tail('agent-replay', 30), 'run': control.running_agent()})
+        pid = procs.spawn_manage(['run_agent', '--replay', d.isoformat(), '--speed', speed, '--market', market],
+                                 replay_account.log_name)
+        messages.success(request, f'replaying {d} ({market}) at {speed}× (pid {pid}) — watch the live feed')
+        return redirect(f"{request.build_absolute_uri('/')}?{replay_account.query}")
+    classes = ('crypto',) if market == Market.CRYPTO else ('stock', 'etf')
+    dates = Bar.objects.filter(timeframe=cfg.timeframe, instrument__in_watchlist=True,
+                               instrument__asset_class__in=classes).dates('ts', 'day', order='DESC')[:40]
+    sessions = [d for d in dates if market == Market.CRYPTO or cal.session_for(d)]
+    enabled = Strategy.objects.filter(enabled=True, market=market).count()
+    return render(request, 'research/replay.html', {'dates': sessions, 'cfg': cfg, 'enabled': enabled, 'market': market,
+                                                    'log': procs.tail(replay_account.log_name, 30),
+                                                    'run': control.running_agent(replay_account)})

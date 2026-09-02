@@ -21,8 +21,10 @@
     <script src="https://unpkg.com/htmx.org@1.9.12" defer></script>
     <script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
     {% block head %}{% endblock %}
+    {% comment %}allauth injects page assets (passkey JS) via extra_head/extra_body.{% endcomment %}
+    {% block extra_head %}{% endblock %}
   </head>
-  <body hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
+  <body class="{% block body_class %}{% endblock %}" hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'>
     {% if user.is_authenticated %}
     <header class="site-header">
       <button type="button" id="menu-toggle" class="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="mobile-menu">☰</button>
@@ -36,6 +38,7 @@
           <li><a href="{% url 'strategy-list' %}" {% if 'strategy' in request.resolver_match.url_name %}class="active"{% endif %}>Strategies</a></li>
           <li><a href="{% url 'backtest-list' %}" {% if 'backtest' in request.resolver_match.url_name %}class="active"{% endif %}>Backtests</a></li>
           <li><a href="{% url 'experiment-list' %}" {% if 'experiment' in request.resolver_match.url_name %}class="active"{% endif %}>Experiments</a></li>
+          <li><a href="{% url 'feed' %}" {% if request.resolver_match.url_name == 'feed' %}class="active"{% endif %}>Feed</a></li>
           <li><a href="{% url 'replay' %}" {% if request.resolver_match.url_name == 'replay' %}class="active"{% endif %}>Replay</a></li>
           <li><a href="{% url 'data-index' %}" {% if 'data' in request.resolver_match.url_name or 'instrument' in request.resolver_match.url_name %}class="active"{% endif %}>Data</a></li>
           <li><a href="{% url 'journal-list' %}" {% if 'journal' in request.resolver_match.url_name %}class="active"{% endif %}>Journal</a></li>
@@ -43,12 +46,20 @@
         </ul>
       </nav>
       <div class="header-tools">
-        <span class="small" title="agent heartbeat">
-          <span class="dot {% if agent_run %}{% if agent_run.heartbeat_age_s < 400 %}on{% else %}stale{% endif %}{% endif %}"></span>{% if agent_run %}{{ agent_run.mode }} agent{% else %}agent off{% endif %}
+        <span class="agents" title="running agents">
+          {% for r in agent_runs %}<span class="dot {% if r.heartbeat_age_s < 400 %}on{% else %}stale{% endif %}"></span><span class="label">{{ r.market }}{% if r.mode == 'replay' %} replay{% endif %} </span>{% empty %}<span class="dot"></span><span class="label">no agent</span>{% endfor %}
         </span>
         {% if cfg.kill_switch %}<span class="badge bad">kill switch</span>{% endif %}
         <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch theme">☀</button>
-        <form action="{% url 'logout' %}" method="post" class="inline">{% csrf_token %}<button type="submit" class="linklike">Log out</button></form>
+        <details class="account-menu">
+          <summary aria-label="Account menu">{{ user.email|default:user.username|truncatechars:18 }}</summary>
+          <ul>
+            <li><a href="{% url 'account_email' %}">Email settings</a></li>
+            <li><a href="{% url 'account_change_password' %}">Password</a></li>
+            <li><a href="{% url 'mfa_index' %}">Passkeys &amp; 2FA</a></li>
+            <li><form action="{% url 'account_logout' %}" method="post" class="inline">{% csrf_token %}<button type="submit">Log out</button></form></li>
+          </ul>
+        </details>
       </div>
     </header>
     <nav id="mobile-menu" class="mobile-menu" hidden aria-label="Mobile menu">
@@ -60,6 +71,7 @@
         <li><a href="{% url 'strategy-list' %}">Strategies</a></li>
         <li><a href="{% url 'backtest-list' %}">Backtests</a></li>
         <li><a href="{% url 'experiment-list' %}">Experiments</a></li>
+        <li><a href="{% url 'feed' %}">Feed</a></li>
         <li><a href="{% url 'replay' %}">Replay</a></li>
         <li><a href="{% url 'data-index' %}">Data</a></li>
         <li><a href="{% url 'journal-list' %}">Journal</a></li>
@@ -68,6 +80,7 @@
     </nav>
     {% endif %}
     <main class="site-main">
+      {% block pre_content %}{% endblock %}
       {% if messages %}
         <ul class="messages" role="status" aria-live="polite">
           {% for message in messages %}<li class="message {{ message.tags }}">{{ message }}</li>{% endfor %}
@@ -78,6 +91,9 @@
     <footer class="site-main small muted">MoneyTree v{{ VERSION }} · fake money until it earns its stripes · times in ET</footer>
     <script src="{% static_v 'js/app.js' %}"></script>
     <script src="{% static_v 'js/charts.js' %}"></script>
+    <script src="{% static_v 'js/feed.js' %}"></script>
+    <script src="{% static_v 'js/tabs.js' %}"></script>
+    {% block extra_body %}{% endblock %}
     {% block scripts %}{% endblock %}
   </body>
 </html>

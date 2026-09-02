@@ -84,12 +84,13 @@ class EngineConfig:
 
 class Engine:
     def __init__(self, strategies: list[Strategy], broker: Broker, cfg: EngineConfig,
-                 recorder: Recorder | None = None, risk: RiskManager | None = None):
+                 recorder: Recorder | None = None, risk: RiskManager | None = None, narrator=None):
         self.strategies = strategies
         self.broker = broker
         self.cfg = cfg
         self.rec = recorder or Recorder()
         self.risk = risk or RiskManager(cfg.risk)
+        self.narrator = narrator  # None → silent (backtests)
         self.tfm = tf_minutes(cfg.timeframe)
         self.current_day = None
         self.bars_with_position = 0
@@ -103,13 +104,28 @@ class Engine:
     def order_id(self, strategy_key: str, symbol: str, ts: datetime, leg: str) -> str:
         return f'mt-{self.cfg.mode}-{strategy_key}-{symbol.replace("/", "")}-{int(ts.timestamp())}-{leg}'
 
+    def say(self, level: str, text: str, symbol: str = '', strategy_key: str = '', ts=None, data=None) -> None:
+        if self.narrator is not None:
+            self.narrator.say(level, text, symbol=symbol, strategy_key=strategy_key, ts=ts, data=data)
+
     def _emit_broker_events(self) -> None:
         for kind, obj, order in self.broker.drain_events():
             if kind == 'fill':
                 self.rec.on_fill(obj, order)
                 self.rec.on_order(order)
+                if self.narrator is not None:
+                    slip = f', slippage {obj.slippage_bps:+.1f} bps' if obj.slippage_bps is not None else ''
+                    partial = ' (partial — liquidity cap)' if order.status == 'canceled' and order.filled_qty else ''
+                    self.say('fill', f'FILLED {order.side} {obj.qty:g} {order.symbol} @ {obj.price:,.2f}'
+                             f'{slip}{partial} — {order.leg}: {order.reason}', order.symbol, order.strategy_key, obj.ts,
+                             {'qty': obj.qty, 'price': obj.price, 'side': order.side})
             elif kind == 'trade':
                 self.rec.on_trade(obj)
+                if self.narrator is not None:
+                    self.say('trade', f'CLOSED {obj.symbol} {obj.side} {obj.qty:g} @ {obj.entry_price:,.2f} → '
+                             f'{obj.exit_price:,.2f} = {obj.pnl:+,.2f} ({obj.pnl_pct:+.2f}%) after {obj.bars_held} bars — '
+                             f'{obj.exit_reason}', obj.symbol, obj.strategy_key, obj.exit_ts,
+                             {'pnl': obj.pnl, 'exit_reason': obj.exit_reason})
 
     def _day_of(self, ts: datetime, asset_class: str):
         return cal.session_date(ts) if asset_class != 'crypto' else ts.astimezone(cal.ET).date()
@@ -151,8 +167,11 @@ class Engine:
             self.risk.halt('daily loss limit')
             self.rec.on_risk_event('daily_loss', f'daily loss limit hit: {self.risk.day_pnl(acct.equity):+.2f}', ts,
                                    {'equity': acct.equity, 'start': self.risk.day.start_equity})
+            self.say('risk', f'DAILY LOSS LIMIT hit ({self.risk.day_pnl(acct.equity):+,.2f}) — flattening everything, '
+                     'no more entries today', ts=ts)
             self.flatten_all(ts, 'kill')
         mtc_val = None if (minutes_to_close is None or minutes_to_close != minutes_to_close) else float(minutes_to_close)
+        thoughts: list[str] = []
         for strat in (self.strategies if act else ()):
             row = rows_by_strategy.get(strat.key)
             if row is None or i < strat.warmup_bars:
@@ -169,9 +188,19 @@ class Engine:
             except Exception as exc:  # a strategy bug must not kill the loop
                 log.exception('strategy %s failed on %s %s', strat.key, symbol, ts)
                 self.rec.on_risk_event('error', f'{strat.key} raised {exc!r} on {symbol}', ts)
+                self.say('error', f'{strat.key} crashed on {symbol}: {exc!r}', symbol, strat.key, ts)
                 continue
             for sig in signals:
                 self.handle_signal(sig, strat, ctx, row)
+            if self.narrator is not None and not signals:
+                try:
+                    note = strat.explain(ctx, row)
+                except Exception:
+                    note = ''
+                if note:
+                    thoughts.append(f'{strat.key}: {note}')
+        if self.narrator is not None and thoughts:
+            self.say('bar', f'{symbol} {float(bar.close):,.2f} · ' + ' · '.join(thoughts), symbol, '', ts)
         self._time_exits(symbol, ts, bar, mtc_val)
         self._emit_broker_events()
 
@@ -182,6 +211,7 @@ class Engine:
             if pos is None or pos.qty == 0 or pos.external:
                 self.rec.on_signal(sig, strat.key, Decision(False, reason='no position'), None)
                 return
+            self.say('signal', f'EXIT {symbol} ({strat.key}): {sig.reason}', symbol, strat.key, sig.ts)
             side = 'sell' if pos.qty > 0 else 'buy'
             order = OrderReq(id=self.order_id(strat.key, symbol, sig.ts, 'exit'), symbol=symbol, side=side,
                              qty=abs(pos.qty), leg='exit', strategy_key=strat.key, reason=sig.reason,
@@ -196,7 +226,17 @@ class Engine:
                                       strategy_supports=strat.supports(ctx.asset_class))
         if not decision.allowed:
             self.rec.on_signal(sig, strat.key, decision, None)
+            self.say('signal', f'SKIP {sig.action.upper()} {symbol} ({strat.key}): {sig.reason} — blocked: {decision.reason}',
+                     symbol, strat.key, sig.ts, {'blocked': decision.reason})
             return
+        levels = ''
+        if sig.stop is not None:
+            levels += f' · stop {sig.stop:,.2f}'
+        if sig.target is not None:
+            levels += f' · target {sig.target:,.2f}'
+        self.say('signal', f'{sig.action.upper()} {symbol} {decision.qty:g} @ ~{sig.price:,.2f} ({strat.key}): {sig.reason}'
+                 f'{levels} — sized by {decision.reason}', symbol, strat.key, sig.ts,
+                 {'qty': decision.qty, 'price': sig.price, 'stop': sig.stop, 'target': sig.target})
         side = 'buy' if sig.action == 'buy' else 'sell'
         order = OrderReq(id=self.order_id(strat.key, symbol, sig.ts, 'entry'), symbol=symbol, side=side,
                          qty=decision.qty, leg='entry', strategy_key=strat.key, reason=sig.reason,
@@ -205,6 +245,7 @@ class Engine:
         if order.status == 'rejected':
             self.rec.on_signal(sig, strat.key, Decision(False, reason=f'broker rejected: {order.error}'), order)
             self.rec.on_order(order)
+            self.say('error', f'Broker rejected {sig.action} {symbol}: {order.error}', symbol, strat.key, sig.ts)
             return
         self.risk.record_entry()
         if ctx.asset_class == 'crypto' and self.cfg.risk.max_hold_minutes:
@@ -223,18 +264,24 @@ class Engine:
         price = float(bar.close)
         if minutes_to_close is not None:
             if self.cfg.flatten_intraday and minutes_to_close <= self.cfg.risk.flat_before_close_min + self.tfm:
+                self.say('order', f'END OF DAY — closing {symbol} at {price:,.2f} ({minutes_to_close:.0f} min to the close)',
+                         symbol, pos.strategy_key, ts)
                 self.broker.close_position(symbol, price, ts, 'eod', self.order_id(pos.strategy_key, symbol, ts, 'eod'))
         else:
             hold_limit = pos.max_hold_until
             if hold_limit is None and self.cfg.risk.max_hold_minutes:
                 hold_limit = pos.entry_ts + timedelta(minutes=self.cfg.risk.max_hold_minutes)
             if hold_limit is not None and ts >= hold_limit:
+                self.say('order', f'MAX HOLD reached — closing {symbol} at {price:,.2f}', symbol, pos.strategy_key, ts)
                 self.broker.close_position(symbol, price, ts, 'time', self.order_id(pos.strategy_key, symbol, ts, 'time'))
         self._emit_broker_events()
 
     def flatten_all(self, ts: datetime, reason: str, prices: dict[str, float] | None = None) -> int:
         n = 0
         self.broker.cancel_open_orders()
+        live = [p for p in self.broker.positions.values() if p.qty and not p.external]
+        if live:
+            self.say('order', f'FLATTEN ({reason}): closing {len(live)} position(s): ' + ', '.join(p.symbol for p in live), ts=ts)
         for symbol, pos in list(self.broker.positions.items()):
             if pos.qty == 0 or pos.external:
                 continue

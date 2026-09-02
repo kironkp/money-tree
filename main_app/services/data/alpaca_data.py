@@ -17,10 +17,32 @@ import pandas as pd
 from django.conf import settings
 
 from ..timeframes import tf_minutes
+from . import calendar as cal
 from .providers import BarProvider, empty_frame, normalize_frame
 
 log = logging.getLogger('moneytree.data.alpaca')
 SIP_LAG = timedelta(minutes=16)
+PAGE_CAP = 10000  # a single request never returns more than this, whatever the range
+
+
+def regular_session_only(df: pd.DataFrame) -> pd.DataFrame:
+    """Alpaca stock bars cover 04:00–20:00 ET; strategies only know the
+    09:30–16:00 session (opening range, VWAP, bar positions all assume it)."""
+    if len(df) == 0:
+        return df
+    keep = [cal.session_at(ts.to_pydatetime()) is not None for ts in df.index]
+    return df[keep]
+
+
+def windows(start: datetime, end: datetime, timeframe: str, asset_class: str):
+    """Date windows small enough that each stays under the page cap."""
+    per_day = (24 * 60 if asset_class == 'crypto' else 16 * 60) / max(1, tf_minutes(timeframe))
+    days = max(1, int(PAGE_CAP * 0.8 / per_day)) if timeframe != '1Day' else 3650
+    a = start
+    while a < end:
+        b = min(end, a + timedelta(days=days))
+        yield a, b
+        a = b
 
 
 def _timeframe(timeframe: str):
@@ -75,12 +97,20 @@ class AlpacaDataProvider(BarProvider):
         return 'alpaca:iex' if self.live_feed else 'alpaca:sip:split'
 
     def get_bars(self, symbol, timeframe, start, end, asset_class='stock'):
+        parts = []
+        for a, b in windows(start, end, timeframe, asset_class):
+            parts.append(self._get_window(symbol, timeframe, a, b, asset_class))
+        parts = [p for p in parts if len(p)]
+        if not parts:
+            return empty_frame()
+        df = normalize_frame(pd.concat(parts))
+        return df if asset_class == 'crypto' or timeframe == '1Day' else regular_session_only(df)
+
+    def _get_window(self, symbol, timeframe, start, end, asset_class):
         if asset_class == 'crypto':
             from alpaca.data.requests import CryptoBarsRequest
-            req = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=_timeframe(timeframe),
-                                    start=start, end=end, limit=10000)
+            req = CryptoBarsRequest(symbol_or_symbols=symbol, timeframe=_timeframe(timeframe), start=start, end=end, limit=PAGE_CAP)
             return _to_frame(self.crypto_client.get_crypto_bars(req), symbol)
-
         from alpaca.data.enums import Adjustment, DataFeed
         from alpaca.data.requests import StockBarsRequest
         if self.live_feed:
@@ -90,8 +120,8 @@ class AlpacaDataProvider(BarProvider):
             end_arg = min(end, datetime.now(UTC) - SIP_LAG)
             if end_arg <= start:
                 return empty_frame()
-        req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=_timeframe(timeframe),
-                               start=start, end=end_arg, feed=feed, adjustment=Adjustment.SPLIT, limit=10000)
+        req = StockBarsRequest(symbol_or_symbols=symbol, timeframe=_timeframe(timeframe), start=start, end=end_arg,
+                               feed=feed, adjustment=Adjustment.SPLIT, limit=PAGE_CAP)
         return _to_frame(self.stock_client.get_stock_bars(req), symbol)
 
     def latest_bars(self, symbols, timeframe, since, asset_class='stock'):
@@ -108,4 +138,5 @@ class AlpacaDataProvider(BarProvider):
             req = StockBarsRequest(symbol_or_symbols=list(symbols), timeframe=_timeframe(timeframe), start=since,
                                    feed=DataFeed.IEX, adjustment=Adjustment.SPLIT)
             bars = self.stock_client.get_stock_bars(req)
+            return {s: regular_session_only(_to_frame(bars, s)) for s in symbols}
         return {s: _to_frame(bars, s) for s in symbols}

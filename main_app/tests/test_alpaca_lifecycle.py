@@ -155,6 +155,28 @@ class CryptoGetsAVenueSideStop(SimpleTestCase):
         self.assertEqual(v.orders[oid].type, 'stop_limit')
 
 
+class CryptoFeesTakenInKind(SimpleTestCase):
+    def test_position_adopts_the_post_fee_quantity_and_is_still_protected(self):
+        v = FakeVenue(price=100.0)
+        orig_fill = v._fill
+
+        def fill_with_fee(o, partial=False):
+            orig_fill(o, partial)
+            p = v.positions.get(o.symbol)
+            if p and 'buy' in o.side:
+                p.qty = str(float(p.qty) * (1 - 0.0025))  # 25 bps taken from the coins
+        v._fill = fill_with_fee
+        b = make_broker(v, crypto=True)
+        o = b.submit(entry('BTC/USD', qty=0.02, stop=95.0, target=110.0))
+        pos = b.positions['BTC/USD']
+        self.assertAlmostEqual(pos.qty, 0.02 * 0.9975)
+        self.assertGreater(o.fees, 0)
+        kind, oid = b.protection_for('BTC/USD')
+        self.assertEqual(kind, 'stop_order')
+        self.assertAlmostEqual(float(v.orders[oid].qty), 0.02 * 0.9975)
+        self.assertEqual(b.sync()['diverged'], [])
+
+
 class ClosingIsOneCoordinatedLifecycle(SimpleTestCase):
     def test_close_cancels_protection_confirms_then_closes_remaining(self):
         v = FakeVenue()
@@ -220,3 +242,31 @@ class ReconciliationTrustsTheVenue(SimpleTestCase):
         info = b.sync()
         self.assertEqual(info['closed'], ['AAPL'])
         self.assertNotIn('AAPL', b.positions)
+
+
+class OrphanProtectionIsCanceled(SimpleTestCase):
+    def test_resting_stop_without_a_position_is_canceled_on_sync(self):
+        v = FakeVenue()
+        o = SimpleNamespace(id='orphan-1', client_order_id='mt-x-entry-stop', symbol='BTCUSD', qty='0.01', side='sell',
+                            status='new', filled_qty='0', filled_avg_price=None, filled_at=None, type='stop_limit', legs=[],
+                            order_class='simple')
+        v.orders['orphan-1'] = o
+        b = AlpacaBroker(client=v, asset_classes={'BTC/USD': 'crypto'}, poll_s=0.5)
+        info = b.sync()
+        self.assertEqual(info['orphans'], ['mt-x-entry-stop'])
+        self.assertIn('orphan-1', v.canceled)
+
+
+class AlpacaHistoryIsRegularSessionOnly(SimpleTestCase):
+    def test_extended_hours_bars_are_dropped_and_windows_stay_under_the_cap(self):
+        import pandas as pd
+        from main_app.services.data.alpaca_data import regular_session_only, windows
+        idx = pd.DatetimeIndex([datetime(2026, 9, 1, 8, 0, tzinfo=UTC), datetime(2026, 9, 1, 14, 0, tzinfo=UTC),
+                                datetime(2026, 9, 1, 21, 0, tzinfo=UTC)])
+        df = pd.DataFrame({'open': [1, 1, 1], 'high': [1, 1, 1], 'low': [1, 1, 1], 'close': [1, 1, 1], 'volume': [1, 1, 1],
+                           'vwap': [1, 1, 1], 'trade_count': [1, 1, 1]}, index=idx)
+        kept = regular_session_only(df)
+        self.assertEqual(list(kept.index), [idx[1]])
+        w = list(windows(datetime(2025, 1, 1, tzinfo=UTC), datetime(2026, 1, 1, tzinfo=UTC), '5Min', 'stock'))
+        self.assertGreater(len(w), 5)
+        self.assertLessEqual((w[0][1] - w[0][0]).days * 16 * 12, 10000)

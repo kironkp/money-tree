@@ -216,6 +216,13 @@ class Engine:
             elif kind == 'trade':
                 self.rec.on_trade(obj)
                 self._on_trade(obj, order)
+            elif kind == 'fee':
+                card = self.cards.get(order.id)
+                if card is not None:
+                    card.fees = order.fees
+                    self._card_event(card, 'fee')
+                self.say('fill', f'Fee taken in kind on {order.symbol}: {obj:,.4f} (the position is smaller than the order by that much)',
+                         order.symbol, order.strategy_key, order.filled_ts, phase='fill', card=card)
 
     def _on_fill(self, fill, order: OrderReq) -> None:
         card = self.cards.get(order.id) if order.leg == 'entry' else self.cards.get(self.card_by_symbol.get(order.symbol, ''))

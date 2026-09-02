@@ -127,7 +127,8 @@ class AlpacaBroker(Broker):
                                                    external=True, last_price=cur, protection='none')
                 adopted.append(symbol)
             else:
-                if abs(local.qty - qty) > self._increment(symbol) / 2:
+                tolerance = max(self._increment(symbol) / 2, abs(qty) * (0.003 if self._is_crypto(symbol) else 0.0))
+                if abs(local.qty - qty) > tolerance:
                     diverged.append((symbol, local.qty, qty))
                 local.qty, local.avg_price, local.last_price = qty, avg, cur
             self.last_price[symbol] = cur
@@ -138,9 +139,19 @@ class AlpacaBroker(Broker):
         for symbol in closed:
             self._positions.pop(symbol, None)
         self._open_orders = self._fetch_open_orders()
+        # Orphans: a resting exit/stop for a symbol we no longer hold can only do harm.
+        orphans = []
+        for o in list(self._open_orders):
+            if o['symbol'] not in self._positions and (o['type'] in ('stop', 'stop_limit', 'limit') or o['client_order_id'].endswith('-stop')):
+                try:
+                    self.client.cancel_order_by_id(o['id'])
+                    orphans.append(o['client_order_id'] or o['id'])
+                    self._open_orders.remove(o)
+                except Exception as exc:
+                    log.warning('orphan cancel failed %s: %s', o['id'], exc)
         self.last_sync = {'adopted': adopted, 'closed': closed, 'diverged': diverged, 'cash': self._cash,
                           'equity': self._equity, 'open_orders': len(self._open_orders), 'fills': fills,
-                          'at': datetime.now(UTC)}
+                          'orphans': orphans, 'at': datetime.now(UTC)}
         return self.last_sync
 
     def _fetch_open_orders(self) -> list[dict]:
@@ -247,6 +258,13 @@ class AlpacaBroker(Broker):
                       time_in_force=TimeInForce.GTC if crypto else TimeInForce.DAY,
                       client_order_id=order.id)
         if not crypto and order.stop and order.target:
+            ref = self.last_price.get(order.symbol) or order.decision_price or 0.0
+            bad = (order.side == 'buy' and not (order.stop < ref < order.target)) or \
+                  (order.side == 'sell' and not (order.target < ref < order.stop))
+            if bad:
+                order.status, order.error = 'rejected', f'bracket levels do not straddle the price {ref:,.2f} (stop {order.stop}, target {order.target})'
+                self.orders[order.id] = order
+                return order
             kwargs.update(order_class=OrderClass.BRACKET,
                           take_profit=TakeProfitRequest(limit_price=round(order.target, 2)),
                           stop_loss=StopLossRequest(stop_price=round(order.stop, 2)))
@@ -315,8 +333,24 @@ class AlpacaBroker(Broker):
             self._cash -= signed * price
             if not self._is_crypto(order.symbol) and order.stop and order.target:
                 pos.protection, pos.protection_order_id = 'bracket', order.broker_order_id
-            elif order.stop and order.status == 'filled':
-                self._place_protection(pos)
+            elif self._is_crypto(order.symbol) and order.status == 'filled':
+                # Alpaca deducts the crypto fee from the coins received, so the
+                # position is slightly smaller than the order. Adopt the venue's
+                # quantity, book the difference as the fee, protect what we hold.
+                try:
+                    venue = self.client.get_open_position(self._venue_symbol(order.symbol))
+                    actual = abs(float(venue.qty)) * (1 if pos.qty > 0 else -1)
+                    fee_qty = abs(pos.qty) - abs(actual)
+                    if fee_qty > 0:
+                        fee = fee_qty * price
+                        order.fees += fee
+                        pos.entry_fees += fee
+                        self._events.append(('fee', fee, order))
+                    pos.qty = actual
+                except Exception as exc:
+                    log.warning('post-fill position read failed for %s: %s', order.symbol, exc)
+                if order.stop:
+                    self._place_protection(pos)
             return
         self._record_trade(order, price, qty, ts)
         self._cash -= signed * price
@@ -432,6 +466,15 @@ class AlpacaBroker(Broker):
             order.status, order.broker_order_id = 'accepted', str(resp.id)
             self.orders[order.id] = order
             self._await_fill(order)
+            # Belt and braces: nothing protective may survive the close.
+            leftovers = [o for o in self._fetch_open_orders() if o['symbol'] == symbol]
+            for o in leftovers:
+                try:
+                    self.client.cancel_order_by_id(o['id'])
+                except Exception as exc:
+                    log.warning('leftover cancel failed %s: %s', o['id'], exc)
+            if leftovers:
+                self._confirm_canceled([o['id'] for o in leftovers])
             return order
         finally:
             if symbol in self._positions:

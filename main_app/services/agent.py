@@ -492,6 +492,7 @@ class Agent:
                     self.run_row.expected_interval_s = 120
                     self.run_row.save(update_fields=['expected_interval_s'])
                 self.heartbeat(f'market closed — next open {nxt.astimezone(cal.ET):%a %H:%M} ET', state='sleeping', next_action_at=nxt)
+                self.last_tick = None  # the overnight gap is a schedule, not a missed tick
                 self._sleep(min(60.0, max(1.0, (nxt - now).total_seconds())))
                 if self.once:
                     return

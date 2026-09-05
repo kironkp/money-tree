@@ -53,7 +53,10 @@ class Command(BaseCommand):
             base = run_backtest(spec, frames).metrics
             new_pf, base_pf = float(oos.get('profit_factor', 0)), float(base.get('profit_factor', 0))
             verdict = 'kept current params'
-            if exp.best_params and oos.get('trades', 0) >= 10 and new_pf >= MIN_OOS_PF and new_pf > base_pf * 1.05:
+            same = {k: v for k, v in (exp.best_params or {}).items()} == {k: row.params.get(k) for k in (exp.best_params or {})}
+            if same and exp.best_params:
+                verdict = f'confirmed current params (OOS PF {new_pf:.2f})'
+            elif exp.best_params and oos.get('trades', 0) >= 10 and new_pf >= MIN_OOS_PF and new_pf > base_pf * 1.05:
                 verdict = f'PROMOTED v{row.version + 1}: OOS PF {new_pf:.2f} vs current {base_pf:.2f}'
                 if not o['dry_run']:
                     promote(row, exp.best_params, source=f'auto-research experiment #{exp.pk}', metrics=oos)

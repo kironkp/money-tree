@@ -37,6 +37,12 @@ fi
 branch=$("$GIT" rev-parse --abbrev-ref HEAD)
 [ "$branch" = 'main' ] || say "note: on branch $branch, not main"
 
+# Refresh the trading-data backup first so tonight's commit carries it. A
+# backup failure must not stop the code push, so it is logged, not fatal.
+if [ -x "$REPO/deploy/backup-data.sh" ]; then
+    MONEYTREE_REPO="$REPO" /bin/bash "$REPO/deploy/backup-data.sh" || say 'warning: data backup failed (code push continues)'
+fi
+
 if [ -n "$("$GIT" status --porcelain)" ]; then
     files=$("$GIT" status --porcelain | wc -l | tr -d ' ')
     "$GIT" add -A || fail 'git add'

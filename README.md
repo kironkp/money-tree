@@ -60,11 +60,26 @@ pipenv run python manage.py run_agent --mode sim --market forex    # majors, 15-
 pipenv run python manage.py run_agent --replay 2026-08-28 --speed 30 --market stocks   # demo a past session
 ```
 
-Backups: `deploy/git-push.sh` runs nightly at 02:00 (launchd job
-`com.kiron.moneytree.gitpush`), committing anything uncommitted and pushing
-code and tags to the private `kironkp/money-tree` repo. The database and the
-`backups/` snapshots stay local — they are gitignored and far over GitHub's
-file-size limit.
+Backups run nightly at 02:00 (launchd job `com.kiron.moneytree.gitpush`).
+`deploy/git-push.sh` refreshes the trading-data backup, commits anything
+uncommitted, and pushes code and tags to the private `kironkp/money-tree` repo.
+`deploy/backup-data.sh` writes `data-backup/ledger.sql` — the schema plus every
+trade, order, fill, position, equity snapshot and journal entry, about 1.7 MB
+of SQL that git versions night by night — and on Sundays uploads the whole
+compressed database as a release asset under the `db-snapshot` tag.
+
+To restore on a new machine:
+
+```bash
+git clone https://github.com/kironkp/money-tree.git moneytree && cd moneytree
+sqlite3 db.sqlite3 < data-backup/ledger.sql   # money and decisions, no bars
+pipenv install && pipenv run python manage.py bootstrap_admin
+pipenv run python manage.py sync_bars --days 60        # refetch the bars
+```
+
+Or take the whole database, bars included, from the latest release:
+`gh release download db-snapshot --repo kironkp/money-tree` then
+`gunzip -c moneytree-db-latest.sqlite3.gz > db.sqlite3`.
 
 Or start/stop it from the dashboard. One agent per account (file lock in
 `run/`). Ctrl-C / SIGTERM flattens sim and paper positions on the way out.

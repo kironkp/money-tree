@@ -221,9 +221,34 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   rebases and never forces: it parks the local work on `backup/<date>-<sha>` and
   says so in the log, leaving `main` for a human. **Codex also works in this
   repo** — expect its in-progress edits to land in the nightly snapshot commit.
-- Only code goes up: `db.sqlite3`, `backups/` (the v1.x snapshots are ~200 MB,
-  over GitHub's 100 MB file limit), `run/` and `.env` are gitignored. The
-  trading ledger is not backed up anywhere off this machine.
+- **Trading data** (`deploy/backup-data.sh`, run by the push script before it
+  commits). Two destinations, because nothing else here is off-machine — no
+  iCloud, no Dropbox, no Time Machine, no external drive:
+  - `data-backup/ledger.sql` — **nightly, committed, versioned**. Full schema +
+    the irreplaceable rows (accounts, orders, fills, trades, positions, equity
+    snapshots, signals, cards, risk events, strategies, experiments, journal,
+    agent runs) + `django_migrations`. ~1.7 MB of plain SQL, which git deltas
+    well because a dump is append-ordered — never gzip it, that would defeat
+    the packfile. `data-backup/MANIFEST.txt` beside it carries row counts and
+    per-account equity, so `git log -p data-backup/MANIFEST.txt` reads as an
+    account history. **Restore is verified**: `sqlite3 new.db < ledger.sql`
+    gives a database Django opens with no pending migrations.
+  - The **full `db.sqlite3.gz`** (~29 MB) as a GitHub **release** asset on tag
+    `db-snapshot`, refreshed Sundays (`date +%u` = 7) or with `--full`. Release
+    assets live outside the git history, so the big binary never bloats the
+    repo; `--clobber` keeps exactly one, the latest.
+  - Left out of the nightly dump on purpose: `main_app_bar` (re-downloadable
+    with `sync_bars`), `main_app_feedevent` (narration, 74 MB, pruned at 24 h),
+    `symbolstate` (rewritten every bar), `backtestrun`/`backtesttrade`
+    (regenerable; their conclusions are in experiment/strategy.history/journal).
+    All of those ride the weekly full snapshot.
+  - No `auth_user`: password hashes stay out of git. `bootstrap_admin` recreates
+    the login on a restore.
+  - Pure `sqlite3` + `gh`, no Django and no pipenv, so the backup still runs on
+    a night when the app is mid-edit and will not import. `VACUUM INTO` takes a
+    consistent copy while the agents keep writing.
+- Only code goes up otherwise: `db.sqlite3`, `backups/` (the v1.x snapshots are
+  ~200 MB, over GitHub's 100 MB file limit), `run/` and `.env` are gitignored.
 - `MONEYTREE_REPO` overrides the script's target repo — that is how it gets
   tested against a scratch clone without touching the real history.
 

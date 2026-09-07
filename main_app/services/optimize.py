@@ -83,6 +83,8 @@ def slice_frames(frames: dict, start: date, end: date) -> dict:
 
 def walk_forward_windows(start: date, end: date, train_days: int, test_days: int, step_days: int | None = None) -> list[dict]:
     step_days = step_days or test_days
+    if step_days < test_days:
+        raise ValueError('walk-forward test windows must not overlap')
     out, n = [], 1
     t0 = start
     while True:
@@ -191,6 +193,44 @@ def chain_oos(segments: list[tuple[list, list, int, int]], starting_cash: float)
     return trades, equity, bars_seen, bars_pos
 
 
+def serialize_window(win: dict) -> dict:
+    """Stable, JSON-safe boundaries for an auditable research window."""
+    return {k: (v.isoformat() if isinstance(v, date) else v) for k, v in win.items()}
+
+
+def deserialize_window(win: dict) -> dict:
+    """Turn persisted ISO boundaries back into dates for an exact replay."""
+    out = dict(win)
+    for key in ('train_start', 'train_end', 'test_start', 'test_end'):
+        if isinstance(out.get(key), str):
+            out[key] = date.fromisoformat(out[key])
+    return out
+
+
+def evaluate_fixed_params(spec: BacktestSpec, frames: dict, windows: list[dict], params: dict,
+                          bench: pd.DataFrame | None = None) -> dict:
+    """Replay one immutable parameter set over explicit test windows.
+
+    This is deliberately separate from adaptive walk-forward results, where a
+    different training winner may trade each test window. Only a fixed result
+    can describe the configuration that would actually be installed.
+    """
+    segments, rows = [], []
+    for raw in windows:
+        win = deserialize_window(raw)
+        test = slice_frames(frames, win['test_start'], win['test_end'])
+        test_bench = (slice_frames({'benchmark': bench}, win['test_start'], win['test_end'])['benchmark']
+                      if bench is not None else None)
+        result = run_backtest(replace(spec, params=dict(params)), test, test_bench)
+        segments.append((result.trades, result.equity, result.bars_seen, result.bars_with_position))
+        rows.append({'window': serialize_window(win), 'metrics': result.metrics})
+    trades, equity, bars_seen, bars_pos = chain_oos(segments, spec.starting_cash)
+    metrics = compute_metrics(trades, equity, spec.starting_cash, bars_seen=bars_seen,
+                              bars_with_position=bars_pos)
+    return {'params': dict(params), 'metrics': metrics, 'windows': rows,
+            'equity': downsample_equity(equity, 400)}
+
+
 # --- Django side ---------------------------------------------------------
 
 def run_experiment(exp) -> None:
@@ -242,9 +282,11 @@ def run_experiment(exp) -> None:
                                            int(w.get('step_days', 0)) or None)
             if not windows:
                 raise ValueError('date range too short for the chosen train/test windows')
-            exp.total_runs = len(windows) * (len(combos) + 1)
+            # One grid and one adaptive test per window, followed by a fixed
+            # replay of the final candidate on every valid test window.
+            exp.total_runs = len(windows) * (len(combos) + 2)
             exp.save(update_fields=['total_runs'])
-            segments, rows, chosen = [], [], []
+            segments, rows, chosen, valid_windows = [], [], [], []
             base = 0
             for win in windows:
                 train = slice_frames(frames, win['train_start'], win['train_end'])
@@ -264,6 +306,7 @@ def run_experiment(exp) -> None:
                 progress(0, 1, base)
                 segments.append((r_test.trades, r_test.equity, r_test.bars_seen, r_test.bars_with_position))
                 chosen.append(best['params'])
+                valid_windows.append(win)
                 for label, m, eq, params in (('train', next(x[1] for x in results if x[0] == best['params']),
                                               next(x[3] for x in results if x[0] == best['params']), best['params']),
                                              ('test', r_test.metrics, r_test.equity, best['params'])):
@@ -292,14 +335,30 @@ def run_experiment(exp) -> None:
             for p in chosen:
                 k = ', '.join(f'{a}={b}' for a, b in sorted(p.items()))
                 freq[k] = freq.get(k, 0) + 1
+            # The most recent successful training window is the only one whose
+            # chosen parameters are temporally eligible for the final test
+            # window. A modal winner can be useful context, but is not a model
+            # selection rule with a clean holdout.
             recommended = chosen[-1] if chosen else {}
-            if freq:
-                top = max(freq.items(), key=lambda kv: kv[1])
-                if top[1] > 1:
-                    recommended = next(p for p in chosen if ', '.join(f'{a}={b}' for a, b in sorted(p.items())) == top[0])
+            fixed = (evaluate_fixed_params(spec, frames, valid_windows, recommended, bench)
+                     if recommended and valid_windows else {})
+            validation = {}
+            if fixed:
+                last = fixed['windows'][-1]
+                validation = {
+                    'window': last['window'],
+                    'candidate': last['metrics'],
+                    'candidate_params': recommended,
+                    'purpose': 'untouched final test window; this is the promotion evidence',
+                }
             summary.update({'windows': rows, 'oos': oos, 'train_avg_objective': train_avg, 'test_avg_objective': test_avg,
                             'decay': (test_avg / train_avg) if train_avg else None, 'param_frequency': freq,
-                            'oos_equity': downsample_equity(equity, 400)})
+                            'oos_equity': downsample_equity(equity, 400),
+                            'oos_kind': 'adaptive policy: each test window uses its own preceding training winner',
+                            'candidate_static_oos': fixed.get('metrics'),
+                            'candidate_static_equity': fixed.get('equity', []),
+                            'validation': validation,
+                            'recommendation_basis': 'winner of the most recent successful training window'})
             exp.best_params = recommended
         exp.summary = summary
         exp.status = 'done'

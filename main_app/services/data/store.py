@@ -150,15 +150,37 @@ def latest_ts(instrument: Instrument, timeframe: str, source: str | None = None)
 
 
 def coverage(instrument: Instrument, timeframe: str) -> dict:
-    qs = Bar.objects.filter(instrument=instrument, timeframe=timeframe)
-    first = qs.order_by('ts').values_list('ts', flat=True).first()
-    last = qs.order_by('-ts').values_list('ts', flat=True).first()
-    per_source = {}
-    for src in qs.values_list('source', flat=True).distinct():
-        sq = qs.filter(source=src)
-        per_source[src] = {'count': sq.count(), 'first': sq.order_by('ts').values_list('ts', flat=True).first(),
-                           'last': sq.order_by('-ts').values_list('ts', flat=True).first()}
-    return {'first': first, 'last': last, 'count': qs.count(), 'sources': list(per_source), 'per_source': per_source}
+    """One aggregate query per instrument (the Data page lists every instrument;
+    counting a million bars source by source took the page over a minute)."""
+    from django.db.models import Count, Max, Min
+    rows = (Bar.objects.filter(instrument=instrument, timeframe=timeframe).values('source').order_by('source')
+            .annotate(count=Count('id'), first=Min('ts'), last=Max('ts')))
+    per_source = {r['source']: {'count': r['count'], 'first': r['first'], 'last': r['last']} for r in rows}
+    firsts = [v['first'] for v in per_source.values()]
+    lasts = [v['last'] for v in per_source.values()]
+    return {'first': min(firsts) if firsts else None, 'last': max(lasts) if lasts else None,
+            'count': sum(v['count'] for v in per_source.values()), 'sources': list(per_source), 'per_source': per_source}
+
+
+def coverage_all(pairs: list[tuple[Instrument, str]]) -> dict[tuple[int, str], dict]:
+    """Coverage for many (instrument, timeframe) pairs in one grouped query —
+    the Data page lists every instrument, and one index scan beats 27."""
+    from django.db.models import Count, Max, Min
+    wanted = {(inst.pk, tf) for inst, tf in pairs}
+    out = {key: {'first': None, 'last': None, 'count': 0, 'sources': [], 'per_source': {}} for key in wanted}
+    rows = (Bar.objects.filter(instrument_id__in={pk for pk, _ in wanted}).values('instrument_id', 'timeframe', 'source')
+            .order_by('instrument_id', 'timeframe', 'source').annotate(count=Count('id'), first=Min('ts'), last=Max('ts')))
+    for r in rows:
+        key = (r['instrument_id'], r['timeframe'])
+        cov = out.get(key)
+        if cov is None:
+            continue
+        cov['per_source'][r['source']] = {'count': r['count'], 'first': r['first'], 'last': r['last']}
+        cov['sources'].append(r['source'])
+        cov['count'] += r['count']
+        cov['first'] = r['first'] if cov['first'] is None else min(cov['first'], r['first'])
+        cov['last'] = r['last'] if cov['last'] is None else max(cov['last'], r['last'])
+    return out
 
 
 def sync_bars(instrument: Instrument, timeframe: str, start: datetime, end: datetime,

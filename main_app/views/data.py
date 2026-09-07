@@ -15,7 +15,7 @@ from main_app.models import AgentConfig, Bar, Instrument, Trade
 from main_app.services import procs
 from main_app.services.data import calendar as cal
 from main_app.services.data import provider_status
-from main_app.services.data.store import coverage, load_frame, quality_gate, synthetic_symbols
+from main_app.services.data.store import coverage, coverage_all, load_frame, quality_gate
 
 from .common import operator_required
 
@@ -24,11 +24,16 @@ from .common import operator_required
 def data_index(request):
     cfg = AgentConfig.get()
     rows = []
-    for inst in Instrument.objects.all():
+    synthetic = []
+    instruments = list(Instrument.objects.all())
+    covs = coverage_all([(inst, cfg.timeframe_for(inst.market)) for inst in instruments])
+    for inst in instruments:
         tf = cfg.timeframe_for(inst.market)
-        cov = coverage(inst, tf)
+        cov = covs[(inst.pk, tf)]
         cov['timeframe'] = tf
         rows.append({'inst': inst, 'cov': cov})
+        if inst.in_watchlist and 'synthetic' in cov['sources']:
+            synthetic.append(inst.symbol)
     now = timezone.now()
     s = cal.session_at(now)
     return render(request, 'data/index.html', {
@@ -37,9 +42,8 @@ def data_index(request):
         'log': procs.tail('sync', 25), 'timeframes': ['1Min', '5Min', '15Min', '30Min', '1Hour'],
         'upcoming': [x for x in cal.sessions_between(now.date(), (now + timedelta(days=21)).date()) if x.early_close][:3],
         'total_bars': Bar.objects.count(),
-        'synthetic': synthetic_symbols(Instrument.objects.filter(in_watchlist=True), cfg.timeframe)
-                     + synthetic_symbols(Instrument.objects.filter(in_watchlist=True, asset_class='crypto'), cfg.crypto_timeframe)
-                     + synthetic_symbols(Instrument.objects.filter(in_watchlist=True, asset_class='forex'), cfg.forex_timeframe),
+        # From the coverage already computed: a source='synthetic' scan across a million bars is slow.
+        'synthetic': sorted(synthetic),
     })
 
 

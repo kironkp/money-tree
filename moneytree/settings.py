@@ -29,7 +29,12 @@ environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 SECRET_KEY = env('SECRET_KEY')
 # Bump per release; tagged in git (v1.0, v1.1, …) with a matching
 # backups/db-<tag>.sqlite3 snapshot. Rollback recipe lives in CLAUDE.md.
-VERSION = '1.5'
+VERSION = '1.30'
+
+# Tests must be deterministic even when a developer's local .env selects
+# production behavior. Manifest storage is a deployment concern; requiring
+# collectstatic before unit tests made view tests depend on machine state.
+TESTING = 'test' in sys.argv
 
 if 'ON_HEROKU' in os.environ:
     DEBUG = False
@@ -176,7 +181,7 @@ STORAGES = {
     'staticfiles': {
         'BACKEND': (
             'django.contrib.staticfiles.storage.StaticFilesStorage'
-            if DEBUG
+            if DEBUG or TESTING
             else 'whitenoise.storage.CompressedManifestStaticFilesStorage'
         ),
     },

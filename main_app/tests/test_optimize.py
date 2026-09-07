@@ -1,8 +1,13 @@
 from datetime import UTC, date, datetime
+from types import SimpleNamespace
+from unittest.mock import patch
 
+import pandas as pd
 from django.test import SimpleTestCase
 
-from main_app.services.optimize import chain_oos, enumerate_combos, grid_from_schema, rank, stability, walk_forward_windows
+from main_app.services.backtest import BacktestSpec
+from main_app.services.optimize import (chain_oos, enumerate_combos, evaluate_fixed_params, grid_from_schema, rank,
+                                        stability, walk_forward_windows)
 
 
 class WalkForwardWindowsRollWithoutLeaking(SimpleTestCase):
@@ -18,6 +23,10 @@ class WalkForwardWindowsRollWithoutLeaking(SimpleTestCase):
 
     def test_too_short_range_gives_no_windows(self):
         self.assertEqual(walk_forward_windows(date(2026, 8, 1), date(2026, 8, 20), 30, 10), [])
+
+    def test_overlapping_test_windows_are_refused(self):
+        with self.assertRaisesRegex(ValueError, 'must not overlap'):
+            walk_forward_windows(date(2026, 6, 1), date(2026, 8, 31), 30, 10, step_days=5)
 
 
 class GridsAreBoundedAndOverridable(SimpleTestCase):
@@ -62,3 +71,31 @@ class RankingAndStability(SimpleTestCase):
         trades, eq, bs, bp = chain_oos([seg1, seg2], 10000)
         self.assertEqual([e[3] for e in eq], [10000, 10100, 10100, 10050])
         self.assertEqual((bs, bp), (20, 5))
+
+
+class FixedCandidateEvidence(SimpleTestCase):
+    def test_one_config_is_replayed_on_the_exact_test_windows(self):
+        idx = pd.date_range('2026-08-01 16:00', periods=8, freq='1D', tz='UTC')
+        frame = pd.DataFrame({'open': 1.0, 'high': 1.0, 'low': 1.0, 'close': 1.0, 'volume': 1.0}, index=idx)
+        windows = [
+            {'n': 1, 'train_start': date(2026, 7, 1), 'train_end': date(2026, 7, 31),
+             'test_start': date(2026, 8, 1), 'test_end': date(2026, 8, 2)},
+            {'n': 2, 'train_start': date(2026, 7, 3), 'train_end': date(2026, 8, 2),
+             'test_start': date(2026, 8, 3), 'test_end': date(2026, 8, 4)},
+        ]
+        seen = []
+
+        def fake_run(spec, frames, bench):
+            dates = [ts.date().isoformat() for ts in frames['X'].index]
+            seen.append((dict(spec.params), dates))
+            return SimpleNamespace(trades=[], equity=[], bars_seen=len(dates), bars_with_position=0,
+                                   metrics={'trades': 0, 'profit_factor': 0, 'net_pnl': 0})
+
+        with patch('main_app.services.optimize.run_backtest', side_effect=fake_run):
+            result = evaluate_fixed_params(BacktestSpec('ema_momentum', {}, ['X']), {'X': frame}, windows,
+                                           {'fast': 9})
+
+        self.assertEqual([x[0] for x in seen], [{'fast': 9}, {'fast': 9}])
+        self.assertEqual(seen[0][1], ['2026-08-01', '2026-08-02'])
+        self.assertEqual(seen[1][1], ['2026-08-03', '2026-08-04'])
+        self.assertEqual(result['windows'][1]['window']['test_end'], '2026-08-04')

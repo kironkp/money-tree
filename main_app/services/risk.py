@@ -185,6 +185,7 @@ class RiskManager:
         qty = round_qty(qty, inc)
         if qty <= 0:
             if qty_cash < inc:
-                return Decision(False, reason='insufficient cash')
+                return Decision(False, reason='insufficient cash' if c.leverage <= 1
+                                else f'buying power used up ({c.leverage:g}× leverage, open positions count against it)')
             return Decision(False, reason='price exceeds position cap (0 shares)')
-        return Decision(True, qty=qty, reason=f'risk ${risk_dollars:.0f} / stop {stop_dist:.2f}')
+        return Decision(True, qty=qty, reason=f'risk ${risk_dollars:.0f} / stop {stop_dist:,.6g}')

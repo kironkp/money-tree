@@ -126,6 +126,17 @@ class MemoryRecorder(Recorder):
         self.cards[card.id] = card.as_dict()
 
 
+def px(p) -> str:
+    """A price for the feed: enough digits for EUR/USD (1.16144) and BONK (3.14e-06), cents for stocks."""
+    try:
+        p = float(p)
+    except (TypeError, ValueError):
+        return str(p)
+    if p >= 1000:
+        return f'{p:,.2f}'
+    return f'{p:,.6g}'
+
+
 @dataclass
 class EngineConfig:
     timeframe: str = '5Min'
@@ -230,7 +241,7 @@ class Engine:
         slip = f', slippage {fill.slippage_bps:+.1f} bps' if fill.slippage_bps is not None else ''
         partial = ' (partial — liquidity cap)' if order.status == 'canceled' and order.filled_qty else ''
         remaining = max(0.0, order.qty - order.filled_qty)
-        self.say('fill', f'FILLED {order.side} {fill.qty:g} {order.symbol} @ {fill.price:,.2f}{slip}{partial}, fees {fill.fee:,.2f}'
+        self.say('fill', f'FILLED {order.side} {fill.qty:g} {order.symbol} @ {px(fill.price)}{slip}{partial}, fees {fill.fee:,.2f}'
                  + (f', {remaining:g} remaining' if remaining > 1e-9 and order.status not in ('canceled', 'filled') else '')
                  + f' — {order.leg}: {order.reason}', order.symbol, order.strategy_key, fill.ts,
                  {'qty': fill.qty, 'price': fill.price, 'side': order.side, 'fee': fill.fee, 'slippage_bps': fill.slippage_bps,
@@ -249,8 +260,8 @@ class Engine:
             card.protection, card.protection_order_id = kind, oid
             if kind != 'none':
                 card.status = 'protected'
-                self.say('order', f'PROTECTED {order.symbol}: {self._protection_text(kind)} — stop {card.stop:,.2f}, target '
-                         f'{card.target:,.2f}' if card.stop and card.target else f'PROTECTED {order.symbol}: {self._protection_text(kind)}',
+                self.say('order', f'PROTECTED {order.symbol}: {self._protection_text(kind)} — stop {px(card.stop)}, target '
+                         f'{px(card.target)}' if card.stop and card.target else f'PROTECTED {order.symbol}: {self._protection_text(kind)}',
                          order.symbol, order.strategy_key, fill.ts, phase='manage', card=card)
             else:
                 self.rec.on_risk_event('unprotected', f'{order.symbol} is open with NO exit protection', fill.ts,
@@ -269,7 +280,7 @@ class Engine:
     def _on_trade(self, trade, order: OrderReq) -> None:
         card = self.cards.get(trade.entry_order_id) or self.cards.get(self.card_by_symbol.get(trade.symbol, ''))
         gross = trade.pnl + trade.fees
-        self.say('trade', f'CLOSED {trade.symbol} {trade.side} {trade.qty:g}: {trade.entry_price:,.2f} → {trade.exit_price:,.2f}, '
+        self.say('trade', f'CLOSED {trade.symbol} {trade.side} {trade.qty:g}: {px(trade.entry_price)} → {px(trade.exit_price)}, '
                  f'gross {gross:+,.2f}, fees {trade.fees:,.2f}, net {trade.pnl:+,.2f} ({trade.pnl_pct:+.2f}%) after {trade.bars_held} bars — '
                  f'{trade.exit_reason}', trade.symbol, trade.strategy_key, trade.exit_ts,
                  {'pnl': trade.pnl, 'gross': gross, 'fees': trade.fees, 'exit_reason': trade.exit_reason,
@@ -357,11 +368,11 @@ class Engine:
             best = max(best, passed / len(rules))
             parts.append(f'{self.names.get(key, key)}: ' + '; '.join(r.text for r in rules) + '.')
         when = ts.astimezone(cal.ET).strftime('%H:%M')
-        head = f'{when} {symbol} bar closed at {price:,.2f}.'
+        head = f'{when} {symbol} bar closed at {px(price)}.'
         if holding:
-            d_stop = f' stop {pos.stop:,.2f} ({(pos.stop / price - 1) * 100:+.2f}%)' if pos.stop else ''
-            d_tgt = f', target {pos.target:,.2f} ({(pos.target / price - 1) * 100:+.2f}%)' if pos.target else ''
-            tail = f' Holding {pos.side} {abs(pos.qty):g} from {pos.avg_price:,.2f} ({pos.unrealized(price):+,.2f}):{d_stop}{d_tgt}, {pos.bars_held} bars.'
+            d_stop = f' stop {px(pos.stop)} ({(pos.stop / price - 1) * 100:+.2f}%)' if pos.stop else ''
+            d_tgt = f', target {px(pos.target)} ({(pos.target / price - 1) * 100:+.2f}%)' if pos.target else ''
+            tail = f' Holding {pos.side} {abs(pos.qty):g} from {px(pos.avg_price)} ({pos.unrealized(price):+,.2f}):{d_stop}{d_tgt}, {pos.bars_held} bars.'
             decision = 'holding'
         elif blocked:
             tail = f' Blocked: {blocked}.'
@@ -432,10 +443,10 @@ class Engine:
                          reason=sig.reason, rules=[r.as_dict(strat.key) for r in (rules or [])])
         self.cards[card.id] = card
         self.card_by_symbol[symbol] = card.id
-        stop_txt = f'stop {sig.stop:,.2f}' if sig.stop else 'no stop'
-        tgt_txt = f'target {sig.target:,.2f}' if sig.target else 'no target'
+        stop_txt = f'stop {px(sig.stop)}' if sig.stop else 'no stop'
+        tgt_txt = f'target {px(sig.target)}' if sig.target else 'no target'
         self.say('signal', f'{self.names.get(strat.key, strat.key)} entry approved for {symbol} ({side_word}): {sig.reason}. '
-                 f'Planned entry {price:,.2f}, {stop_txt}, {tgt_txt}.', symbol, strat.key, sig.ts,
+                 f'Planned entry {px(price)}, {stop_txt}, {tgt_txt}.', symbol, strat.key, sig.ts,
                  {'price': price, 'stop': sig.stop, 'target': sig.target, 'rules': card.rules}, phase='decide', card=card)
         self.say('signal', f'Size: {decision.qty:g} {symbol} (≈ {notional:,.2f}); planned loss at stop {card.risk_dollars:,.2f}, '
                  f'expected reward {reward:,.2f} before costs (≈ {costs:,.2f}); reward:risk {card.reward_risk:.1f}. '
@@ -527,7 +538,7 @@ class Engine:
             if hold_limit is None and self.cfg.risk.max_hold_minutes:
                 hold_limit = pos.entry_ts + timedelta(minutes=self.cfg.risk.max_hold_minutes)
             if hold_limit is not None and ts >= hold_limit:
-                self._close(symbol, price, ts, 'time', f'MAX HOLD reached — closing {symbol} at {price:,.2f}')
+                self._close(symbol, price, ts, 'time', f'MAX HOLD reached — closing {symbol} at {px(price)}')
         self._emit_broker_events()
 
     def flatten_all(self, ts: datetime, reason: str, prices: dict[str, float] | None = None) -> int:

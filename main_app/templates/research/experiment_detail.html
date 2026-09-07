@@ -16,7 +16,7 @@
 <div class="grid cols-2">
   {% if oos %}
   <div class="card span-2">
-    <h3>Out-of-sample (stitched test windows)</h3>
+    <h3>Adaptive walk-forward diagnostic</h3>
     <div class="tiles">
       <div class="tile"><div class="label">OOS net</div><div class="value {{ oos.net_pnl|sign_class }}">{{ oos.net_pnl|signed_money }}</div><div class="sub">{{ oos.trades }} trades</div></div>
       <div class="tile"><div class="label">OOS profit factor</div><div class="value">{{ oos.profit_factor|floatformat:2 }}</div><div class="sub">win {{ oos.win_rate|floatformat:0 }}%</div></div>
@@ -24,8 +24,35 @@
       <div class="tile"><div class="label">Decay (test ÷ train)</div><div class="value {% if s.decay and s.decay < 0.5 %}down{% elif s.decay and s.decay > 0.8 %}up{% endif %}">{{ s.decay|floatformat:2|default:'—' }}</div><div class="sub">train avg {{ s.train_avg_objective|floatformat:2 }} · test avg {{ s.test_avg_objective|floatformat:2 }}</div></div>
     </div>
     <div id="oos" class="chart"></div>
-    <p class="small muted">Decay near 1 means the training edge survived out of sample; below 0.5 smells like overfitting. Params picked per window: {% for k, n in freq %}<span class="badge">{{ k }} ×{{ n }}</span> {% endfor %}</p>
+    <p class="small muted">Each test window used the winner from its own preceding training window. This measures an adaptive policy, not the one fixed configuration shown under Recommended, so it cannot by itself justify promotion. Decay near 1 means training performance transferred; below 0.5 suggests overfitting. Params picked per window: {% for k, n in freq %}<span class="badge">{{ k }} ×{{ n }}</span> {% endfor %}</p>
   </div>
+  {% if candidate_static %}
+  <div class="card">
+    <h3>Fixed candidate replay <span class="more">diagnostic</span></h3>
+    <div class="tiles">
+      <div class="tile"><div class="label">Net</div><div class="value {{ candidate_static.net_pnl|sign_class }}">{{ candidate_static.net_pnl|signed_money }}</div><div class="sub">{{ candidate_static.trades }} trades</div></div>
+      <div class="tile"><div class="label">Profit factor</div><div class="value">{{ candidate_static.profit_factor|floatformat:2 }}</div><div class="sub">expectancy {{ candidate_static.expectancy|signed_money }}</div></div>
+    </div>
+    <div id="candidate-static" class="chart"></div>
+    <p class="small muted">One immutable candidate replayed across every historical test window. Because later training windows can contain earlier test dates, this is useful context but not final promotion evidence.</p>
+  </div>
+  {% endif %}
+  {% if validation.candidate %}
+  <div class="card">
+    <h3>Final held-out validation {% if candidate_qualified %}<span class="badge up">qualified</span>{% else %}<span class="badge down">not qualified</span>{% endif %}</h3>
+    <p class="small"><strong>{{ validation.window.test_start }} → {{ validation.window.test_end }}</strong> · candidate and current champion are compared on these exact bars.</p>
+    <div class="tiles">
+      <div class="tile"><div class="label">Candidate net</div><div class="value {{ validation.candidate.net_pnl|sign_class }}">{{ validation.candidate.net_pnl|signed_money }}</div><div class="sub">{{ validation.candidate.trades }} trades</div></div>
+      <div class="tile"><div class="label">Candidate PF</div><div class="value">{{ validation.candidate.profit_factor|floatformat:2 }}</div><div class="sub">expectancy {{ validation.candidate.expectancy|signed_money }}</div></div>
+      {% if validation.champion %}
+      <div class="tile"><div class="label">Current net</div><div class="value {{ validation.champion.net_pnl|sign_class }}">{{ validation.champion.net_pnl|signed_money }}</div><div class="sub">{{ validation.champion.trades }} trades</div></div>
+      <div class="tile"><div class="label">Current PF</div><div class="value">{{ validation.champion.profit_factor|floatformat:2 }}</div><div class="sub">same held-out bars</div></div>
+      {% endif %}
+    </div>
+    {% if validation.verdict %}<p><strong>{{ validation.verdict }}</strong></p>{% endif %}
+    <p class="small muted">Qualification requires at least {{ exp.min_trades }} trades, PF ≥ 1.10, positive net P&amp;L, and positive expectancy after modeled costs.</p>
+  </div>
+  {% endif %}
   <div class="card span-2">
     <h3>Windows</h3>
     <div class="table-wrap"><table>
@@ -59,12 +86,17 @@
   <div class="card span-2">
     <h3>Recommended params</h3>
     {% if exp.best_params %}
+    {% if exp.method != 'walk_forward' or candidate_qualified %}
     <form method="post" action="{% url 'experiment-promote' exp.pk %}" data-confirm="Install these params on {{ strategy.name }}?">{% csrf_token %}
       <div class="field"><textarea name="params_json" rows="3">{{ exp.best_params|json }}</textarea></div>
       <div class="field"><input type="text" name="note" placeholder="note for the history (optional)"></div>
       <button class="btn primary">Promote to {{ strategy.name|default:exp.strategy_key }}</button>
       <span class="small muted">grid: {{ exp.param_grid|json }}</span>
     </form>
+    {% else %}
+    <p class="message warn">This candidate is recorded but cannot be promoted: its final held-out window did not clear the evidence gate.</p>
+    <pre>{{ exp.best_params|json }}</pre>
+    {% endif %}
     {% else %}<p class="empty">no combo met the minimum trade count</p>{% endif %}
   </div>
 </div>
@@ -74,5 +106,7 @@
 <script>
   var oos = {{ oos_json|safe }};
   if (oos && oos.length && document.getElementById('oos')) MTCharts.lineChart(document.getElementById('oos'), [{ data: oos, label: 'OOS equity' }]);
+  var fixedCandidate = {{ candidate_static_json|safe }};
+  if (fixedCandidate && fixedCandidate.length && document.getElementById('candidate-static')) MTCharts.lineChart(document.getElementById('candidate-static'), [{ data: fixedCandidate, label: 'Fixed candidate equity' }]);
 </script>
 {% endblock %}

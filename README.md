@@ -15,6 +15,9 @@ The ladder every strategy climbs:
 Same engine, same risk manager, same strategy code at every stage. Promotion
 is gated by a checklist (sessions, trades, profit factor, drawdown, live
 expectancy vs backtest, realized slippage) shown on each strategy page.
+Version 1.30 separates **enabled for observation** from **statistically
+qualified**: unproven ideas may collect fake-money evidence, but paper/live
+agents refuse them. A measured losing strategy is quarantined and disabled.
 
 Four lanes, four piggy banks: **Stocks** (NYSE/Nasdaq session), **Crypto**
 (BTC/ETH, hourly, careful), **Degen** (Alpaca altcoins on 1-minute bars,
@@ -85,7 +88,9 @@ tap for the audit). Kill switch and Stop reach a sleeping agent within 2 seconds
 1. **Data** — sync history, look at coverage and quality flags.
 2. **Backtests** — run a strategy over a range; metrics vs SPY buy-and-hold.
 3. **Experiments** — grid / random / **walk-forward** parameter search with
-   in-sample → out-of-sample decay and a neighbourhood stability score.
+   in-sample → out-of-sample decay and a neighbourhood stability score. The
+   screen separates adaptive OOS, a fixed-candidate replay, and the final
+   untouched validation window.
 4. **Promote** — install the winning params on the strategy row (versioned,
    history kept). Enable it. It trades fake currency from the next bar.
 5. **Journal** — the agent writes an end-of-day entry; if live expectancy
@@ -94,8 +99,12 @@ tap for the audit). Kill switch and Stop reach a sleeping agent within 2 seconds
    proposes experiments you can run with one click.
 7. **Graduate** — when the checklist is green, move the strategy up a stage.
 8. **Nightly auto-research** (`manage.py auto_research`, launchd 02:10): walk-forward
-   every enabled strategy on trailing real bars; promote only when the search's
-   out-of-sample profit factor beats the current params' and clears costs; journal it.
+   every enabled strategy on trailing real bars; compare the fixed candidate
+   and current champion on identical final held-out bars; promote only when the
+   candidate clears every cost-adjusted gate; journal it.
+9. **Evidence audit** (`manage.py audit_qualifications`, add `--apply` to
+   persist): show exactly why each immutable strategy version is unproven,
+   qualified, or quarantined.
 
 ## Direction is the strategy's call
 

@@ -113,6 +113,27 @@ class Context:
     extra: dict = field(default_factory=dict)
 
 
+def volume_evidence(asset_class: str, relvol, threshold: float) -> tuple[bool, str, float | None]:
+    """One honest volume decision shared by every volume-filtered strategy."""
+    threshold = float(threshold)
+    available = relvol is not None and not pd.isna(relvol)
+    value = float(relvol) if available else None
+    if asset_class == 'forex':
+        return True, 'centralized spot-FX volume is unavailable; documented price-only fallback', None
+    if threshold <= 0:
+        detail = f'measured relative volume {value:.1f}×' if available else 'source volume unavailable'
+        return True, f'volume filter disabled ({detail})', value
+    if not available:
+        return False, f'volume unavailable; cannot verify the required {threshold:.1f}× activity', None
+    ok = value >= threshold
+    return ok, f'relative volume {value:.1f}× vs {threshold:.1f}× required', value
+
+
+def volume_rule(ctx: Context, relvol, threshold: float) -> Rule:
+    ok, text, value = volume_evidence(ctx.asset_class, relvol, threshold)
+    return Rule('volume', ok, text, value=value, threshold=float(threshold))
+
+
 class Strategy:
     key = 'base'
     name = 'Base'

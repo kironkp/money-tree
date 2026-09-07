@@ -3,6 +3,7 @@ import pandas as pd
 from django.test import SimpleTestCase
 
 from main_app.services import indicators as ind
+from main_app.services.strategies.base import volume_evidence
 from main_app.tests.helpers import frames_for
 
 
@@ -33,17 +34,36 @@ class IndicatorsAreCausalAndBounded(SimpleTestCase):
         cut_v = ind.session_vwap(self.df.iloc[:100], self.session.iloc[:100])
         self.assertTrue(np.allclose(full_v.iloc[:100].to_numpy(), cut_v.to_numpy()))
 
-    def test_relative_volume_first_session_is_neutral(self):
+    def test_relative_volume_first_session_is_explicitly_unavailable(self):
         rv = ind.relative_volume(self.df, self.session, 10)
         first = rv[self.session == self.session.iloc[0]]
-        self.assertTrue((first == 1.0).all())
+        self.assertTrue(first.isna().all())
         self.assertGreater(rv.iloc[-1], 0)
 
-    def test_zero_volume_bars_read_as_neutral_relative_volume(self):
+    def test_zero_volume_bars_are_not_invented_as_average_volume(self):
         df = self.df.copy()
         df.loc[df.index[-3:], 'volume'] = 0.0
         rv = ind.relative_volume(df, self.session, 10)
-        self.assertTrue((rv.iloc[-3:] == 1.0).all())
+        self.assertTrue(rv.iloc[-3:].isna().all())
+
+    def test_volume_filter_blocks_unknown_data_but_documents_forex_fallback(self):
+        ok, text, value = volume_evidence('crypto', np.nan, 1.5)
+        self.assertFalse(ok)
+        self.assertIsNone(value)
+        self.assertIn('unavailable', text)
+        ok, text, value = volume_evidence('forex', np.nan, 1.0)
+        self.assertTrue(ok)
+        self.assertIsNone(value)
+        self.assertIn('price-only fallback', text)
+
+    def test_session_anchor_discloses_when_volume_is_unavailable(self):
+        df = self.df.copy()
+        df['volume'] = 0.0
+        vwap = ind.session_vwap(df, self.session)
+        typical = (df['high'] + df['low'] + df['close']) / 3
+        expected = typical.groupby(self.session).expanding().mean().reset_index(level=0, drop=True)
+        self.assertTrue(np.allclose(vwap, expected))
+        self.assertFalse(ind.session_has_volume(df, self.session).any())
 
     def test_minutes_to_close_counts_down(self):
         mtc = ind.minutes_to_close(self.df.index, 'stock')

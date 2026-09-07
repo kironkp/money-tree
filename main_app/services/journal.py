@@ -11,7 +11,7 @@ from django.utils import timezone
 from main_app.models import (Account, EquitySnapshot, Fill, JournalEntry, RiskEvent, Signal, Strategy, Trade)
 
 from .data import calendar as cal
-from .promotion import baseline_metrics
+from .promotion import baseline_metrics, qualification_assessment, refresh_qualification
 
 DRIFT_MIN_TRADES = 20
 
@@ -86,8 +86,19 @@ def drift_check(account: Account, row: Strategy, n: int = DRIFT_MIN_TRADES) -> d
 def write_eod_journal(account: Account, d: date | None = None, auto_disable: bool = True) -> JournalEntry:
     d = d or timezone.localdate()
     s = day_summary(account, d)
-    drifts = []
+    drifts, qualifications = [], []
     for row in Strategy.objects.filter(enabled=True, market=account.market):
+        if auto_disable and account.mode != 'replay':
+            qa, changed = refresh_qualification(row, account)
+        else:
+            qa, changed = qualification_assessment(row, account), False
+        qualifications.append({'strategy': row.key, **qa})
+        if changed:
+            RiskEvent.objects.create(
+                account=account, kind='qualification',
+                message=f'{row.key}: {qa["state"]} — {qa["reason"]}'[:300],
+                data={'strategy': row.key, 'state': qa['state'], 'version': row.version},
+            )
         dc = drift_check(account, row)
         drifts.append(dc)
         if dc['drift'] and auto_disable and account.mode != 'replay':
@@ -99,6 +110,7 @@ def write_eod_journal(account: Account, d: date | None = None, auto_disable: boo
             RiskEvent.objects.create(account=account, kind='drift', message=f'{row.key} auto-disabled: live expectancy '
                                      f'{dc["live_expectancy"]:+.2f} vs backtest {dc["backtest_expectancy"]:+.2f}')
     s['drift'] = drifts
+    s['qualification'] = qualifications
     lines = [f"**{s['trades']} trades**, net **{s['net_pnl']:+,.2f}** (fees {s['fees']:,.2f}), "
              f"win rate {s['win_rate']:.0f}%, profit factor {s['profit_factor']:.2f}, expectancy {s['expectancy']:+.2f}/trade.",
              f"Equity {s['equity_start']:,.2f} → {s['equity_end']:,.2f}."]
@@ -120,6 +132,8 @@ def write_eod_journal(account: Account, d: date | None = None, auto_disable: boo
             flag = ' **DRIFT — auto-disabled**' if dc['drift'] else ''
             lines.append(f"{dc['strategy']}: last {dc['trades']} trades expectancy {dc['live_expectancy']:+.2f} "
                          f"vs backtest {dc['backtest_expectancy']:+.2f}{flag}")
+    for qa in qualifications:
+        lines.append(f"{qa['strategy']} evidence: **{qa['state']}** — {qa['reason']}")
     if s['open_positions']:
         lines.append(f"⚠ {s['open_positions']} position(s) still open after the close.")
     title = f"{account.name}: {s['trades']} trades, {s['net_pnl']:+,.2f}"

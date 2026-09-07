@@ -5,7 +5,9 @@
   <div class="strip-item"><span class="k">Data</span><span class="v">{{ status.data_source }}{% if status.last_bar_ts %} · bar {{ status.last_bar_ts|et:'%H:%M' }} ({{ status.bar_age|duration }} old){% else %} · no bar yet{% endif %}</span></div>
   <div class="strip-item"><span class="k">Broker</span><span class="v">{% if status.reconcile.applies %}{% if status.reconcile.ok %}reconciled{% else %}<span class="down">DIVERGED</span>{% endif %}{% if status.reconcile.age is not None %} {{ status.reconcile.age|duration }} ago{% else %} never{% endif %}{% else %}simulator (own venue){% endif %}</span></div>
   <div class="strip-item"><span class="k">Controls</span><span class="v">{% if status.kill_switch %}<span class="down">KILL SWITCH ON</span>{% elif status.trading_enabled %}trading on{% else %}<span class="warn">trading off</span>{% endif %}{% if status.halted %} · <span class="down">halted</span>{% endif %}</span></div>
-  <div class="strip-item safe {% if status.safe %}yes{% else %}no{% endif %}"><span class="k">Safe to trade now</span><span class="v">{% if status.safe %}Yes{% else %}No{% endif %}</span></div>
+  <div class="strip-item safe {% if status.operational.ok %}yes{% else %}no{% endif %}"><span class="k">Operational</span><span class="v">{{ status.operational.label|capfirst }}</span></div>
+  <div class="strip-item safe {% if status.qualification.ok %}yes{% else %}no{% endif %}"><span class="k">Evidence</span><span class="v">{{ status.qualification.label|capfirst }}</span></div>
+  <div class="strip-item safe {% if status.authorization.ok %}yes{% else %}no{% endif %}"><span class="k">Execution</span><span class="v">{{ status.authorization.label|capfirst }}</span></div>
 </div>
 {% if status.blockers or status.notes %}
 <p class="small strip-notes">{% for b in status.blockers %}<span class="badge bad">{{ b }}</span> {% endfor %}{% for n in status.notes %}<span class="badge">{{ n }}</span> {% endfor %}</p>

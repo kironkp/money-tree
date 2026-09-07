@@ -5,13 +5,15 @@ from datetime import date, timedelta
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import get_object_or_404, redirect, render
+from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from main_app.forms import strategy_param_form
-from main_app.models import Account, AgentConfig, BacktestRun, Instrument, Stage, Strategy, market_for_symbols
+from main_app.models import (Account, AgentConfig, BacktestRun, Instrument, Qualification, Stage, Strategy,
+                             market_for_symbols)
 from main_app.services.backtest import run_backtest_for_model
 from main_app.services.promotion import (STAGE_ACCOUNT_MODE, STAGE_LABEL, STAGE_ORDER, graduation_checklist,
-                                         live_stats, next_stage, previous_stage)
+                                         live_stats, next_stage, previous_stage, qualification_assessment)
 from main_app.services.strategies import STRATEGIES, get_strategy_class
 
 from .common import deny_observer, operator_required
@@ -61,10 +63,16 @@ def strategy_detail(request, market, key):
             if target and action == 'stage_up':
                 account = _account_for_stage(row.stage, market) or Account.for_mode('sim', market)
                 check = graduation_checklist(row, account, cfg)
+                broker_target = target in (Stage.SAPLING, Stage.TREE)
+                if broker_target and row.qualification != Qualification.QUALIFIED:
+                    messages.error(request, f'not ready for {STAGE_LABEL[target]}: statistical qualification is required and cannot be overridden')
+                    return redirect('strategy-detail', market=market, key=key)
                 override = request.POST.get('override') == 'yes'
-                if not check['ready'] and not override:
+                if not check['ready'] and (not override or broker_target):
                     failing = '; '.join(i['name'] for i in check['items'] if not i['ok'])
-                    messages.error(request, f'not ready for {STAGE_LABEL[target]}: {failing}. Tick "override" and give a reason to force it.')
+                    suffix = (' This broker-backed step cannot be overridden.' if broker_target
+                              else ' Tick "override" and give a reason to force it.')
+                    messages.error(request, f'not ready for {STAGE_LABEL[target]}: {failing}.{suffix}')
                     return redirect('strategy-detail', market=market, key=key)
                 source = 'graduated (checklist green)' if check['ready'] else f'OVERRIDE: {request.POST.get("override_reason", "")[:120] or "no reason given"}'
             else:
@@ -74,6 +82,15 @@ def strategy_detail(request, market, key):
                 row.history = (row.history or []) + [{'at': str(date.today()), 'stage': target, 'source': source}]
                 row.save(update_fields=['stage', 'history'])
                 messages.success(request, f'{row.name} is now {STAGE_LABEL[target]} ({source})')
+            return redirect('strategy-detail', market=market, key=key)
+        if action == 'reset_qualification' and row.qualification == Qualification.QUARANTINED:
+            row.qualification = Qualification.UNPROVEN
+            row.qualification_reason = 'operator reset quarantine; this version must collect fresh evidence'
+            row.qualification_updated_at = timezone.now()
+            row.history = (row.history or []) + [{'at': str(date.today()), 'version': row.version,
+                                                  'source': 'qualification reset'}]
+            row.save(update_fields=['qualification', 'qualification_reason', 'qualification_updated_at', 'history'])
+            messages.success(request, 'quarantine reset to unproven; re-enable only for simulator observation')
             return redirect('strategy-detail', market=market, key=key)
         form = Form(request.POST)
         if form.is_valid():
@@ -91,6 +108,9 @@ def strategy_detail(request, market, key):
             row.notes = request.POST.get('notes', row.notes)
             if changed:
                 row.version += 1
+                row.qualification = Qualification.UNPROVEN
+                row.qualification_reason = 'manual parameter edit created a new unproven version'
+                row.qualification_updated_at = timezone.now()
                 row.history = (row.history or []) + [{'at': str(date.today()), 'version': row.version, 'params': params,
                                                       'source': 'manual edit'}]
             row.save()
@@ -100,12 +120,13 @@ def strategy_detail(request, market, key):
         form = Form()
     account = _account_for_stage(row.stage, market) or Account.for_mode('sim', market)
     check = graduation_checklist(row, account, cfg)
+    qualification = qualification_assessment(row, account)
     runs = [r for r in BacktestRun.objects.filter(strategy_key=key, status='done').order_by('-created_at')[:30]
             if market_for_symbols(r.symbols) == market][:8]
     recent_trades = account.trades.filter(strategy_key=key).select_related('instrument').order_by('-exit_ts')[:15]
     return render(request, 'strategies/detail.html', {
         'row': row, 'cls': cls, 'form': form, 'instruments': instruments, 'selected': set(row.symbols or []),
-        'check': check, 'runs': runs, 'recent_trades': recent_trades, 'account': account,
+        'check': check, 'qualification': qualification, 'runs': runs, 'recent_trades': recent_trades, 'account': account,
         'stage_order': [(s, STAGE_LABEL[s]) for s in STAGE_ORDER], 'crypto': 'crypto' in cls.asset_classes,
         'cfg': cfg, 'history': list(reversed(row.history or []))[:10],
     })

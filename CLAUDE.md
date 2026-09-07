@@ -108,7 +108,9 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
 - `Market.FOREX` / `AssetClass.FOREX`: four USD-quoted majors (EUR, GBP, AUD, NZD
   against USD — every P&L is already in dollars; USD/JPY-style pairs need a quote
   conversion, not built). Data: **Yahoo only** (`EURUSD=X`, 59 days of intraday
-  bars, no volume → relative volume reads neutral, session VWAP is equal-weighted).
+  bars, no centralized volume → relative volume is explicitly unavailable;
+  EMA uses a documented price-only fallback and VWAP reversion labels its
+  equal-weighted session-mean fallback instead of inventing volume).
   `sync_bars` swaps to Yahoo for forex instruments whatever `--provider` says.
 - Hours: 24/5, Sunday 17:00 → Friday 17:00 ET (`calendar.forex_is_open`,
   `forex_next_open`, `forex_week_close`). The forex *day* rolls at 17:00 ET
@@ -136,6 +138,35 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   15Min 0.83, 1Hour 0.87 over 2 years) — the lane runs at 15Min so the spread does
   not shred it, enabled at Sprout "to be watched" like degen.
 
+## v1.30 — Evidence before execution
+
+- Walk-forward now separates three different claims: adaptive-policy OOS
+  (one preceding-training winner per window), a fixed-candidate historical
+  replay, and the final untouched test window. Nightly research reruns the
+  current champion on that exact final window. Only the identical-window
+  candidate/champion result can confirm or promote a configuration; PF ≥ 1.10,
+  positive net and expectancy, and the experiment's minimum trades are hard
+  gates. Manual walk-forward promotion uses the same gate and never attaches
+  adaptive metrics to a fixed config.
+- `Strategy.qualification` is independent from `enabled` and `stage`:
+  `unproven|qualified|quarantine`. Sim/replay may observe unproven versions;
+  paper/live agents query only qualified versions. Thirty forward trades with
+  PF < 1, non-positive expectancy, or non-positive net triggers sticky
+  quarantine and disables the strategy. New/manual params reset to unproven.
+  `audit_qualifications [--market ...] [--apply]` explains or persists it.
+- The status strip reports **Operational**, **Evidence**, and **Execution**
+  separately. A healthy feed is not a profitable strategy and a simulator may
+  be authorized to collect data while evidence remains unproven. Broker-stage
+  qualification cannot be overridden.
+- Missing/zero volume remains NaN. Volume-filtered crypto/stock entries block
+  when the requirement cannot be measured; a zero threshold is explicitly
+  shown as disabled. Spot FX states that centralized volume is unavailable and
+  uses its documented price-only fallback. Session VWAP labels its equal-
+  weighted fallback.
+- Tests force non-manifest static storage regardless of `.env`, so the normal
+  `manage.py test` command is deterministic. Migration `0009` adds the
+  qualification ledger. `docs/LOGBOOK.md` is the release evidence record.
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live
@@ -149,6 +180,9 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
 - Crypto: no brackets, no shorts, 25 bps taker fees, sessions at 00:00 UTC,
   positions age out via `max_hold_minutes`. Forex: sessions roll 17:00 ET, the
   week closes Friday 17:00 ET, leverage 10×, whole units, Yahoo bars only.
+- `enabled` is permission to observe at the configured stage, not proof.
+  Broker-backed modes must also see `qualification='qualified'`; quarantine is
+  sticky until a new version or an explicit reset to unproven.
 - SQLite runs WAL + IMMEDIATE + 30 s timeout: web, agent and optimizer all
   write it. Don't add a fourth chatty writer.
 - Template comments: `{# #}` is single-line only; multi-line → `{% comment %}`

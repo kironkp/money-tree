@@ -59,10 +59,20 @@ def bar_position(session: pd.Series) -> pd.Series:
 
 def session_vwap(df: pd.DataFrame, session: pd.Series) -> pd.Series:
     typical = (df['high'] + df['low'] + df['close']) / 3
-    vol = df['volume'].replace(0, np.nan).fillna(1.0)
+    vol = df['volume'].where(df['volume'] > 0)
     pv = (typical * vol).groupby(session).cumsum()
     vv = vol.groupby(session).cumsum()
-    return pv / vv
+    weighted = (pv / vv.replace(0, np.nan)).groupby(session).ffill()
+    # Spot FX has no centralized volume and some free crypto feeds omit it.
+    # A price-only anchor is still useful, but it must not be presented as a
+    # volume-weighted value. The strategy carries availability beside it.
+    equal_weighted = typical.groupby(session).expanding().mean().reset_index(level=0, drop=True)
+    return weighted.where(session_has_volume(df, session), equal_weighted)
+
+
+def session_has_volume(df: pd.DataFrame, session: pd.Series) -> pd.Series:
+    """Whether any measured positive volume exists in the session so far."""
+    return df['volume'].gt(0).groupby(session).cummax().astype(bool)
 
 
 def opening_range(df: pd.DataFrame, session: pd.Series, n_bars: int) -> tuple[pd.Series, pd.Series]:
@@ -80,9 +90,11 @@ def relative_volume(df: pd.DataFrame, session: pd.Series, n_sessions: int = 10) 
     """Volume vs the average volume at the same bar position over the previous
     n sessions. Causal: the current session is excluded via shift(1)."""
     pos = bar_position(session)
-    vol = df['volume'].replace(0, np.nan)  # missing volume (Yahoo crypto) must not read as "no interest"
+    vol = df['volume'].where(df['volume'] > 0)
     base = vol.groupby(pos).transform(lambda s: s.shift(1).rolling(n_sessions, min_periods=1).mean())
-    return (vol / base.replace(0, np.nan)).fillna(1.0)
+    # NaN is evidence: either this bar has no measured volume or there is no
+    # causal prior-session baseline. Never turn that into a fabricated 1.0×.
+    return vol / base.replace(0, np.nan)
 
 
 def bollinger(s: pd.Series, n: int = 20, k: float = 2.0) -> tuple[pd.Series, pd.Series, pd.Series]:

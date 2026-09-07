@@ -43,6 +43,12 @@ class Stage(models.TextChoices):
     TREE = 'tree', 'Tree'          # real money
 
 
+class Qualification(models.TextChoices):
+    UNPROVEN = 'unproven', 'Unproven'
+    QUALIFIED = 'qualified', 'Qualified'
+    QUARANTINED = 'quarantine', 'Quarantined'
+
+
 class Instrument(models.Model):
     symbol = models.CharField(max_length=16, unique=True)  # AAPL, BTC/USD
     name = models.CharField(max_length=80, blank=True)
@@ -555,7 +561,7 @@ class Signal(models.Model):
 
 
 class RiskEvent(models.Model):
-    ALERT_KINDS = ('daily_loss', 'kill_switch', 'missed_ticks', 'external_position', 'error', 'drift', 'reconcile',
+    ALERT_KINDS = ('daily_loss', 'kill_switch', 'missed_ticks', 'external_position', 'error', 'drift', 'qualification', 'reconcile',
                    'disconnected', 'config_changed', 'watchdog', 'unprotected')
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='risk_events')
     ts = models.DateTimeField(default=timezone.now)
@@ -643,6 +649,13 @@ class Strategy(models.Model):
     timeframe = models.CharField(max_length=8, default='5Min')
     allocation_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('100'))
     stage = models.CharField(max_length=8, choices=Stage.choices, default=Stage.SEED)
+    # Enabled controls whether a strategy may be observed at its stage.
+    # Qualification is independent evidence: paper/live agents require it,
+    # while sim/replay are allowed to collect evidence on unproven ideas.
+    qualification = models.CharField(max_length=12, choices=Qualification.choices,
+                                     default=Qualification.UNPROVEN)
+    qualification_reason = models.CharField(max_length=300, blank=True)
+    qualification_updated_at = models.DateTimeField(null=True, blank=True)
     version = models.PositiveIntegerField(default=1)
     history = models.JSONField(default=list, blank=True)  # promotions: {at, version, params, source}
     notes = models.TextField(blank=True)
@@ -656,6 +669,10 @@ class Strategy(models.Model):
 
     def __str__(self):
         return f'{self.name} ({self.market}) v{self.version}'
+
+    @property
+    def execution_qualified(self) -> bool:
+        return self.qualification == Qualification.QUALIFIED
 
 
 class Experiment(models.Model):

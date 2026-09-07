@@ -13,7 +13,7 @@ import pandas as pd
 
 from .. import indicators as ind
 from ..timeframes import tf_minutes
-from .base import Context, Param, Rule, Signal, Strategy
+from .base import Context, Param, Rule, Signal, Strategy, volume_evidence, volume_rule
 
 
 class OpeningRangeBreakout(Strategy):
@@ -54,7 +54,7 @@ class OpeningRangeBreakout(Strategy):
             return []
         if bar.minutes_since_open > self.p['entry_window_minutes']:
             return []
-        if bar.relvol < self.p['min_relvol']:
+        if not volume_evidence(ctx.asset_class, bar.relvol, self.p['min_relvol'])[0]:
             return []
         risk = self.p['stop_atr_mult'] * bar.atr
         if bar.close > bar.or_high:
@@ -96,7 +96,5 @@ class OpeningRangeBreakout(Strategy):
         in_window = bar.minutes_since_open <= self.p['entry_window_minutes']
         out.append(Rule('window', bool(in_window), 'within the entry window' if in_window else 'entry window has closed for today',
                         value=bar.minutes_since_open, threshold=self.p['entry_window_minutes']))
-        vol_ok = bar.relvol >= self.p['min_relvol']
-        out.append(Rule('volume', bool(vol_ok), f'relative volume {bar.relvol:.1f} vs {self.p["min_relvol"]:.1f} required',
-                        value=bar.relvol, threshold=self.p['min_relvol']))
+        out.append(volume_rule(ctx, bar.relvol, self.p['min_relvol']))
         return out

@@ -125,8 +125,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'moneytree.wsgi.application'
 
-_TESTING = 'test' in sys.argv
-
 if 'ON_HEROKU' in os.environ:
     DATABASES = {
         'default': dj_database_url.config(

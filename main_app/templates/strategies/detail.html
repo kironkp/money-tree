@@ -3,7 +3,7 @@
 {% block title %}{{ row.name }} · MoneyTree{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>{{ row.name }} <span class="badge">{{ row.market }}</span> <span class="badge {{ row.stage }}">{{ row.stage }}</span> <small class="muted">v{{ row.version }}</small></h1>
+  <h1>{{ row.name }} <span class="badge">{{ row.market }}</span> <span class="badge {{ row.stage }}">{{ row.stage }}</span> <span class="badge {% if row.qualification == 'qualified' %}ok{% elif row.qualification == 'quarantine' %}bad{% endif %}">{{ row.get_qualification_display }}</span> <small class="muted">v{{ row.version }}</small></h1>
   {% if is_operator %}<div class="actions">
     <form method="post" class="inline">{% csrf_token %}<input type="hidden" name="action" value="toggle"><button class="btn {% if row.enabled %}warn{% else %}primary{% endif %}">{% if row.enabled %}Disable{% else %}Enable{% endif %}</button></form>
     <form method="post" action="{% url 'strategy-backtest' row.market row.key %}" class="inline">{% csrf_token %}
@@ -14,6 +14,12 @@
 <p class="small">{{ cls.description }} · trades {{ cls.asset_classes|joinlist }} · needs {{ cls.warmup_bars }} bars of warm-up{% if crypto %} · <span class="warn">crypto fees ≈ 50 bps round trip — scalps rarely survive them</span>{% endif %}</p>
 
 <div class="grid cols-2">
+  <div class="card span-2">
+    <h3>Evidence status: {{ row.get_qualification_display }}</h3>
+    <p>{{ qualification.reason }}</p>
+    <p class="small muted">Research gate: {% if qualification.research_ok %}<span class="up">passed</span>{% else %}<span class="down">not passed</span>{% endif %}. Forward evidence: {{ qualification.stats.trades }} trades across {{ qualification.stats.sessions }} sessions, net {{ qualification.stats.net_pnl|default:0|signed_money }}, PF {{ qualification.stats.profit_factor|default:0|floatformat:2 }}, expectancy {{ qualification.stats.expectancy|default:0|signed_money }}.</p>
+    {% if row.qualification == 'quarantine' and is_operator %}<form method="post" class="inline" data-confirm="Reset this sticky quarantine? It will become unproven, not qualified.">{% csrf_token %}<input type="hidden" name="action" value="reset_qualification"><button class="btn warn small">Reset to unproven</button></form>{% endif %}
+  </div>
   <div class="card">
     <h3>Parameters &amp; symbols</h3>
     <form method="post">
@@ -40,7 +46,7 @@
     </ul>
     <div class="pill-row" style="margin-top: var(--s-3)">
       {% if check.next %}<form method="post" class="inline" data-confirm="Move {{ row.name }} up to {{ check.next_label }}?">{% csrf_token %}<input type="hidden" name="action" value="stage_up"><button class="btn small {% if check.ready %}primary{% endif %}">Promote to {{ check.next }}</button>
-        {% if not check.ready %}<label class="small" style="display:inline"><input type="checkbox" name="override" value="yes"> override</label> <input type="text" name="override_reason" placeholder="reason (logged)" style="width:160px;display:inline-block">{% endif %}</form>{% endif %}
+        {% if not check.ready and check.next == 'sprout' %}<label class="small" style="display:inline"><input type="checkbox" name="override" value="yes"> override into simulator</label> <input type="text" name="override_reason" placeholder="reason (logged)" style="width:160px;display:inline-block">{% endif %}</form>{% endif %}
       {% if row.stage != 'seed' %}<form method="post" class="inline">{% csrf_token %}<input type="hidden" name="action" value="stage_down"><button class="btn small">Demote</button></form>{% endif %}
     </div>
     {% if check.baseline %}<p class="small muted" style="margin-top: var(--s-3)">Backtest baseline: {{ check.baseline.trades }} trades, expectancy {{ check.baseline.expectancy|floatformat:2 }}, PF {{ check.baseline.profit_factor|floatformat:2 }}, Sharpe {{ check.baseline.sharpe|floatformat:2 }}</p>{% endif %}

@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import indicators as ind
-from .base import Context, Param, Rule, Signal, Strategy
+from .base import Context, Param, Rule, Signal, Strategy, volume_evidence, volume_rule
 
 
 class EmaMomentum(Strategy):
@@ -54,7 +54,7 @@ class EmaMomentum(Strategy):
             if pos.qty < 0 and cross_up:
                 return [Signal('close', ctx.symbol, ctx.ts, float(bar.close), reason='EMA cross up')]
             return []
-        if bar.bar_pos < 2 or bar.relvol < self.p['min_relvol']:
+        if bar.bar_pos < 2 or not volume_evidence(ctx.asset_class, bar.relvol, self.p['min_relvol'])[0]:
             return []
         risk = self.p['stop_atr_mult'] * bar.atr
         if cross_up and self.p['rsi_min'] <= bar.rsi <= self.p['rsi_max']:
@@ -91,7 +91,5 @@ class EmaMomentum(Strategy):
         in_band = lo <= bar.rsi <= hi
         out.append(Rule('rsi', bool(in_band), f'RSI {bar.rsi:.0f} ' + ('within' if in_band else 'outside') +
                         f' the {lo:.0f}–{hi:.0f} band', value=bar.rsi, threshold=lo))
-        vol_ok = bar.relvol >= self.p['min_relvol']
-        out.append(Rule('volume', bool(vol_ok), f'relative volume {bar.relvol:.1f} vs {self.p["min_relvol"]:.1f} required',
-                        value=bar.relvol, threshold=self.p['min_relvol']))
+        out.append(volume_rule(ctx, bar.relvol, self.p['min_relvol']))
         return out

@@ -12,7 +12,7 @@ from main_app.models import Account, AgentConfig, Experiment, JournalEntry, Stra
 from main_app.services.backtest import load_frames, run_backtest, spec_from_models
 from main_app.services.metrics import objective_value
 from main_app.services.optimize import evaluate_fixed_params, grid_from_schema, run_experiment
-from main_app.services.promotion import promote
+from main_app.services.promotion import promote, research_evidence_passes
 
 MIN_OOS_PF = 1.1
 MIN_VALIDATION_TRADES = 10
@@ -21,12 +21,7 @@ MIN_VALIDATION_TRADES = 10
 def evidence_passes(metrics: dict, min_trades: int = MIN_VALIDATION_TRADES,
                     min_pf: float = MIN_OOS_PF) -> bool:
     """Minimum truth gate for either a confirmation or a promotion."""
-    return (
-        int(metrics.get('trades', 0) or 0) >= min_trades
-        and float(metrics.get('profit_factor', 0) or 0) >= min_pf
-        and float(metrics.get('net_pnl', 0) or 0) > 0
-        and float(metrics.get('expectancy', 0) or 0) > 0
-    )
+    return research_evidence_passes(metrics, min_trades, min_pf)
 
 
 def comparable_verdict(best_params: dict, current_params: dict, candidate: dict,
@@ -102,9 +97,21 @@ class Command(BaseCommand):
                         if validation_window else {})
             verdict, should_promote = comparable_verdict(exp.best_params or {}, row.params, candidate, champion)
             if should_promote:
-                verdict = f'PROMOTED v{row.version + 1}: ' + verdict.removeprefix('PROMOTE: ')
+                action = 'WOULD PROMOTE' if o['dry_run'] else 'PROMOTED'
+                verdict = f'{action} v{row.version + 1}: ' + verdict.removeprefix('PROMOTE: ')
                 if not o['dry_run']:
-                    promote(row, exp.best_params, source=f'auto-research experiment #{exp.pk}', metrics=candidate)
+                    promote(
+                        row, exp.best_params, source=f'auto-research experiment #{exp.pk}', metrics=candidate,
+                        evidence={'kind': 'held_out_validation', 'experiment': exp.pk,
+                                  'window': validation_window, 'same_bars': True},
+                    )
+            validation['champion'] = champion
+            validation['verdict'] = verdict
+            validation['candidate_qualified'] = evidence_passes(candidate)
+            validation['same_bars'] = bool(validation_window)
+            summary['validation'] = validation
+            exp.summary = summary
+            exp.save(update_fields=['summary'])
             account = Account.for_mode(cfg.mode, row.market)
             JournalEntry.objects.create(
                 date=end, kind='auto_eod', account=account, title=f'Auto-research {row.key} ({row.market}): {verdict}',

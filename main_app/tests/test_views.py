@@ -64,6 +64,39 @@ class PagesRenderWithData(TestCase):
         self.assertEqual(self.row.version, 2)
         self.assertEqual(self.row.history[-1]['source'], f'backtest #{self.bt.pk}')
 
+    def test_walk_forward_cannot_promote_failed_held_out_evidence(self):
+        candidate = {**self.row.params, 'rr': 3.0}
+        exp = Experiment.objects.create(
+            strategy_key='orb', method='walk_forward', param_grid={'rr': [2.0, 3.0]}, symbols=['QQQ'],
+            timeframe='5Min', start=date(2026, 6, 1), end=date(2026, 8, 31), status='done',
+            min_trades=10, best_params=candidate,
+            summary={'validation': {'candidate': {'trades': 20, 'profit_factor': .94,
+                                                   'net_pnl': -10, 'expectancy': -.5}}},
+        )
+        old_version = self.row.version
+        response = self.client.post(reverse('experiment-promote', args=[exp.pk]))
+        self.assertEqual(response.status_code, 302)
+        self.row.refresh_from_db()
+        self.assertEqual(self.row.version, old_version)
+
+    def test_walk_forward_promotion_records_only_fixed_validation_metrics(self):
+        candidate = {**self.row.params, 'rr': 3.0}
+        validation = {'trades': 20, 'profit_factor': 1.4, 'net_pnl': 120, 'expectancy': 6,
+                      'max_drawdown_pct': -2, 'sharpe': 1.1}
+        exp = Experiment.objects.create(
+            strategy_key='orb', method='walk_forward', param_grid={'rr': [2.0, 3.0]}, symbols=['QQQ'],
+            timeframe='5Min', start=date(2026, 6, 1), end=date(2026, 8, 31), status='done',
+            min_trades=10, best_params=candidate,
+            summary={'oos': {'trades': 99, 'profit_factor': 9.9, 'net_pnl': 9999},
+                     'validation': {'candidate': validation}},
+        )
+        response = self.client.post(reverse('experiment-promote', args=[exp.pk]))
+        self.assertEqual(response.status_code, 302)
+        self.row.refresh_from_db()
+        self.assertEqual(self.row.params, candidate)
+        self.assertEqual(self.row.history[-1]['metrics']['profit_factor'], 1.4)
+        self.assertEqual(self.row.history[-1]['metrics']['trades'], 20)
+
     def test_strategy_form_saves_params(self):
         r = self.client.post(reverse('strategy-detail', args=['stocks', 'orb']), {
             'action': 'save', 'range_minutes': '30', 'stop_atr_mult': '1.5', 'rr': '3', 'min_relvol': '0.5',
@@ -227,7 +260,9 @@ class StatusStripTellsTheTruth(TestCase):
         account = Account.for_mode('sim', 'stocks')
         ev = RiskEvent.objects.create(account=account, kind='config_changed', message='changed')
         r = self.client.get(reverse('status-strip') + '?account=sim&market=stocks')
-        self.assertContains(r, 'Safe to trade now')
+        self.assertContains(r, 'Operational')
+        self.assertContains(r, 'Evidence')
+        self.assertContains(r, 'Execution')
         self.assertContains(r, 'needs a restart')
         self.client.post(reverse('alert-ack', args=[ev.pk]), {'account': 'sim', 'market': 'stocks'})
         ev.refresh_from_db()
@@ -251,6 +286,13 @@ class StatusStripTellsTheTruth(TestCase):
         row.refresh_from_db()
         self.assertEqual(row.stage, 'sprout')
         self.assertIn('OVERRIDE', row.history[-1]['source'])
+
+    def test_unqualified_strategy_cannot_override_into_broker_stage(self):
+        row = enable_strategy('orb', symbols=['QQQ'], stage='sprout')
+        self.client.post(reverse('strategy-detail', args=['stocks', 'orb']),
+                         {'action': 'stage_up', 'override': 'yes', 'override_reason': 'skip evidence'})
+        row.refresh_from_db()
+        self.assertEqual(row.stage, 'sprout')
 
 
 class PortfolioBacktestRunsAllEnabledStrategies(TestCase):

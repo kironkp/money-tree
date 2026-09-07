@@ -23,8 +23,8 @@ from datetime import UTC, date, datetime, timedelta
 from django.conf import settings
 from django.utils import timezone
 
-from main_app.models import (Account, AgentConfig, AgentRun, FeedEvent, Instrument, Market, Mode, RiskEvent, Stage,
-                             Strategy, TradeCard)
+from main_app.models import (Account, AgentConfig, AgentRun, FeedEvent, Instrument, Market, Mode, Qualification,
+                             RiskEvent, Stage, Strategy, TradeCard)
 
 from .backtest import date_bounds
 from .broker.sim import SimBroker
@@ -56,6 +56,16 @@ STAGE_FOR_MODE = {
     Mode.LIVE: (Stage.TREE,),
     Mode.REPLAY: (Stage.SEED, Stage.SPROUT, Stage.SAPLING, Stage.TREE),
 }
+
+
+def eligible_strategy_rows(mode: str, market: str):
+    """Strategies this execution mode may load; broker modes require proof."""
+    rows = Strategy.objects.filter(enabled=True, stage__in=STAGE_FOR_MODE[mode], market=market)
+    if mode in (Mode.PAPER, Mode.LIVE):
+        return rows.filter(qualification=Qualification.QUALIFIED)
+    if mode != Mode.REPLAY:
+        return rows.exclude(qualification=Qualification.QUARANTINED)
+    return rows
 
 
 class AgentStop(Exception):
@@ -115,8 +125,9 @@ class Agent:
             raise RuntimeError(f'no {self.market} symbols on the watchlist — add some at /data/')
         self.asset_classes = {s: i.asset_class for s, i in self.instruments.items()}
         self.qty_increments = {s: float(i.qty_increment) for s, i in self.instruments.items()}
-        stages = STAGE_FOR_MODE[self.mode]
-        rows = list(Strategy.objects.filter(enabled=True, stage__in=stages, market=self.market))
+        # Simulator observation is how an idea earns evidence. Broker-backed
+        # execution is reserved for immutable versions that cleared it.
+        rows = list(eligible_strategy_rows(self.mode, self.market))
         self.strategies = []
         self.strategy_symbols: dict[str, set] = {}
         allocations = {}
@@ -193,8 +204,10 @@ class Agent:
                     if self.account.day_start_date == today and self.mode != Mode.REPLAY else '')
                  + (f' {n_cards} open trade card(s) picked up.' if n_cards else ''))
         if not self.strategies:
-            self.say('risk', 'No strategy is enabled for this market at a stage this mode allows — I will watch bars '
-                     'but never trade. Enable one on the Strategies page.', phase='alert')
+            requirement = ('enabled and statistically qualified' if self.mode in (Mode.PAPER, Mode.LIVE)
+                           else 'enabled, stage-eligible, and not quarantined')
+            self.say('risk', f'No strategy is {requirement} for this market — I will watch bars but never trade. '
+                     'Open Strategies to see the evidence gate.', phase='alert')
         if self.mode != Mode.REPLAY:
             fake = synthetic_symbols(self.instruments.values(), self.timeframe)
             if fake:
@@ -205,7 +218,8 @@ class Agent:
 
     def _strategy_snapshot(self) -> dict:
         rows = Strategy.objects.filter(market=self.market)
-        return {r.key: (r.version, r.enabled, r.stage, tuple(sorted(r.symbols or [])), float(r.allocation_pct)) for r in rows}
+        return {r.key: (r.version, r.enabled, r.stage, r.qualification,
+                        tuple(sorted(r.symbols or [])), float(r.allocation_pct)) for r in rows}
 
     def _acquire_lock(self) -> None:
         settings.RUN_DIR.mkdir(exist_ok=True)
@@ -392,9 +406,10 @@ class Agent:
                 self._last_strategy_check = time.monotonic()
                 if not self._config_flagged and self._strategy_snapshot() != self.strategy_snapshot:
                     self._config_flagged = True
+                    self.risk.blocks['config_changed'] = 'strategy configuration changed — restart required before new entries'
                     self.recorder.on_risk_event('config_changed', 'strategy configuration changed — restart the agent to apply it', now)
-                    self.say('risk', 'Strategy configuration changed on the Strategies page. This process still runs the old '
-                             'configuration — restart the agent to apply it.', phase='alert')
+                    self.say('risk', 'Strategy configuration changed on the Strategies page. New entries are blocked now; '
+                             'existing positions remain managed. Restart the agent to load the new version.', phase='alert')
             self.narrator.flush()
         except AgentStop:
             raise

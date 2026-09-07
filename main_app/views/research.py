@@ -16,7 +16,7 @@ from main_app.services import control, procs
 from main_app.services.backtest import run_backtest_for_model
 from main_app.services.data import calendar as cal
 from main_app.services.optimize import grid_from_schema
-from main_app.services.promotion import promote
+from main_app.services.promotion import promote, research_evidence_passes
 from main_app.services.strategies import STRATEGIES, get_strategy_class
 
 from .common import deny_observer, operator_required
@@ -206,13 +206,18 @@ def experiment_detail(request, pk):
     exp = get_object_or_404(Experiment, pk=pk)
     s = exp.summary or {}
     ranked = s.get('ranked', [])
+    validation = s.get('validation') or {}
+    validation_metrics = validation.get('candidate') or {}
     param_names = list(exp.param_grid.keys())
     strategy = Strategy.objects.filter(key=exp.strategy_key, market=market_for_symbols(exp.symbols)).first()
     runs = exp.runs.order_by('window_label', '-created_at')[:60] if exp.method == 'walk_forward' else []
     return render(request, 'research/experiment_detail.html', {
         'exp': exp, 's': s, 'ranked': ranked[:40], 'param_names': param_names, 'strategy': strategy,
         'windows': s.get('windows', []), 'oos': s.get('oos'), 'runs': runs,
+        'candidate_static': s.get('candidate_static_oos'), 'validation': validation,
+        'candidate_qualified': research_evidence_passes(validation_metrics, min_trades=exp.min_trades),
         'oos_json': json.dumps(s.get('oos_equity', [])), 'freq': sorted((s.get('param_frequency') or {}).items(), key=lambda kv: -kv[1]),
+        'candidate_static_json': json.dumps(s.get('candidate_static_equity', [])),
         'log': procs.tail(f'experiment-{exp.pk}', 20), 'stability': s.get('stability'),
     })
 
@@ -242,9 +247,23 @@ def experiment_promote(request, pk):
     if row is None:
         messages.error(request, 'no strategy row to promote into')
         return redirect('experiment-detail', pk=pk)
-    metrics = (exp.summary or {}).get('oos') or ((exp.summary or {}).get('ranked') or [{}])[0]
+    summary = exp.summary or {}
+    if exp.method == 'walk_forward':
+        validation = summary.get('validation') or {}
+        if params != exp.best_params:
+            messages.error(request, 'that parameter set has no fixed held-out validation; only the recommended candidate can be promoted')
+            return redirect('experiment-detail', pk=pk)
+        metrics = validation.get('candidate') or {}
+        if not research_evidence_passes(metrics, min_trades=exp.min_trades):
+            messages.error(request, 'candidate not promoted: final held-out evidence does not clear the trade, profit-factor, net, and expectancy gates')
+            return redirect('experiment-detail', pk=pk)
+    else:
+        metrics = next((r for r in summary.get('ranked', []) if r.get('params') == params), {})
+    evidence = ({'kind': 'held_out_validation', 'experiment': exp.pk,
+                 'window': (summary.get('validation') or {}).get('window'), 'same_bars': True}
+                if exp.method == 'walk_forward' else {'kind': 'in_sample', 'experiment': exp.pk})
     promote(row, params, source=f'experiment #{exp.pk} ({exp.method})', note=request.POST.get('note', ''),
-            metrics=metrics if isinstance(metrics, dict) else {}, run_id=None)
+            metrics=metrics if isinstance(metrics, dict) else {}, run_id=None, evidence=evidence)
     messages.success(request, f'{row.name} is now v{row.version}')
     return redirect('strategy-detail', market=row.market, key=row.key)
 

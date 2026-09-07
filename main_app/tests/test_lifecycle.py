@@ -3,13 +3,15 @@ own their positions, cards move through their states, approvals expire."""
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from main_app.services.broker.base import OrderReq
 from main_app.services.broker.sim import SimBroker
+from main_app.services.agent import eligible_strategy_rows
 from main_app.services.engine import Engine, EngineConfig, MemoryRecorder
 from main_app.services.risk import RiskConfig, RiskManager
 from main_app.services.strategies.base import Context, Signal, Strategy
+from main_app.tests.helpers import enable_strategy, seed_db
 from main_app.tests.test_sim_broker import bar, entry
 
 T0 = datetime(2026, 9, 1, 13, 30, tzinfo=UTC)
@@ -92,6 +94,20 @@ def run_engine(strategies, cfg=None, bars=None):
         r.bar_pos = i
         engine.process_bar('X', T(5 * i), r, {s.key: r for s in strategies}, {s.key: None for s in strategies}, i, 200.0)
     return engine, broker, rec
+
+
+class BrokerModesRequireQualification(TestCase):
+    def test_unproven_can_simulate_but_cannot_reach_paper_or_live_broker(self):
+        seed_db(('QQQ',), with_bars=False)
+        row = enable_strategy('orb', {'min_relvol': 0}, ['QQQ'], stage='sapling')
+        self.assertTrue(eligible_strategy_rows('sim', 'stocks').filter(pk=row.pk).exists())
+        self.assertFalse(eligible_strategy_rows('paper', 'stocks').filter(pk=row.pk).exists())
+        row.qualification = 'qualified'
+        row.save(update_fields=['qualification'])
+        self.assertTrue(eligible_strategy_rows('paper', 'stocks').filter(pk=row.pk).exists())
+        row.stage = 'tree'
+        row.save(update_fields=['stage'])
+        self.assertTrue(eligible_strategy_rows('live', 'stocks').filter(pk=row.pk).exists())
 
 
 class StrategiesOwnTheirPositions(SimpleTestCase):

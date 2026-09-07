@@ -33,6 +33,7 @@ class VwapReversion(Strategy):
         df['session'] = session.astype(str)
         df['bar_pos'] = ind.bar_position(session)
         df['svwap'] = ind.session_vwap(df, session)
+        df['vwap_has_volume'] = ind.session_has_volume(df, session)
         dev = df['close'] - df['svwap']
         sd = dev.rolling(int(self.p['lookback'])).std()
         df['z'] = (dev / sd.replace(0, np.nan))
@@ -54,19 +55,21 @@ class VwapReversion(Strategy):
         if bar.bar_pos < self.p['min_bar_pos']:
             return []
         risk = self.p['stop_atr_mult'] * bar.atr
+        anchor = 'VWAP' if bar.vwap_has_volume else 'equal-weighted session mean (volume unavailable)'
         if bar.z <= -self.p['entry_z'] and bar.svwap > bar.close:
             return [Signal('buy', ctx.symbol, ctx.ts, float(bar.close), float(bar.close - risk), float(bar.svwap),
-                           strength=min(1.0, abs(bar.z) / 3), reason=f'z={bar.z:.2f} below VWAP {bar.svwap:.2f}')]
+                           strength=min(1.0, abs(bar.z) / 3), reason=f'z={bar.z:.2f} below {anchor} {bar.svwap:.6g}')]
         if ctx.asset_class != 'crypto' and bar.z >= self.p['entry_z'] and bar.svwap < bar.close:
             return [Signal('sell', ctx.symbol, ctx.ts, float(bar.close), float(bar.close + risk), float(bar.svwap),
-                           strength=min(1.0, abs(bar.z) / 3), reason=f'z={bar.z:.2f} above VWAP {bar.svwap:.2f}')]
+                           strength=min(1.0, abs(bar.z) / 3), reason=f'z={bar.z:.2f} above {anchor} {bar.svwap:.6g}')]
         return []
 
     def rules(self, ctx: Context, bar) -> list[Rule]:
         if np.isnan(bar.z):
             return [Rule('warmup', False, 'still warming up (not enough bars for the σ estimate)')]
         if ctx.position is not None:
-            return [Rule('holding', True, f'holding, z {bar.z:+.2f}, {ctx.position.bars_held} bars; exits at VWAP {bar.svwap:,.2f}')]
+            anchor = 'VWAP' if bar.vwap_has_volume else 'price-only session mean (volume unavailable)'
+            return [Rule('holding', True, f'holding, z {bar.z:+.2f}, {ctx.position.bars_held} bars; exits at {anchor} {bar.svwap:,.6g}')]
         out = []
         ready = bar.bar_pos >= self.p['min_bar_pos']
         out.append(Rule('session', bool(ready), 'far enough into the session' if ready
@@ -75,6 +78,7 @@ class VwapReversion(Strategy):
         can_short = ctx.asset_class != 'crypto'
         stretched = bar.z <= -self.p['entry_z'] or (can_short and bar.z >= self.p['entry_z'])
         side_note = f'buys at −{self.p["entry_z"]:.1f} or lower' + (f', shorts at +{self.p["entry_z"]:.1f} or higher' if can_short else '')
-        out.append(Rule('stretch', bool(stretched), f'z-score {bar.z:+.2f} vs VWAP {bar.svwap:,.2f}; {side_note}',
+        anchor = 'VWAP' if bar.vwap_has_volume else 'price-only session mean (volume unavailable)'
+        out.append(Rule('stretch', bool(stretched), f'z-score {bar.z:+.2f} vs {anchor} {bar.svwap:,.6g}; {side_note}',
                         value=bar.z, threshold=-self.p['entry_z']))
         return out

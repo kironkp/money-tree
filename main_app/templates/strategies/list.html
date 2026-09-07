@@ -11,7 +11,7 @@
 <div class="grid cols-2">
 {% for r in rows %}
   <div class="card">
-    <h2><a href="{% url 'strategy-detail' r.row.market r.row.key %}">{{ r.row.name }}</a> <span class="badge {{ r.row.stage }}">{{ r.row.stage }}</span>
+    <h2><a href="{% url 'strategy-detail' r.row.market r.row.key %}">{{ r.row.name }}</a> <span class="badge {{ r.row.stage }}">{{ r.row.stage }}</span> <span class="badge {% if r.row.qualification == 'qualified' %}ok{% elif r.row.qualification == 'quarantine' %}bad{% endif %}">{{ r.row.get_qualification_display }}</span>
       <span class="more">{% if r.row.enabled %}<span class="badge ok">enabled</span>{% else %}<span class="badge">off</span>{% endif %} v{{ r.row.version }}</span></h2>
     <p class="small">{{ r.cls.description }}</p>
     <dl class="kv">
@@ -19,6 +19,7 @@
       <dt>Symbols</dt><dd class="small">{{ r.row.symbols|joinlist }}</dd>
       <dt>Assets</dt><dd class="small">{{ r.cls.asset_classes|joinlist }}{% if r.crypto %} <span class="warn">(crypto pays ~50 bps round trip)</span>{% endif %}</dd>
       <dt>Last 30d ({{ r.account.label }})</dt><dd class="small">{{ r.stats.trades }} trades · {{ r.stats.net_pnl|default:0|signed_money }} · win {{ r.stats.win_rate|default:0|floatformat:0 }}% · PF {{ r.stats.profit_factor|default:0|floatformat:2 }}</dd>
+      <dt>Evidence</dt><dd class="small">{{ r.row.qualification_reason|default:'No version-specific qualification evidence yet.' }}</dd>
     </dl>
   </div>
 {% empty %}

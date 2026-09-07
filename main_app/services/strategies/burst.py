@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import indicators as ind
-from .base import Context, Param, Rule, Signal, Strategy
+from .base import Context, Param, Rule, Signal, Strategy, volume_evidence, volume_rule
 
 
 class MomentumBurst(Strategy):
@@ -52,7 +52,8 @@ class MomentumBurst(Strategy):
             return []
         if self._cooling(ctx, bar):
             return []
-        if bar.relvol < self.p['min_relvol']:
+        volume_ok, volume_text, _ = volume_evidence(ctx.asset_class, bar.relvol, self.p['min_relvol'])
+        if not volume_ok:
             return []
         price = float(bar.close)
         if bar.move_pct >= self.p['min_move_pct']:
@@ -60,13 +61,13 @@ class MomentumBurst(Strategy):
             st['last_trade_bar'], st['last_session'] = int(bar.bar_pos), bar.session
             return [Signal('buy', ctx.symbol, ctx.ts, price, price * (1 - self.p['stop_pct'] / 100),
                            price * (1 + self.p['target_pct'] / 100), strength=min(1.0, bar.move_pct / (2 * self.p['min_move_pct'])),
-                           reason=f'burst +{bar.move_pct:.2f}% in {int(self.p["lookback"])} bars on {bar.relvol:.1f}× volume')]
+                           reason=f'burst +{bar.move_pct:.2f}% in {int(self.p["lookback"])} bars; {volume_text}')]
         if ctx.asset_class != 'crypto' and bar.move_pct <= -self.p['min_move_pct']:
             st = self.symbol_state(ctx.symbol)
             st['last_trade_bar'], st['last_session'] = int(bar.bar_pos), bar.session
             return [Signal('sell', ctx.symbol, ctx.ts, price, price * (1 + self.p['stop_pct'] / 100),
                            price * (1 - self.p['target_pct'] / 100), strength=min(1.0, -bar.move_pct / (2 * self.p['min_move_pct'])),
-                           reason=f'burst {bar.move_pct:.2f}% in {int(self.p["lookback"])} bars on {bar.relvol:.1f}× volume (short)')]
+                           reason=f'burst {bar.move_pct:.2f}% in {int(self.p["lookback"])} bars; {volume_text} (short)')]
         return []
 
     def rules(self, ctx: Context, bar) -> list[Rule]:
@@ -82,7 +83,5 @@ class MomentumBurst(Strategy):
         need = f'needs +{self.p["min_move_pct"]:.1f}%' + (f' or −{self.p["min_move_pct"]:.1f}%' if can_short else '')
         out.append(Rule('move', bool(moved), f'moved {bar.move_pct:+.2f}% over {int(self.p["lookback"])} bars ({need})',
                         value=bar.move_pct, threshold=self.p['min_move_pct']))
-        vol = bar.relvol >= self.p['min_relvol']
-        out.append(Rule('volume', bool(vol), f'relative volume {bar.relvol:.1f} vs {self.p["min_relvol"]:.1f} required',
-                        value=bar.relvol, threshold=self.p['min_relvol']))
+        out.append(volume_rule(ctx, bar.relvol, self.p['min_relvol']))
         return out

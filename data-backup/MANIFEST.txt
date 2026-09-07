@@ -1,5 +1,5 @@
 MoneyTree data backup
-taken       2026-09-07 09:19:33 PDT
+taken       2026-09-07 09:22:01 PDT
 database    217694208 bytes
 ledger.sql  1790787 bytes
 
@@ -12,7 +12,7 @@ accounts (mode · market · equity · trades)
   sim · degen · 7789.64 · 165
   paper · forex · 10000.00 · 0
   replay · forex · 10000.00 · 0
-  sim · forex · 9868.63 · 13
+  sim · forex · 9859.34 · 13
   paper · stocks · 10000.00 · 0
   replay · stocks · 10000.00 · 0
   sim · stocks · 9999.58 · 33
@@ -39,7 +39,7 @@ rows backed up
 
 not in this dump (regenerable)
   main_app_bar                 568929
-  main_app_feedevent           117329
+  main_app_feedevent           117349
   main_app_symbolstate         36
   main_app_backtestrun         312
   main_app_backtesttrade       4707

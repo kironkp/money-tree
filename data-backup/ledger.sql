@@ -1,4 +1,4 @@
--- MoneyTree ledger backup 2026-09-07 09:19:32 PDT
+-- MoneyTree ledger backup 2026-09-07 09:22:01 PDT
 -- Restore:
 --   sqlite3 restored.sqlite3 < ledger.sql
 --   cp restored.sqlite3 db.sqlite3
@@ -111,7 +111,7 @@ INSERT INTO main_app_account VALUES(6,'replay','Replay · crypto',10000,10000,10
 INSERT INTO main_app_account VALUES(7,'sim','Sprout (sim) · degen',10000,7789.6400000000003416,7789.6400000000003416,7789.6400000000003416,7832.8100000000002722,'2026-09-07','2026-09-07 07:10:44.188784','2026-09-02 07:02:51.745692',NULL,'degen',10,0,'',NULL,'',1);
 INSERT INTO main_app_account VALUES(8,'paper','Sapling (paper) · degen',10000,10000,10000,10000,10000,NULL,NULL,'2026-09-02 07:02:51.753365',NULL,'degen',0,0,'',NULL,'',1);
 INSERT INTO main_app_account VALUES(9,'replay','Replay · degen',10000,10000,10000,10000,10000,NULL,NULL,'2026-09-02 07:02:51.762085',NULL,'degen',0,0,'',NULL,'',1);
-INSERT INTO main_app_account VALUES(10,'sim','Sprout (sim) · forex',10000,108531.81000000000722,9868.6335959900013392,0,10000,'2026-09-07','2026-09-07 16:15:21.231286','2026-09-07 06:09:26.209714',NULL,'forex',17,0,'',NULL,'',1);
+INSERT INTO main_app_account VALUES(10,'sim','Sprout (sim) · forex',10000,108531.81000000000722,9859.3402360599995404,0,10000,'2026-09-07','2026-09-07 16:15:21.231286','2026-09-07 06:09:26.209714',NULL,'forex',17,0,'',NULL,'',1);
 INSERT INTO main_app_account VALUES(11,'paper','Sapling (paper) · forex',10000,10000,10000,10000,10000,NULL,NULL,'2026-09-07 06:09:26.229332',NULL,'forex',0,0,'',NULL,'',1);
 INSERT INTO main_app_account VALUES(12,'replay','Replay · forex',10000,10000,10000,10000,10000,NULL,NULL,'2026-09-07 06:09:26.251169',NULL,'forex',0,0,'',NULL,'',1);
 INSERT INTO main_app_agentconfig VALUES(1,'sim',1,0,'5Min',10000,0.5,20,4,2,12,30,5,0,240,3,0.5,25,1,NULL,1,0,'2026-09-02 04:08:48.263929','1Hour',3,3,10,45,4,25,60,1.1999999999999999644,3,'1Min',10,0.5,10,2,240,4,500,40,2,0.5,0.3,'15Min');
@@ -148,7 +148,7 @@ INSERT INTO main_app_agentrun VALUES(30,'sim','2026-09-04 20:06:24.180216','2026
 INSERT INTO main_app_agentrun VALUES(31,'sim','2026-09-05 16:56:19.698012','2026-09-07 06:00:12.909868','2026-09-07 06:15:51.718290',70493,'stopped','waiting for the 03:00:10 ET bar',115,NULL,30.0,4,'crypto','alpaca',3660,'2026-09-07 05:00:00','2026-09-07 07:00:10','stopped',1);
 INSERT INTO main_app_agentrun VALUES(32,'sim','2026-09-05 16:56:19.701272','2026-09-07 06:14:51.433276','2026-09-07 06:15:49.971470',70495,'stopped','market closed — next open Tue 09:30 ET',2239,NULL,30.0,1,'stocks','alpaca',120,NULL,'2026-09-08 13:30:00','stopped',1);
 INSERT INTO main_app_agentrun VALUES(33,'sim','2026-09-07 06:15:46.370772','2026-09-07 06:30:23.261169','2026-09-07 06:38:15.611910',39463,'stopped','waiting for the 02:45:20 ET bar',4,NULL,30.0,10,'forex','yahoo',960,'2026-09-07 06:15:00','2026-09-07 06:45:20','stopped',1);
-INSERT INTO main_app_agentrun VALUES(34,'sim','2026-09-07 06:15:52.872386','2026-09-07 16:19:01.680521',NULL,39506,'running','market closed — next open Tue 09:30 ET',604,NULL,30.0,1,'stocks','alpaca',120,NULL,'2026-09-08 13:30:00','sleeping',0);
+INSERT INTO main_app_agentrun VALUES(34,'sim','2026-09-07 06:15:52.872386','2026-09-07 16:21:01.718528',NULL,39506,'running','market closed — next open Tue 09:30 ET',606,NULL,30.0,1,'stocks','alpaca',120,NULL,'2026-09-08 13:30:00','sleeping',0);
 INSERT INTO main_app_agentrun VALUES(35,'sim','2026-09-07 06:15:54.737121','2026-09-07 16:00:10.439788',NULL,39511,'running','waiting for the 13:00:10 ET bar',31,NULL,30.0,4,'crypto','alpaca',3660,'2026-09-07 15:00:00','2026-09-07 17:00:10','waiting',0);
 INSERT INTO main_app_agentrun VALUES(36,'sim','2026-09-07 06:15:56.848493','2026-09-07 07:10:12.704494','2026-09-07 07:10:44.188340',39515,'stopped','waiting for the 03:11:10 ET bar',166,NULL,30.0,7,'degen','alpaca',120,'2026-09-07 07:09:00','2026-09-07 07:11:10','stopped',1);
 INSERT INTO main_app_agentrun VALUES(37,'sim','2026-09-07 06:38:26.332610','2026-09-07 16:15:21.245292',NULL,43090,'running','waiting for the 12:30:20 ET bar',118,NULL,30.0,10,'forex','yahoo',960,'2026-09-07 16:00:00','2026-09-07 16:30:20','waiting',0);

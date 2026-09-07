@@ -57,16 +57,12 @@ class Command(BaseCommand):
         by_market = {m: [s for s, _, _, mk in DEFAULTS if mk == m] for m in markets}
         wanted = {'orb': [Market.STOCKS], 'vwap_reversion': [Market.STOCKS, Market.CRYPTO, Market.FOREX],
                   'ema_momentum': [Market.STOCKS, Market.CRYPTO, Market.DEGEN, Market.FOREX], 'burst': [Market.DEGEN]}
-        # Lanes that exist to be watched start their strategies enabled at Sprout:
-        # the degen burst strategy, and both forex strategies.
-        watched = {('burst', Market.DEGEN), ('ema_momentum', Market.FOREX), ('vwap_reversion', Market.FOREX)}
         for cls in all_strategies():
             for market in wanted.get(cls.key, [Market.STOCKS]):
-                on = (cls.key, market) in watched
                 row, created = Strategy.objects.get_or_create(key=cls.key, market=market, defaults={
                     'name': cls.name, 'params': cls.defaults(), 'timeframe': cfg.timeframe_for(market),
                     'symbols': by_market[market], 'notes': cls.description,
-                    'enabled': on, 'stage': 'sprout' if on else 'seed',
+                    'enabled': False, 'stage': 'seed',
                 })
                 if created:
                     self.stdout.write(f'  + strategy {cls.key} ({market})')

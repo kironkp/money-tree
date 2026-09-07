@@ -14,6 +14,7 @@ from main_app.services.broker.sim import SimBroker
 from main_app.services.data import calendar as cal
 from main_app.services.data.yahoo import yahoo_symbol
 from main_app.services.risk import RiskConfig
+from main_app.services.status import portfolio_risk
 from main_app.tests.helpers import frames_for
 
 
@@ -90,6 +91,7 @@ class ForexRiskConfig(TestCase):
         self.assertEqual(fx.leverage, 10.0)
         self.assertEqual(base.leverage, 1.0)
         self.assertEqual(fx.max_position_pct, 500.0)
+        self.assertEqual(fx.max_directional_exposure_pct, 500.0)
         self.assertLess(fx.slippage_bps, base.slippage_bps)
         self.assertAlmostEqual(fx.round_trip_cost_pct('forex'), 0.016)  # 1.6 bps a round trip: spread, not commission
 
@@ -100,10 +102,33 @@ class ForexRiskConfig(TestCase):
         call_command('seed_watchlist', verbosity=0)
         self.assertEqual(Instrument.objects.filter(market='forex').count(), 4)
         self.assertTrue(Account.objects.filter(mode='sim', market='forex').exists())
-        self.assertTrue(Strategy.objects.get(key='ema_momentum', market='forex').enabled)
+        row = Strategy.objects.get(key='ema_momentum', market='forex')
+        self.assertFalse(row.enabled)
+        self.assertEqual(row.stage, 'seed')
         acct = Account.for_mode('sim', 'forex')
         self.assertEqual(acct.lane_asset_class, 'forex')
         self.assertFalse(acct.is_24x7)
+
+    def test_dashboard_uses_lane_loss_budget_and_reports_directional_exposure(self):
+        from main_app.models import Account, AgentConfig, Instrument, Position
+        cfg = AgentConfig.get()
+        cfg.forex_max_daily_loss_pct = Decimal('3')
+        cfg.save(update_fields=['forex_max_daily_loss_pct'])
+        account = Account.for_mode('sim', 'forex')
+        account.day_start_equity = Decimal('10000')
+        account.equity = Decimal('9900')
+        account.save(update_fields=['day_start_equity', 'equity'])
+        eur = Instrument.objects.create(symbol='EUR/USD', asset_class='forex', market='forex')
+        gbp = Instrument.objects.create(symbol='GBP/USD', asset_class='forex', market='forex')
+        Position.objects.create(account=account, instrument=eur, qty=Decimal('30000'), avg_price=Decimal('1'),
+                                last_price=Decimal('1'), opened_at=datetime.now(UTC))
+        Position.objects.create(account=account, instrument=gbp, qty=Decimal('-10000'), avg_price=Decimal('1'),
+                                last_price=Decimal('1'), opened_at=datetime.now(UTC))
+
+        risk = portfolio_risk(account, cfg)
+        self.assertEqual(risk['budget'], Decimal('300'))
+        self.assertEqual(risk['directional_exposure'], Decimal('30000.00'))
+        self.assertEqual(risk['directional_cap'], Decimal('49500.0'))
 
 
 class ForexBacktestFlattensForTheWeekend(SimpleTestCase):

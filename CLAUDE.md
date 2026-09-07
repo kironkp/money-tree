@@ -136,7 +136,8 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   (OANDA v20 practice is the plan; needs an account). Evidence 2026-09-06 (59 days):
   EMA and VWAP both lose about their costs on every timeframe (5Min PF 0.42,
   15Min 0.83, 1Hour 0.87 over 2 years) — the lane runs at 15Min so the spread does
-  not shred it, enabled at Sprout "to be watched" like degen.
+  not shred it. This historical v1.29 observation policy was superseded in
+  v1.32: unvalidated defaults now remain disabled at Seed.
 
 ## v1.30 — Evidence before execution
 
@@ -166,6 +167,23 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
 - Tests force non-manifest static storage regardless of `.env`, so the normal
   `manage.py test` command is deterministic. Migration `0009` adds the
   qualification ledger. `docs/LOGBOOK.md` is the release evidence record.
+
+## v1.32 — Stop operational losses and concentrated FX bets
+
+- Default strategies now start disabled at Seed. Migration `0010` parks only
+  untouched Forex v1 defaults (unproven, enabled, and with no history); it
+  never overrides a user-promoted version.
+- Forex retains 10× total margin but caps each USD direction at 5× equity.
+  Pending/approval-stage entries reserve position slots, buying power,
+  strategy allocation, and directional capacity. Entries below 10% of their
+  planned size are rejected instead of creating dust trades.
+- Dashboard Stop remains an intentional flatten. A launchd/deploy signal now
+  preserves sim/paper positions for restart, preventing infrastructure from
+  creating manual exits and extra costs. Live still follows
+  `LIVE_FLATTEN_ON_EXIT`.
+- Portfolio risk uses each lane's actual daily-loss budget, shows the dominant
+  directional exposure, and Settings includes Forex accounts.
+- GitHub Actions runs the complete Django suite on pushes and pull requests.
 
 ## v1.31 — No lucky-window promotions
 
@@ -197,6 +215,7 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   positions age out via `max_hold_minutes`. Forex: sessions roll 17:00 ET, the
   week closes Friday 17:00 ET, leverage 10×, whole units, Yahoo bars only.
 - `enabled` is permission to observe at the configured stage, not proof.
+  Newly seeded rows are disabled until research is deliberately promoted.
   Broker-backed modes must also see `qualification='qualified'`; quarantine is
   sticky until a new version or an explicit reset to unproven.
 - SQLite runs WAL + IMMEDIATE + 30 s timeout: web, agent and optimizer all

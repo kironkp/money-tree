@@ -7,8 +7,9 @@ One process per account, guarded by a file lock. Each tick:
 Between ticks the loop polls its controls every 2 s: stop requests, the kill
 switch, trading on/off, risk-setting changes and operator approvals, so
 "kill" means now, not next bar. Catch-up after a laptop sleep evaluates stops
-on the missed bars without opening anything new. SIGTERM/SIGINT flatten
-sim/paper and stop cleanly; live keeps positions unless LIVE_FLATTEN_ON_EXIT.
+on the missed bars without opening anything new. An operator Stop flattens
+sim/paper; an infrastructure signal preserves positions for a clean restart.
+Live follows LIVE_FLATTEN_ON_EXIT.
 """
 from __future__ import annotations
 
@@ -84,6 +85,7 @@ class Agent:
         self.provider_name = provider_name
         self.quiet = quiet
         self.stop_requested = False
+        self._operator_stop_requested = False
         self.last_tick: datetime | None = None
         self.last_snapshot: datetime | None = None
         self.last_processed: dict[str, datetime] = {}
@@ -375,6 +377,7 @@ class Agent:
             if self.run_row is not None:
                 self.run_row.refresh_from_db(fields=['stop_requested'])
                 if self.run_row.stop_requested:
+                    self._operator_stop_requested = True
                     self.stop_requested = True
                     return
             cfg = AgentConfig.get()
@@ -759,22 +762,45 @@ class Agent:
         log.info('replay finished: equity %.2f, %d trades', self.broker.account().equity, len(self.broker.trades))
 
     # --- teardown -----------------------------------------------------------
+    def _operator_requested_stop(self) -> bool:
+        """Distinguish the Stop button from launchd/deploy restart signals."""
+        if self._operator_stop_requested or self.run_row is None:
+            return self._operator_stop_requested
+        try:
+            self.run_row.refresh_from_db(fields=['stop_requested'])
+            self._operator_stop_requested = bool(self.run_row.stop_requested)
+        except Exception:
+            log.exception('could not verify stop source')
+        return self._operator_stop_requested
+
+    def _should_flatten_on_stop(self, operator_stop: bool) -> bool:
+        if self.mode == Mode.LIVE:
+            return settings.LIVE_FLATTEN_ON_EXIT
+        if self.mode == Mode.REPLAY:
+            return True
+        return operator_stop
+
     def shutdown(self) -> None:
         now = timezone.now()
         try:
             if hasattr(self, 'engine'):
-                flatten = self.mode in (Mode.SIM, Mode.PAPER, Mode.REPLAY) or settings.LIVE_FLATTEN_ON_EXIT
+                operator_stop = self._operator_requested_stop() if self.stop_requested else False
+                flatten = self._should_flatten_on_stop(operator_stop)
                 if self.stop_requested and flatten:
                     n = self.engine.flatten_all(now, 'manual')
                     if n:
                         self.recorder.on_risk_event('flatten', f'agent stopped — flattened {n} positions', now)
                     self.say('system', f'Stopped by request — {n} position(s) closed. Bye.')
-                elif self.stop_requested:
-                    self.broker.cancel_open_orders()
-                    self.recorder.on_risk_event('flatten', 'agent stopped — LIVE positions LEFT OPEN (LIVE_FLATTEN_ON_EXIT=0); '
-                                                'their broker-side stops still stand', now)
-                    self.say('risk', 'Stopped by request — LIVE positions left OPEN on purpose (LIVE_FLATTEN_ON_EXIT=0). '
+                elif self.stop_requested and self.mode == Mode.LIVE:
+                    self.recorder.on_risk_event('restart', 'agent stopped — LIVE positions LEFT OPEN '
+                                                '(LIVE_FLATTEN_ON_EXIT=0); broker-side stops remain', now)
+                    self.say('risk', 'Agent stopped — LIVE positions left OPEN on purpose (LIVE_FLATTEN_ON_EXIT=0). '
                              'Their broker-side stops still stand; the watchdog will not touch them while they are protected.', phase='alert')
+                elif self.stop_requested:
+                    n = len([p for p in self.broker.positions.values() if p.qty])
+                    self.recorder.on_risk_event('restart', f'process restart signal — preserved {n} position(s)', now)
+                    self.say('system', f'Process restart signal — preserved {n} position(s) instead of realizing an '
+                             'off-strategy exit. They will be hydrated and managed when the agent returns.')
                 else:
                     self.say('system', 'Agent exiting.')
                 if self.mode in (Mode.PAPER, Mode.LIVE):

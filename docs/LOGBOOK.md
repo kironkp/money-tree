@@ -5,6 +5,64 @@ records the observed problem, its cause, what changed, how it was verified,
 and what remains unproven. A green test suite means the software behaves as
 specified; it does **not** mean a trading strategy is profitable.
 
+## Release 1.32 — Stop the bleed before searching for edge
+
+Status: engineering safeguards complete; profitability remains unproven
+
+Safety boundary: no strategy was promoted, no account was reset, no real or
+paper order was submitted, and losing history remains intact as evidence.
+
+### Evidence
+
+The 2026-09-07 ledger snapshot contained 213 closed simulator trades:
+
+- Degen: −$2,210.42 over 165 trades, including $1,698.07 in modeled fees;
+  Burst was already quarantined by v1.30.
+- Forex: −$140.55 over 13 closed trades plus four open cards. Two meaningful
+  same-direction positions consumed about the full 10× buying-power ceiling;
+  the other two were dust orders created from leftover capacity. Two restart
+  exits contributed −$31.85 and were not strategy decisions.
+- Stocks: −$0.44 over 33 trades. ORB was +$33.38 while EMA was −$33.82; both
+  samples remain too small and unproven.
+- Crypto: −$1.78 over two trades, far too little evidence to judge.
+
+All 127 pre-change tests passed. The application was operational; the red
+accounts reflected weak strategies plus missing portfolio/restart guardrails,
+not a single crashing code path.
+
+### What changed
+
+- Untouched default Forex strategies are parked at Seed and disabled because
+  corrected walk-forward research found no valid held-out candidate. Fresh
+  installs no longer auto-enable Forex or Degen defaults.
+- A 5×-equity directional cap now aggregates every USD-quoted Forex position.
+  Total leverage may still reach 10× only when opposing USD directions offset.
+- Pending entries reserve slots and exposure, and a symbol cannot stack a
+  duplicate entry while one is waiting. Orders below 10% of their
+  risk/allocation-planned size are blocked rather than recorded as dust.
+- Operator Stop still flattens as advertised. Infrastructure restart signals
+  preserve simulator/paper positions for hydration, so deploys no longer
+  manufacture manual exits, spread, or slippage.
+- Dashboard risk uses the selected lane's daily-loss settings, exposes the
+  dominant one-way exposure/cap, and Settings now lists Forex accounts.
+- GitHub Actions supplies the repository's previously missing CI baseline.
+
+### Verification
+
+- Regression coverage exercises same-direction Forex aggregation, pending
+  reservations, dust rejection, lane-specific risk display, safe seed
+  defaults, Forex account visibility, and restart-versus-operator shutdown.
+- `python manage.py test`: **137 tests passed**.
+- Django system/schema checks, bytecode compilation, a clean-database
+  migration, and migration of the restored 2026-09-07 ledger all passed.
+
+### What this does not claim
+
+These changes can prevent avoidable and oversized losses; they cannot turn a
+negative-expectancy strategy profitable. The next strategy work must begin
+with cost-adjusted, non-overlapping walk-forward evidence and must leave failed
+candidates disabled.
+
 ## Release 1.31 — No lucky-window promotions
 
 Status: complete; Forex remains sim-only and profitability remains unproven

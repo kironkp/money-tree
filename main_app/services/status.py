@@ -11,6 +11,7 @@ from django.utils import timezone
 from main_app.models import Account, AgentConfig, Market, Mode, Qualification, RiskEvent, Stage, Strategy
 
 from .data import calendar as cal
+from .risk import RiskConfig
 from .timeframes import tf_delta
 
 MODE_LABEL = {Mode.SIM: 'SIM · fake money', Mode.PAPER: 'PAPER · Alpaca paper account',
@@ -23,16 +24,27 @@ def _age(ts):
 
 def portfolio_risk(account: Account, cfg: AgentConfig) -> dict:
     positions = list(account.positions.select_related('instrument'))
+    risk_cfg = RiskConfig.from_model(cfg, account.market)
     at_risk = sum((p.risk_dollars for p in positions), Decimal('0'))
     exposure = sum((abs(p.market_value) for p in positions), Decimal('0'))
     equity = account.equity or Decimal('1')
-    budget = account.day_start_equity * cfg.max_daily_loss_pct / 100
+    budget = account.day_start_equity * Decimal(str(risk_cfg.max_daily_loss_pct)) / 100
     used = max(Decimal('0'), -account.day_pnl)
     unprotected = [p.instrument.symbol for p in positions if p.stop_price is None or p.protection == 'none']
+    long_exposure = sum((abs(p.market_value) for p in positions if p.qty > 0), Decimal('0'))
+    short_exposure = sum((abs(p.market_value) for p in positions if p.qty < 0), Decimal('0'))
+    directional_exposure = max(long_exposure, short_exposure)
+    directional_cap = (
+        equity * Decimal(str(risk_cfg.max_directional_exposure_pct)) / 100
+        if risk_cfg.max_directional_exposure_pct > 0 else None
+    )
     return {'at_risk': at_risk, 'exposure': exposure, 'exposure_pct': (exposure / equity * 100) if equity else Decimal('0'),
             'budget': budget, 'used': used, 'remaining': max(Decimal('0'), budget - used),
             'used_pct': float(used / budget * 100) if budget else 0.0, 'unprotected': unprotected,
-            'positions': len(positions)}
+            'positions': len(positions), 'long_exposure': long_exposure, 'short_exposure': short_exposure,
+            'directional_exposure': directional_exposure, 'directional_cap': directional_cap,
+            'directional_used_pct': (float(directional_exposure / directional_cap * 100)
+                                     if directional_cap else 0.0)}
 
 
 def build_status(account: Account, cfg: AgentConfig, run) -> dict:

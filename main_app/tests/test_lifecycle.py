@@ -3,11 +3,11 @@ own their positions, cards move through their states, approvals expire."""
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 
 from main_app.services.broker.base import OrderReq
 from main_app.services.broker.sim import SimBroker
-from main_app.services.agent import eligible_strategy_rows
+from main_app.services.agent import Agent, eligible_strategy_rows
 from main_app.services.engine import Engine, EngineConfig, MemoryRecorder
 from main_app.services.risk import RiskConfig, RiskManager
 from main_app.services.strategies.base import Context, Signal, Strategy
@@ -108,6 +108,27 @@ class BrokerModesRequireQualification(TestCase):
         row.stage = 'tree'
         row.save(update_fields=['stage'])
         self.assertTrue(eligible_strategy_rows('live', 'stocks').filter(pk=row.pk).exists())
+
+
+class AgentShutdownPolicy(SimpleTestCase):
+    @override_settings(LIVE_FLATTEN_ON_EXIT=False)
+    def test_restart_signal_preserves_but_operator_stop_flattens_fake_positions(self):
+        for mode in ('sim', 'paper'):
+            agent = Agent(mode=mode)
+            self.assertFalse(agent._should_flatten_on_stop(operator_stop=False))
+            self.assertTrue(agent._should_flatten_on_stop(operator_stop=True))
+
+    def test_interrupted_replay_always_flattens(self):
+        agent = Agent(replay_date=T0.date())
+        self.assertTrue(agent._should_flatten_on_stop(operator_stop=False))
+
+    @override_settings(LIVE_FLATTEN_ON_EXIT=False)
+    def test_live_obeys_explicit_flatten_setting(self):
+        self.assertFalse(Agent(mode='live')._should_flatten_on_stop(operator_stop=True))
+
+    @override_settings(LIVE_FLATTEN_ON_EXIT=True)
+    def test_live_can_be_configured_to_flatten(self):
+        self.assertTrue(Agent(mode='live')._should_flatten_on_stop(operator_stop=False))
 
 
 class StrategiesOwnTheirPositions(SimpleTestCase):

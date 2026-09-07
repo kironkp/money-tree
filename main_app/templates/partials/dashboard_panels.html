@@ -15,7 +15,7 @@
       <div class="tile"><div class="label">At risk to stops</div><div class="value down">{{ risk.at_risk|money }}</div><div class="sub">{{ risk.positions }} position(s)</div></div>
       <div class="tile"><div class="label">Daily loss budget left</div><div class="value">{{ risk.remaining|money }}</div>
         <div class="meter {% if risk.used_pct > 70 %}hot{% endif %}"><span style="width: {{ risk.used_pct|floatformat:0 }}%"></span></div><div class="sub">{{ risk.used|money }} of {{ risk.budget|money }} used</div></div>
-      <div class="tile"><div class="label">Exposure</div><div class="value">{{ risk.exposure_pct|floatformat:0 }}%</div><div class="sub">{{ risk.exposure|money }} notional</div></div>
+      <div class="tile"><div class="label">Exposure</div><div class="value">{{ risk.exposure_pct|floatformat:0 }}%</div><div class="sub">{{ risk.exposure|money }} notional{% if risk.directional_cap %} · largest one-way bet {{ risk.directional_exposure|money }} of {{ risk.directional_cap|money }}{% endif %}</div></div>
       <div class="tile"><div class="label">Equity</div><div class="value">{{ account.equity|money }}</div><div class="sub {{ account.day_pnl|sign_class }}">day {{ account.day_pnl|signed_money }} · open {{ unrealized|signed_money }}</div></div>
     </div>
     {% if risk.unprotected %}<p class="message error" style="margin-top:var(--s-3)">UNPROTECTED: {{ risk.unprotected|joinlist }} — no stop in place</p>{% endif %}

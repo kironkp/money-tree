@@ -15,7 +15,7 @@ The ladder every strategy climbs:
 Same engine, same risk manager, same strategy code at every stage. Promotion
 is gated by a checklist (sessions, trades, profit factor, drawdown, live
 expectancy vs backtest, realized slippage) shown on each strategy page.
-Version 1.31 separates **enabled for observation** from **statistically
+Version 1.32 separates **enabled for observation** from **statistically
 qualified**: unproven ideas may collect fake-money evidence, but paper/live
 agents refuse them. A measured losing strategy is quarantined and disabled.
 Walk-forward promotion also requires both a profitable final holdout and a
@@ -28,7 +28,9 @@ aggressive sizing, its own loose limits — the high-risk sandbox, clearly
 labeled, expected to bleed) and **Forex** (EUR/GBP/AUD/NZD against the dollar
 on 15-minute bars, Sunday 17:00 to Friday 17:00 ET, traded on 10× margin like
 a retail forex account, Yahoo quotes, simulator only until a forex broker
-adapter exists). Every lane has a live **pulse** every 10 seconds
+adapter exists). Forex gross buying power remains 10×, but one USD direction
+is capped at 5× so four symbols cannot masquerade as independent bets. Every
+lane has a live **pulse** every 10 seconds
 between bar decisions: prices, open P&L, distance to stop/target and to the
 nearest trigger, streamed into the decision journal.
 
@@ -49,6 +51,9 @@ pipenv run python manage.py seed_watchlist
 pipenv run python manage.py sync_bars --days 60          # alpaca if keyed, else yahoo
 pipenv run python manage.py runserver 0.0.0.0:8003
 ```
+
+Fresh strategies start disabled at Seed. Run research, promote a candidate
+that clears held-out evidence, then enable it for fake-money observation.
 
 Then, in a second terminal, the agent:
 
@@ -82,7 +87,10 @@ Or take the whole database, bars included, from the latest release:
 `gunzip -c moneytree-db-latest.sqlite3.gz > db.sqlite3`.
 
 Or start/stop it from the dashboard. One agent per account (file lock in
-`run/`). Ctrl-C / SIGTERM flattens sim and paper positions on the way out.
+`run/`). The dashboard Stop button flattens sim and paper positions. A process
+restart signal preserves them so deploys do not manufacture off-strategy
+losses; the next process hydrates the ledger and resumes management. Live
+positions follow `LIVE_FLATTEN_ON_EXIT`.
 
 No Alpaca keys? `sync_bars --provider synthetic` gives you a seeded random
 walk to exercise everything; `--provider yahoo` gives real bars (60 days of

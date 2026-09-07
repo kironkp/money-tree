@@ -215,8 +215,28 @@ class Engine:
                             bars_held=pos.bars_held, stop=pos.stop, target=pos.target)
 
     def strategy_exposure(self, strategy_key: str) -> float:
-        return sum(abs(p.market_value()) for p in self.broker.positions.values()
-                   if p.qty and p.strategy_key == strategy_key)
+        open_exposure = sum(abs(p.market_value()) for p in self.broker.positions.values()
+                            if p.qty and p.strategy_key == strategy_key)
+        return open_exposure + self.pending_entry_exposure(strategy_key=strategy_key)
+
+    def pending_entry_cards(self) -> list[CardState]:
+        """Entries that reserve a slot and risk capacity but are not fully open."""
+        states = {'awaiting_approval', 'approved', 'submitted', 'accepted', 'partially_filled'}
+        return [card for card in self.cards.values() if card.status in states]
+
+    def pending_entry_exposure(self, side: str | None = None, strategy_key: str | None = None,
+                               states: set[str] | None = None) -> float:
+        exposure = 0.0
+        for card in self.pending_entry_cards():
+            if states is not None and card.status not in states:
+                continue
+            if side is not None and card.side != side:
+                continue
+            if strategy_key is not None and card.strategy_key != strategy_key:
+                continue
+            remaining = max(0.0, card.qty - card.filled_qty)
+            exposure += remaining * float(card.planned_entry or card.decision_price or 0.0)
+        return exposure
 
     # --- broker events → cards, feed, recorder ------------------------------
     def _emit_broker_events(self) -> None:
@@ -418,10 +438,21 @@ class Engine:
             self._emit_broker_events()
             return
         acct = self.broker.account()
+        pending = self.pending_entry_cards()
+        entry_side = 'long' if sig.action == 'buy' else 'short'
+        pending_slots = sum(
+            1 for card in pending
+            if not (self.broker.positions.get(card.symbol) and self.broker.positions[card.symbol].qty)
+        )
         decision = self.risk.evaluate(sig, ctx, acct, self.broker.positions, ctx.asset_class,
                                       strategy_supports=strat.supports(ctx.asset_class),
                                       allocation_pct=float(self.cfg.allocations.get(strat.key, 100.0)),
-                                      strategy_exposure=self.strategy_exposure(strat.key))
+                                      strategy_exposure=self.strategy_exposure(strat.key),
+                                      pending_positions=pending_slots,
+                                      # Submitted broker orders are already reflected in buying power.
+                                      pending_exposure=self.pending_entry_exposure(states={'awaiting_approval', 'approved'}),
+                                      pending_directional_exposure=self.pending_entry_exposure(side=entry_side),
+                                      pending_symbols={card.symbol for card in pending})
         if not decision.allowed:
             self.rec.on_signal(sig, strat.key, decision, None)
             self.say('signal', f'BLOCKED {sig.action.upper()} {symbol} ({strat.key}): {sig.reason} — {decision.reason}',

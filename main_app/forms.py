@@ -32,7 +32,8 @@ class AgentConfigForm(forms.ModelForm):
             'fee_bps_crypto', 'liquidity_cap_pct', 'min_reward_to_cost', 'live_confirm_orders', 'live_confirm_minutes',
             'degen_risk_per_trade_pct', 'degen_max_position_pct', 'degen_max_open_positions', 'degen_max_daily_loss_pct',
             'degen_max_trades_per_day', 'degen_max_hold_minutes', 'degen_min_reward_to_cost',
-            'forex_timeframe', 'forex_leverage', 'forex_risk_per_trade_pct', 'forex_max_position_pct', 'forex_max_open_positions',
+            'forex_timeframe', 'forex_leverage', 'forex_risk_per_trade_pct', 'forex_max_position_pct',
+            'forex_max_directional_exposure_pct', 'forex_max_open_positions',
             'forex_max_daily_loss_pct', 'forex_max_trades_per_day', 'forex_max_hold_minutes', 'forex_min_reward_to_cost',
             'forex_slippage_bps', 'fee_bps_forex',
         ]

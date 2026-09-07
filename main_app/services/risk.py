@@ -29,6 +29,13 @@ class RiskConfig:
     # Buying power as a multiple of equity. 1 = cash account (stocks, crypto);
     # forex is traded on margin, so the simulator lends like a broker would.
     leverage: float = 1.0
+    # Gross notional allowed in either direction, as a percentage of equity.
+    # Zero disables the cap. The Forex lane uses this because every supported
+    # pair carries the same USD factor even though the symbols differ.
+    max_directional_exposure_pct: float = 0.0
+    # Do not turn the last scraps of capacity into statistical noise. A trade
+    # must receive at least this share of the size implied by risk/allocation.
+    min_entry_size_pct: float = 10.0
 
     @classmethod
     def from_model(cls, cfg, market: str = 'stocks') -> 'RiskConfig':
@@ -48,6 +55,7 @@ class RiskConfig:
             rc.leverage = float(cfg.forex_leverage)
             rc.risk_per_trade_pct = float(cfg.forex_risk_per_trade_pct)
             rc.max_position_pct = float(cfg.forex_max_position_pct)
+            rc.max_directional_exposure_pct = float(cfg.forex_max_directional_exposure_pct)
             rc.max_open_positions = int(cfg.forex_max_open_positions)
             rc.max_daily_loss_pct = float(cfg.forex_max_daily_loss_pct)
             rc.max_trades_per_day = int(cfg.forex_max_trades_per_day)
@@ -132,7 +140,10 @@ class RiskManager:
 
     # --- the gate ---------------------------------------------------------
     def evaluate(self, sig: Signal, ctx: Context, account, positions: dict, asset_class: str,
-                 strategy_supports: bool = True, allocation_pct: float = 100.0, strategy_exposure: float = 0.0) -> Decision:
+                 strategy_supports: bool = True, allocation_pct: float = 100.0, strategy_exposure: float = 0.0,
+                 pending_positions: int = 0, pending_exposure: float = 0.0,
+                 pending_directional_exposure: float = 0.0,
+                 pending_symbols: set[str] | None = None) -> Decision:
         c = self.cfg
         if self.kill_switch:
             return Decision(False, reason='kill switch is on')
@@ -148,8 +159,10 @@ class RiskManager:
             return Decision(False, reason='crypto cannot be shorted')
         if sig.symbol in positions and positions[sig.symbol].qty != 0:
             return Decision(False, reason='already in a position')
+        if sig.symbol in (pending_symbols or set()):
+            return Decision(False, reason='an entry is already pending for this symbol')
         live = [p for p in positions.values() if p.qty != 0]
-        if len(live) >= c.max_open_positions:
+        if len(live) + pending_positions >= c.max_open_positions:
             return Decision(False, reason=f'max open positions ({c.max_open_positions})')
         if self.day.entries >= c.max_trades_per_day:
             return Decision(False, reason=f'max trades per day ({c.max_trades_per_day})')
@@ -174,13 +187,32 @@ class RiskManager:
         risk_dollars = equity * c.risk_per_trade_pct / 100.0
         qty_risk = risk_dollars / stop_dist
         qty_cap = equity * c.max_position_pct / 100.0 / price
-        qty_cash = account.buying_power / (price * (1 + c.slippage_bps / 1e4))
-        qty = min(qty_risk, qty_cap, qty_cash)
+        desired_qty = min(qty_risk, qty_cap)
         if allocation_pct < 100:
             room = equity * allocation_pct / 100.0 - strategy_exposure
             if room <= 0:
                 return Decision(False, reason=f'strategy allocation ({allocation_pct:g}% of equity) is fully used')
-            qty = min(qty, room / price)
+            desired_qty = min(desired_qty, room / price)
+        available_buying_power = max(0.0, account.buying_power - pending_exposure)
+        qty_cash = available_buying_power / (price * (1 + c.slippage_bps / 1e4))
+        qty = min(desired_qty, qty_cash)
+        if c.max_directional_exposure_pct > 0:
+            direction = 1 if sig.action == 'buy' else -1
+            same_direction = sum(
+                abs(p.market_value()) for p in positions.values()
+                if p.qty and (1 if p.qty > 0 else -1) == direction
+            ) + pending_directional_exposure
+            directional_room = equity * c.max_directional_exposure_pct / 100.0 - same_direction
+            if directional_room <= 0:
+                return Decision(False, reason=(
+                    f'directional exposure cap reached ({c.max_directional_exposure_pct:g}% of equity)'
+                ))
+            qty = min(qty, directional_room / price)
+        if desired_qty > 0 and qty < desired_qty * c.min_entry_size_pct / 100.0:
+            return Decision(False, reason=(
+                f'remaining capacity would create an undersized position '
+                f'(<{c.min_entry_size_pct:g}% of planned size)'
+            ))
         inc = float(self.qty_increments.get(sig.symbol, 0.0001 if asset_class == 'crypto' else 1.0))
         qty = round_qty(qty, inc)
         if qty <= 0:

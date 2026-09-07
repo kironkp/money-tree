@@ -157,6 +157,12 @@ class AgentConfig(models.Model):
     forex_leverage = models.DecimalField(max_digits=5, decimal_places=1, default=Decimal('10'))
     forex_risk_per_trade_pct = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal('0.5'))
     forex_max_position_pct = models.DecimalField(max_digits=7, decimal_places=2, default=Decimal('500'))
+    # All supported FX pairs are USD-quoted. Longs share one USD factor and
+    # shorts share the opposite one, so cap each side separately even when
+    # gross buying power remains.
+    forex_max_directional_exposure_pct = models.DecimalField(
+        max_digits=7, decimal_places=2, default=Decimal('500')
+    )
     forex_max_open_positions = models.PositiveIntegerField(default=4)
     forex_max_daily_loss_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('2'))
     forex_max_trades_per_day = models.PositiveIntegerField(default=40)

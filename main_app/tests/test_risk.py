@@ -77,6 +77,9 @@ class RiskManagerBlocksWhatItShould(SimpleTestCase):
         pos = {'X': Position('X', 10, 100, T0), 'Y': Position('Y', 10, 100, T0)}
         self.assertIn('already', self.rm.evaluate(sig(), ctx(), acct(), pos, 'stock').reason)
         self.assertIn('max open', self.rm.evaluate(sig(symbol='Z'), ctx(symbol='Z'), acct(), pos, 'stock').reason)
+        self.assertIn('max open', self.rm.evaluate(
+            sig(symbol='Z'), ctx(symbol='Z'), acct(), {}, 'stock', pending_positions=2,
+        ).reason)
 
     def test_entry_cutoff_before_close(self):
         d = self.rm.evaluate(sig(), ctx(mtc=20), acct(), {}, 'stock')
@@ -101,3 +104,49 @@ class RiskManagerBlocksWhatItShould(SimpleTestCase):
         self.rm.kill_switch = False
         self.rm.trading_enabled = False
         self.assertIn('disabled', self.rm.evaluate(sig(), ctx(), acct(), {}, 'stock').reason)
+
+
+class RiskManagerCapsSharedDirectionalExposure(SimpleTestCase):
+    def setUp(self):
+        cfg = RiskConfig(
+            leverage=10, risk_per_trade_pct=0.5, max_position_pct=500,
+            max_directional_exposure_pct=500, slippage_bps=0,
+        )
+        self.rm = RiskManager(cfg, {'EUR/USD': 1, 'GBP/USD': 1})
+        self.rm.new_day(T0.date(), 10000)
+
+    def test_usd_quoted_pairs_share_one_directional_cap(self):
+        positions = {'EUR/USD': Position('EUR/USD', 50_000, 1.0, T0)}
+        same_way = Signal('buy', 'GBP/USD', T0, 1.0, 0.999, 1.003)
+        blocked = self.rm.evaluate(same_way, ctx(None, 'GBP/USD', 'forex'), acct(), positions, 'forex')
+        self.assertFalse(blocked.allowed)
+        self.assertIn('directional exposure cap', blocked.reason)
+
+        opposite = Signal('sell', 'GBP/USD', T0, 1.0, 1.001, 0.997)
+        self.assertTrue(self.rm.evaluate(
+            opposite, ctx(None, 'GBP/USD', 'forex'), acct(), positions, 'forex',
+        ).allowed)
+
+    def test_pending_entries_reserve_directional_capacity(self):
+        entry = Signal('buy', 'GBP/USD', T0, 1.0, 0.999, 1.003)
+        blocked = self.rm.evaluate(
+            entry, ctx(None, 'GBP/USD', 'forex'), acct(), {}, 'forex',
+            pending_positions=1, pending_exposure=50_000, pending_directional_exposure=50_000,
+        )
+        self.assertFalse(blocked.allowed)
+        self.assertIn('directional exposure cap', blocked.reason)
+
+    def test_pending_symbol_cannot_open_a_duplicate_entry(self):
+        entry = Signal('buy', 'GBP/USD', T0, 1.0, 0.999, 1.003)
+        blocked = self.rm.evaluate(
+            entry, ctx(None, 'GBP/USD', 'forex'), acct(), {}, 'forex',
+            pending_positions=1, pending_symbols={'GBP/USD'},
+        )
+        self.assertFalse(blocked.allowed)
+        self.assertIn('already pending', blocked.reason)
+
+    def test_dust_position_is_rejected_when_capacity_is_nearly_spent(self):
+        entry = Signal('buy', 'EUR/USD', T0, 1.0, 0.999, 1.003)
+        blocked = self.rm.evaluate(entry, ctx(None, 'EUR/USD', 'forex'), acct(cash=50), {}, 'forex')
+        self.assertFalse(blocked.allowed)
+        self.assertIn('undersized position', blocked.reason)

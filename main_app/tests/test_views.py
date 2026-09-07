@@ -52,6 +52,10 @@ class PagesRenderWithData(TestCase):
             r = self.client.get(url)
             self.assertEqual(r.status_code, 200, url)
 
+    def test_settings_lists_forex_accounts(self):
+        r = self.client.get(reverse('settings'))
+        self.assertContains(r, 'Sprout (sim) · forex')
+
     def test_backtest_detail_shows_metrics(self):
         r = self.client.get(reverse('backtest-detail', args=[self.bt.pk]))
         self.assertContains(r, 'Profit factor')
@@ -136,6 +140,7 @@ class PagesRenderWithData(TestCase):
             'degen_risk_per_trade_pct': '3', 'degen_max_position_pct': '25', 'degen_max_open_positions': '4', 'degen_max_daily_loss_pct': '10',
             'degen_max_trades_per_day': '60', 'degen_max_hold_minutes': '45', 'degen_min_reward_to_cost': '1.2',
             'forex_timeframe': '5Min', 'forex_leverage': '10', 'forex_risk_per_trade_pct': '0.5', 'forex_max_position_pct': '500',
+            'forex_max_directional_exposure_pct': '500',
             'forex_max_open_positions': '4', 'forex_max_daily_loss_pct': '2', 'forex_max_trades_per_day': '40',
             'forex_max_hold_minutes': '240', 'forex_min_reward_to_cost': '2', 'forex_slippage_bps': '0.3', 'fee_bps_forex': '0.5'})
         self.assertEqual(r.status_code, 302)

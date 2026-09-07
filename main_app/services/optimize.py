@@ -147,6 +147,18 @@ def rank(results: list[tuple], objective: str, min_trades: int) -> list[dict]:
     return rows
 
 
+def training_candidate_is_viable(candidate: dict, min_trades: int) -> bool:
+    """A least-bad training result is not an actionable recommendation."""
+    return (
+        bool(candidate)
+        and candidate.get('objective') != float('-inf')
+        and int(candidate.get('trades', 0) or 0) >= int(min_trades)
+        and float(candidate.get('profit_factor', 0) or 0) > 1.0
+        and float(candidate.get('net_pnl', 0) or 0) > 0
+        and float(candidate.get('expectancy', 0) or 0) > 0
+    )
+
+
 def stability(ranked: list[dict], grid: dict) -> dict:
     """How the best combo's one-step neighbours fare: mean neighbour objective
     over the best objective. Near 1 = robust plateau; near 0 = lonely spike."""
@@ -287,6 +299,7 @@ def run_experiment(exp) -> None:
             exp.total_runs = len(windows) * (len(combos) + 2)
             exp.save(update_fields=['total_runs'])
             segments, rows, chosen, valid_windows = [], [], [], []
+            recommended = {}
             base = 0
             for win in windows:
                 train = slice_frames(frames, win['train_start'], win['train_end'])
@@ -301,12 +314,26 @@ def run_experiment(exp) -> None:
                     base += 1
                     continue
                 best = ranked[0]
+                if not training_candidate_is_viable(best, exp.min_trades):
+                    rows.append({
+                        **{k: str(v) for k, v in win.items()},
+                        'skipped': ('no positive training edge after costs — best combo: '
+                                    f'{best["trades"]} trades, PF {best["profit_factor"]:.2f}, '
+                                    f'net {best["net_pnl"]:+,.2f}, expectancy {best["expectancy"]:+,.2f}'),
+                        'params': best['params'], 'train_objective': best['objective'],
+                        'train_trades': best['trades'], 'train_net_pnl': best['net_pnl'],
+                        'train_profit_factor': best['profit_factor'], 'train_expectancy': best['expectancy'],
+                    })
+                    base += 1
+                    continue
                 r_test = run_backtest(replace(spec, params=best['params']), test, sb)
                 base += 1
                 progress(0, 1, base)
                 segments.append((r_test.trades, r_test.equity, r_test.bars_seen, r_test.bars_with_position))
                 chosen.append(best['params'])
                 valid_windows.append(win)
+                if win['n'] == windows[-1]['n']:
+                    recommended = best['params']
                 for label, m, eq, params in (('train', next(x[1] for x in results if x[0] == best['params']),
                                               next(x[3] for x in results if x[0] == best['params']), best['params']),
                                              ('test', r_test.metrics, r_test.equity, best['params'])):
@@ -335,11 +362,9 @@ def run_experiment(exp) -> None:
             for p in chosen:
                 k = ', '.join(f'{a}={b}' for a, b in sorted(p.items()))
                 freq[k] = freq.get(k, 0) + 1
-            # The most recent successful training window is the only one whose
-            # chosen parameters are temporally eligible for the final test
-            # window. A modal winner can be useful context, but is not a model
-            # selection rule with a clean holdout.
-            recommended = chosen[-1] if chosen else {}
+            # Only the winner from the final chronological training window is
+            # eligible for the final holdout. Never fall back to stale params
+            # when the latest window found no positive after-cost edge.
             fixed = (evaluate_fixed_params(spec, frames, valid_windows, recommended, bench)
                      if recommended and valid_windows else {})
             validation = {}
@@ -358,7 +383,11 @@ def run_experiment(exp) -> None:
                             'candidate_static_oos': fixed.get('metrics'),
                             'candidate_static_equity': fixed.get('equity', []),
                             'validation': validation,
-                            'recommendation_basis': 'winner of the most recent successful training window'})
+                            'recommendation_basis': (
+                                'winner of the final chronological training window after its positive after-cost gate'
+                                if recommended else
+                                'none — the final chronological training window produced no positive after-cost candidate'
+                            )})
             exp.best_params = recommended
         exp.summary = summary
         exp.status = 'done'

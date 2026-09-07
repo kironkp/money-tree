@@ -167,6 +167,22 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   `manage.py test` command is deterministic. Migration `0009` adds the
   qualification ledger. `docs/LOGBOOK.md` is the release evidence record.
 
+## v1.31 — No lucky-window promotions
+
+- A walk-forward training winner must itself have enough trades, PF above
+  1.0, positive net P&L, and positive expectancy after costs. If the latest
+  chronological training window has no viable winner, the experiment emits
+  no recommendation; it never falls back to a stale or least-bad config.
+- Walk-forward promotion now requires two independent gates: the final fixed
+  candidate holdout (10+ trades, PF ≥ 1.10, positive net and expectancy) and
+  the adaptive selection pipeline (30+ trades with the same return gates).
+  Automation and the web promotion endpoint enforce the same contract, and
+  the experiment screen shows each gate separately.
+- This was driven by Forex experiment #27: a lucky final week suggested VWAP
+  v2 at PF 1.102 and +$76.29, even though four of five adaptive OOS windows
+  lost and the pipeline totaled PF 0.51 / −$1,961.62. Corrected experiments
+  #28–29 returned no valid Forex candidate. Nothing was promoted.
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live

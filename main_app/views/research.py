@@ -16,7 +16,8 @@ from main_app.services import control, procs
 from main_app.services.backtest import run_backtest_for_model
 from main_app.services.data import calendar as cal
 from main_app.services.optimize import grid_from_schema
-from main_app.services.promotion import promote, research_evidence_passes
+from main_app.services.promotion import (promote, research_evidence_passes,
+                                         walk_forward_evidence_passes)
 from main_app.services.strategies import STRATEGIES, get_strategy_class
 
 from .common import deny_observer, operator_required
@@ -208,6 +209,7 @@ def experiment_detail(request, pk):
     ranked = s.get('ranked', [])
     validation = s.get('validation') or {}
     validation_metrics = validation.get('candidate') or {}
+    adaptive_oos = s.get('oos') or {}
     param_names = list(exp.param_grid.keys())
     strategy = Strategy.objects.filter(key=exp.strategy_key, market=market_for_symbols(exp.symbols)).first()
     runs = exp.runs.order_by('window_label', '-created_at')[:60] if exp.method == 'walk_forward' else []
@@ -215,7 +217,13 @@ def experiment_detail(request, pk):
         'exp': exp, 's': s, 'ranked': ranked[:40], 'param_names': param_names, 'strategy': strategy,
         'windows': s.get('windows', []), 'oos': s.get('oos'), 'runs': runs,
         'candidate_static': s.get('candidate_static_oos'), 'validation': validation,
-        'candidate_qualified': research_evidence_passes(validation_metrics, min_trades=exp.min_trades),
+        'final_candidate_qualified': research_evidence_passes(validation_metrics, min_trades=exp.min_trades),
+        'pipeline_qualified': research_evidence_passes(
+            adaptive_oos, min_trades=max(30, exp.min_trades),
+        ),
+        'candidate_qualified': walk_forward_evidence_passes(
+            validation_metrics, adaptive_oos, min_trades=exp.min_trades,
+        ),
         'oos_json': json.dumps(s.get('oos_equity', [])), 'freq': sorted((s.get('param_frequency') or {}).items(), key=lambda kv: -kv[1]),
         'candidate_static_json': json.dumps(s.get('candidate_static_equity', [])),
         'log': procs.tail(f'experiment-{exp.pk}', 20), 'stability': s.get('stability'),
@@ -254,13 +262,14 @@ def experiment_promote(request, pk):
             messages.error(request, 'that parameter set has no fixed held-out validation; only the recommended candidate can be promoted')
             return redirect('experiment-detail', pk=pk)
         metrics = validation.get('candidate') or {}
-        if not research_evidence_passes(metrics, min_trades=exp.min_trades):
-            messages.error(request, 'candidate not promoted: final held-out evidence does not clear the trade, profit-factor, net, and expectancy gates')
+        if not walk_forward_evidence_passes(metrics, summary.get('oos') or {}, min_trades=exp.min_trades):
+            messages.error(request, 'candidate not promoted: both final held-out evidence and the adaptive walk-forward pipeline must clear the trade, profit-factor, net, and expectancy gates')
             return redirect('experiment-detail', pk=pk)
     else:
         metrics = next((r for r in summary.get('ranked', []) if r.get('params') == params), {})
     evidence = ({'kind': 'held_out_validation', 'experiment': exp.pk,
-                 'window': (summary.get('validation') or {}).get('window'), 'same_bars': True}
+                 'window': (summary.get('validation') or {}).get('window'), 'same_bars': True,
+                 'adaptive_pipeline_passed': True}
                 if exp.method == 'walk_forward' else {'kind': 'in_sample', 'experiment': exp.pk})
     promote(row, params, source=f'experiment #{exp.pk} ({exp.method})', note=request.POST.get('note', ''),
             metrics=metrics if isinstance(metrics, dict) else {}, run_id=None, evidence=evidence)

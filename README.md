@@ -15,9 +15,12 @@ The ladder every strategy climbs:
 Same engine, same risk manager, same strategy code at every stage. Promotion
 is gated by a checklist (sessions, trades, profit factor, drawdown, live
 expectancy vs backtest, realized slippage) shown on each strategy page.
-Version 1.30 separates **enabled for observation** from **statistically
+Version 1.31 separates **enabled for observation** from **statistically
 qualified**: unproven ideas may collect fake-money evidence, but paper/live
 agents refuse them. A measured losing strategy is quarantined and disabled.
+Walk-forward promotion also requires both a profitable final holdout and a
+profitable adaptive selection pipeline; the optimizer cannot nominate the
+least-bad result when every training candidate loses after costs.
 
 Four lanes, four piggy banks: **Stocks** (NYSE/Nasdaq session), **Crypto**
 (BTC/ETH, hourly, careful), **Degen** (Alpaca altcoins on 1-minute bars,

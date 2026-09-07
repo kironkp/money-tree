@@ -16,7 +16,7 @@
 <div class="grid cols-2">
   {% if oos %}
   <div class="card span-2">
-    <h3>Adaptive walk-forward diagnostic</h3>
+    <h3>Adaptive walk-forward pipeline {% if pipeline_qualified %}<span class="badge up">passed</span>{% else %}<span class="badge down">failed</span>{% endif %}</h3>
     <div class="tiles">
       <div class="tile"><div class="label">OOS net</div><div class="value {{ oos.net_pnl|sign_class }}">{{ oos.net_pnl|signed_money }}</div><div class="sub">{{ oos.trades }} trades</div></div>
       <div class="tile"><div class="label">OOS profit factor</div><div class="value">{{ oos.profit_factor|floatformat:2 }}</div><div class="sub">win {{ oos.win_rate|floatformat:0 }}%</div></div>
@@ -24,7 +24,7 @@
       <div class="tile"><div class="label">Decay (test ÷ train)</div><div class="value {% if s.decay and s.decay < 0.5 %}down{% elif s.decay and s.decay > 0.8 %}up{% endif %}">{{ s.decay|floatformat:2|default:'—' }}</div><div class="sub">train avg {{ s.train_avg_objective|floatformat:2 }} · test avg {{ s.test_avg_objective|floatformat:2 }}</div></div>
     </div>
     <div id="oos" class="chart"></div>
-    <p class="small muted">Each test window used the winner from its own preceding training window. This measures an adaptive policy, not the one fixed configuration shown under Recommended, so it cannot by itself justify promotion. Decay near 1 means training performance transferred; below 0.5 suggests overfitting. Params picked per window: {% for k, n in freq %}<span class="badge">{{ k }} ×{{ n }}</span> {% endfor %}</p>
+    <p class="small muted">Each test window used the winner from its own preceding training window. This tests whether the selection process repeats across regimes. It must pass together with the final fixed-candidate holdout before promotion. Decay near 1 means training performance transferred; below 0.5 suggests overfitting. Params picked per window: {% for k, n in freq %}<span class="badge">{{ k }} ×{{ n }}</span> {% endfor %}</p>
   </div>
   {% if candidate_static %}
   <div class="card">
@@ -39,7 +39,7 @@
   {% endif %}
   {% if validation.candidate %}
   <div class="card">
-    <h3>Final held-out validation {% if candidate_qualified %}<span class="badge up">qualified</span>{% else %}<span class="badge down">not qualified</span>{% endif %}</h3>
+    <h3>Final held-out validation {% if final_candidate_qualified %}<span class="badge up">passed</span>{% else %}<span class="badge down">failed</span>{% endif %}</h3>
     <p class="small"><strong>{{ validation.window.test_start }} → {{ validation.window.test_end }}</strong> · candidate and current champion are compared on these exact bars.</p>
     <div class="tiles">
       <div class="tile"><div class="label">Candidate net</div><div class="value {{ validation.candidate.net_pnl|sign_class }}">{{ validation.candidate.net_pnl|signed_money }}</div><div class="sub">{{ validation.candidate.trades }} trades</div></div>
@@ -50,7 +50,7 @@
       {% endif %}
     </div>
     {% if validation.verdict %}<p><strong>{{ validation.verdict }}</strong></p>{% endif %}
-    <p class="small muted">Qualification requires at least {{ exp.min_trades }} trades, PF ≥ 1.10, positive net P&amp;L, and positive expectancy after modeled costs.</p>
+    <p class="small muted">Promotion requires this final window to have at least {{ exp.min_trades }} trades, PF ≥ 1.10, positive net P&amp;L, and positive expectancy after modeled costs. The adaptive pipeline must independently meet the same return gates over at least 30 trades.</p>
   </div>
   {% endif %}
   <div class="card span-2">
@@ -94,7 +94,7 @@
       <span class="small muted">grid: {{ exp.param_grid|json }}</span>
     </form>
     {% else %}
-    <p class="message warn">This candidate is recorded but cannot be promoted: its final held-out window did not clear the evidence gate.</p>
+    <p class="message warn">This candidate is recorded but cannot be promoted: the final held-out candidate and adaptive walk-forward pipeline did not both clear their evidence gates.</p>
     <pre>{{ exp.best_params|json }}</pre>
     {% endif %}
     {% else %}<p class="empty">no combo met the minimum trade count</p>{% endif %}

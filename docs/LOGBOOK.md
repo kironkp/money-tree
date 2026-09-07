@@ -5,6 +5,64 @@ records the observed problem, its cause, what changed, how it was verified,
 and what remains unproven. A green test suite means the software behaves as
 specified; it does **not** mean a trading strategy is profitable.
 
+## Release 1.31 — No lucky-window promotions
+
+Status: complete; Forex remains sim-only and profitability remains unproven
+
+Safety boundary: no strategy was promoted, no live/paper mode was enabled,
+and no real order or wallet transaction was submitted.
+
+### Evidence that exposed the remaining flaw
+
+Corrected v1.30 research was run without promotion:
+
+- Stock EMA final holdout: 9 trades, PF 1.70, +$21.57. It was correctly not
+  confirmed because the sample missed the 10-trade minimum.
+- Stock ORB candidate: 106 trades, PF 0.68, −$240.57. The installed champion
+  produced 164 trades, PF 1.16, +$121.89 on the identical bars, so the
+  candidate was rejected. ORB remains unproven rather than promoted.
+- Forex EMA candidate/champion: PF 0.61/0.62. Both were losing after costs.
+- Forex VWAP experiment #27 appeared to qualify on only the final seven-day
+  holdout: 54 trades, PF 1.102, +$76.29 versus v1 at PF 0.84, −$173.03.
+  However, four of five adaptive OOS windows lost. The adaptive selection
+  pipeline totaled 210 trades, PF 0.51, −$1,961.62, and the proposed fixed
+  parameters lost $680.84 across the diagnostic replay. The selected params
+  had also lost $607.25 in their own training window. Promoting this would
+  have rewarded a lucky week and a least-bad losing training result.
+
+### What changed
+
+- The best-ranked training combo is now viable only with the experiment's
+  minimum trades, PF above 1.0, positive net P&L, and positive expectancy
+  after modeled costs.
+- Only the final chronological training window may nominate the parameters
+  for its following holdout. When that training window has no viable edge,
+  the experiment returns no recommendation instead of falling back to an
+  older configuration.
+- Promotion/confirmation now requires both the final fixed-candidate holdout
+  and the aggregate adaptive walk-forward pipeline. The pipeline needs at
+  least 30 trades, PF ≥ 1.10, positive net P&L, and positive expectancy.
+- The research screen labels the adaptive pipeline and final validation as
+  separate pass/fail gates. The web action and nightly command share the same
+  enforcement.
+
+### Verification
+
+- A regression test reproduces experiment #27's lucky-final-window shape and
+  proves neither automation nor the web endpoint can promote it.
+- Tests prove a losing best-ranked training combo is not viable.
+- `pipenv run python manage.py test`: **127 tests passed**.
+- Corrected Forex experiments #28 (EMA) and #29 (VWAP) both reported
+  `no valid held-out candidate`. Forex strategies stayed at v1, enabled only
+  for simulator observation, with `qualification=unproven`.
+
+### Next decision
+
+Keep gathering forward-simulation evidence while research focuses on robust
+edges that survive multiple regimes and symbols. Do not add real capital to
+Forex, day trading, or crypto until a version becomes `qualified` under the
+full research and forward-evidence contract.
+
 ## Release 1.30 — Trust the evidence before risking money
 
 Status: phases 1–4 complete; profitability remains unproven

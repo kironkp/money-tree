@@ -20,7 +20,7 @@ REQUIREMENTS = {
     'sessions': 20, 'trades': 30, 'profit_factor': 1.3, 'max_drawdown_pct': 8.0, 'expectancy_ratio': 0.7,
 }
 
-RESEARCH_REQUIREMENTS = {'trades': 10, 'profit_factor': 1.1}
+RESEARCH_REQUIREMENTS = {'trades': 10, 'profit_factor': 1.1, 'pipeline_trades': 30}
 
 
 def research_evidence_passes(metrics: dict, min_trades: int | None = None,
@@ -37,6 +37,23 @@ def research_evidence_passes(metrics: dict, min_trades: int | None = None,
         and float(metrics.get('profit_factor', 0) or 0) >= min_pf
         and float(metrics.get('net_pnl', 0) or 0) > 0
         and float(metrics.get('expectancy', 0) or 0) > 0
+    )
+
+
+def walk_forward_evidence_passes(candidate: dict, adaptive_oos: dict,
+                                 min_trades: int | None = None) -> bool:
+    """Require both a good final candidate and a repeatable selection process.
+
+    A single final test window can be lucky. The adaptive OOS result answers a
+    different but essential question: did repeatedly choosing parameters from
+    only the preceding training window work across regimes? Both claims must
+    survive modeled costs before a walk-forward experiment can promote.
+    """
+    validation_trades = RESEARCH_REQUIREMENTS['trades'] if min_trades is None else int(min_trades)
+    pipeline_trades = max(validation_trades, RESEARCH_REQUIREMENTS['pipeline_trades'])
+    return (
+        research_evidence_passes(candidate, min_trades=validation_trades)
+        and research_evidence_passes(adaptive_oos, min_trades=pipeline_trades)
     )
 
 

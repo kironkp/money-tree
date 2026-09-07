@@ -12,7 +12,8 @@ from main_app.models import Account, AgentConfig, Experiment, JournalEntry, Stra
 from main_app.services.backtest import load_frames, run_backtest, spec_from_models
 from main_app.services.metrics import objective_value
 from main_app.services.optimize import evaluate_fixed_params, grid_from_schema, run_experiment
-from main_app.services.promotion import promote, research_evidence_passes
+from main_app.services.promotion import (promote, research_evidence_passes,
+                                         walk_forward_evidence_passes)
 
 MIN_OOS_PF = 1.1
 MIN_VALIDATION_TRADES = 10
@@ -25,7 +26,7 @@ def evidence_passes(metrics: dict, min_trades: int = MIN_VALIDATION_TRADES,
 
 
 def comparable_verdict(best_params: dict, current_params: dict, candidate: dict,
-                       champion: dict) -> tuple[str, bool]:
+                       champion: dict, adaptive_oos: dict) -> tuple[str, bool]:
     """Decide from candidate/champion results measured on identical bars.
 
     Returns (human verdict, should_promote). Re-finding current parameters is
@@ -38,14 +39,28 @@ def comparable_verdict(best_params: dict, current_params: dict, candidate: dict,
     champion_pf = float(champion.get('profit_factor', 0) or 0)
     candidate_net = float(candidate.get('net_pnl', 0) or 0)
     champion_net = float(champion.get('net_pnl', 0) or 0)
+    pipeline_passes = research_evidence_passes(
+        adaptive_oos, min_trades=30, min_pf=MIN_OOS_PF,
+    )
     if same:
-        if evidence_passes(candidate):
+        if evidence_passes(candidate) and pipeline_passes:
             return f'confirmed current params (held-out PF {candidate_pf:.2f})', False
+        if evidence_passes(candidate) and not pipeline_passes:
+            return (f'current params NOT confirmed — adaptive pipeline failed '
+                    f'({adaptive_oos.get("trades", 0)} trades, '
+                    f'PF {float(adaptive_oos.get("profit_factor", 0) or 0):.2f}, '
+                    f'net {float(adaptive_oos.get("net_pnl", 0) or 0):+,.2f})'), False
         return (f'current params NOT confirmed — held-out evidence failed '
                 f'({candidate.get("trades", 0)} trades, PF {candidate_pf:.2f}, net {candidate_net:+,.2f})'), False
-    if evidence_passes(candidate) and candidate_pf > champion_pf * 1.05 and candidate_net > champion_net:
+    if (walk_forward_evidence_passes(candidate, adaptive_oos, min_trades=MIN_VALIDATION_TRADES)
+            and candidate_pf > champion_pf * 1.05 and candidate_net > champion_net):
         return (f'PROMOTE: held-out PF {candidate_pf:.2f} vs current {champion_pf:.2f}, '
                 f'net {candidate_net:+,.2f} vs {champion_net:+,.2f}'), True
+    if evidence_passes(candidate) and not pipeline_passes:
+        return (f'kept current params — final candidate passed, but adaptive pipeline failed '
+                f'({adaptive_oos.get("trades", 0)} trades, '
+                f'PF {float(adaptive_oos.get("profit_factor", 0) or 0):.2f}, '
+                f'net {float(adaptive_oos.get("net_pnl", 0) or 0):+,.2f})'), False
     return (f'kept current params — candidate failed the held-out gate or did not beat the champion '
             f'(candidate PF {candidate_pf:.2f}, current {champion_pf:.2f})'), False
 
@@ -95,7 +110,9 @@ class Command(BaseCommand):
                 bench = None
             champion = (evaluate_fixed_params(spec, frames, [validation_window], row.params, bench)['metrics']
                         if validation_window else {})
-            verdict, should_promote = comparable_verdict(exp.best_params or {}, row.params, candidate, champion)
+            verdict, should_promote = comparable_verdict(
+                exp.best_params or {}, row.params, candidate, champion, adaptive_oos,
+            )
             if should_promote:
                 action = 'WOULD PROMOTE' if o['dry_run'] else 'PROMOTED'
                 verdict = f'{action} v{row.version + 1}: ' + verdict.removeprefix('PROMOTE: ')
@@ -107,7 +124,13 @@ class Command(BaseCommand):
                     )
             validation['champion'] = champion
             validation['verdict'] = verdict
-            validation['candidate_qualified'] = evidence_passes(candidate)
+            validation['final_candidate_qualified'] = evidence_passes(candidate)
+            validation['pipeline_qualified'] = research_evidence_passes(
+                adaptive_oos, min_trades=30, min_pf=MIN_OOS_PF,
+            )
+            validation['candidate_qualified'] = walk_forward_evidence_passes(
+                candidate, adaptive_oos, min_trades=MIN_VALIDATION_TRADES,
+            )
             validation['same_bars'] = bool(validation_window)
             summary['validation'] = validation
             exp.summary = summary

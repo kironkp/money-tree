@@ -70,8 +70,27 @@ class PagesRenderWithData(TestCase):
             strategy_key='orb', method='walk_forward', param_grid={'rr': [2.0, 3.0]}, symbols=['QQQ'],
             timeframe='5Min', start=date(2026, 6, 1), end=date(2026, 8, 31), status='done',
             min_trades=10, best_params=candidate,
-            summary={'validation': {'candidate': {'trades': 20, 'profit_factor': .94,
-                                                   'net_pnl': -10, 'expectancy': -.5}}},
+            summary={'oos': {'trades': 40, 'profit_factor': 1.3, 'net_pnl': 100, 'expectancy': 2},
+                     'validation': {'candidate': {'trades': 20, 'profit_factor': .94,
+                                                  'net_pnl': -10, 'expectancy': -.5}}},
+        )
+        old_version = self.row.version
+        response = self.client.post(reverse('experiment-promote', args=[exp.pk]))
+        self.assertEqual(response.status_code, 302)
+        self.row.refresh_from_db()
+        self.assertEqual(self.row.version, old_version)
+
+    def test_walk_forward_cannot_promote_lucky_final_window_after_losing_pipeline(self):
+        candidate = {**self.row.params, 'rr': 3.0}
+        exp = Experiment.objects.create(
+            strategy_key='orb', method='walk_forward', param_grid={'rr': [2.0, 3.0]}, symbols=['QQQ'],
+            timeframe='5Min', start=date(2026, 6, 1), end=date(2026, 8, 31), status='done',
+            min_trades=10, best_params=candidate,
+            summary={
+                'oos': {'trades': 210, 'profit_factor': .51, 'net_pnl': -1961, 'expectancy': -9.34},
+                'validation': {'candidate': {'trades': 54, 'profit_factor': 1.1019,
+                                             'net_pnl': 76.29, 'expectancy': 1.41}},
+            },
         )
         old_version = self.row.version
         response = self.client.post(reverse('experiment-promote', args=[exp.pk]))
@@ -87,7 +106,7 @@ class PagesRenderWithData(TestCase):
             strategy_key='orb', method='walk_forward', param_grid={'rr': [2.0, 3.0]}, symbols=['QQQ'],
             timeframe='5Min', start=date(2026, 6, 1), end=date(2026, 8, 31), status='done',
             min_trades=10, best_params=candidate,
-            summary={'oos': {'trades': 99, 'profit_factor': 9.9, 'net_pnl': 9999},
+            summary={'oos': {'trades': 99, 'profit_factor': 9.9, 'net_pnl': 9999, 'expectancy': 10},
                      'validation': {'candidate': validation}},
         )
         response = self.client.post(reverse('experiment-promote', args=[exp.pk]))

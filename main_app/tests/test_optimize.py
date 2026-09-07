@@ -7,7 +7,7 @@ from django.test import SimpleTestCase
 
 from main_app.services.backtest import BacktestSpec
 from main_app.services.optimize import (chain_oos, enumerate_combos, evaluate_fixed_params, grid_from_schema, rank,
-                                        stability, walk_forward_windows)
+                                        stability, training_candidate_is_viable, walk_forward_windows)
 
 
 class WalkForwardWindowsRollWithoutLeaking(SimpleTestCase):
@@ -57,6 +57,15 @@ class RankingAndStability(SimpleTestCase):
         ranked = rank([self._res({'a': 1}, 2.0, trades=5), self._res({'a': 2}, 1.0)], 'sharpe', 10)
         self.assertEqual(ranked[0]['params'], {'a': 2})
         self.assertEqual(ranked[1]['objective'], float('-inf'))
+
+    def test_least_bad_losing_training_result_is_not_viable(self):
+        losing = {'objective': .76, 'trades': 141, 'profit_factor': .76,
+                  'net_pnl': -607, 'expectancy': -4.3}
+        profitable = {'objective': 1.2, 'trades': 40, 'profit_factor': 1.2,
+                      'net_pnl': 80, 'expectancy': 2}
+        self.assertFalse(training_candidate_is_viable(losing, 10))
+        self.assertTrue(training_candidate_is_viable(profitable, 10))
+        self.assertFalse(training_candidate_is_viable({**profitable, 'trades': 9}, 10))
 
     def test_stability_scores_a_plateau_higher_than_a_spike(self):
         grid = {'a': [1, 2, 3]}

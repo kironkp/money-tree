@@ -112,10 +112,16 @@ def session_at(ts: datetime) -> Session | None:
 def is_open(ts: datetime, asset_class: str = 'stock') -> bool:
     if asset_class == 'crypto':
         return True
+    if asset_class == 'forex':
+        return forex_is_open(ts)
     return session_at(ts) is not None
 
 
-def next_open(ts: datetime) -> datetime:
+def next_open(ts: datetime, asset_class: str = 'stock') -> datetime:
+    if asset_class == 'crypto':
+        return ts
+    if asset_class == 'forex':
+        return forex_next_open(ts)
     d = ts.astimezone(ET).date()
     for _ in range(15):
         s = session_for(d)
@@ -128,6 +134,54 @@ def next_open(ts: datetime) -> datetime:
 def session_date(ts: datetime) -> date:
     """Calendar date in ET — the 'trading day' a timestamp belongs to."""
     return ts.astimezone(ET).date()
+
+
+def trading_day(ts: datetime, asset_class: str = 'stock') -> date:
+    """The day a timestamp's risk budget belongs to: the ET date for stocks
+    and crypto, the New York-close day (rolls at 17:00 ET) for forex."""
+    return forex_day(ts) if asset_class == 'forex' else session_date(ts)
+
+
+# --- forex: 24/5, the week runs Sunday 17:00 ET → Friday 17:00 ET -----------
+FOREX_ROLL = time(17, 0)   # the New York close: the forex "day" and week roll here
+
+
+def forex_is_open(ts: datetime) -> bool:
+    et = ts.astimezone(ET)
+    wd, t = et.weekday(), et.time()
+    if wd == 5:
+        return False
+    if wd == 4 and t >= FOREX_ROLL:
+        return False
+    if wd == 6 and t < FOREX_ROLL:
+        return False
+    return True
+
+
+def forex_next_open(ts: datetime) -> datetime:
+    if forex_is_open(ts):
+        return ts
+    et = ts.astimezone(ET)
+    d = et.date()
+    while d.weekday() != 6:  # the coming Sunday
+        d += timedelta(days=1)
+    return _to_utc(d, FOREX_ROLL)
+
+
+def forex_week_close(ts: datetime) -> datetime | None:
+    """Friday 17:00 ET of the week containing ts, or None when closed."""
+    if not forex_is_open(ts):
+        return None
+    et = ts.astimezone(ET)
+    d = et.date()
+    while d.weekday() != 4:
+        d += timedelta(days=1)
+    return _to_utc(d, FOREX_ROLL)
+
+
+def forex_day(ts: datetime) -> date:
+    """Forex days roll at the New York close: 17:00 ET Sunday already belongs to Monday."""
+    return (ts.astimezone(ET) + timedelta(hours=7)).date()
 
 
 def load_overrides(rows) -> int:

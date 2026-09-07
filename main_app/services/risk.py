@@ -25,7 +25,10 @@ class RiskConfig:
     # Round-trip cost gate: |target − entry| / entry must be ≥ min_reward_to_cost ×
     # (2 × fee + 2 × slippage). Below that the trade cannot pay for itself.
     min_reward_to_cost: float = 3.0
-    fee_bps: dict = field(default_factory=lambda: {'stock': 0.5, 'etf': 0.5, 'crypto': 25.0})
+    fee_bps: dict = field(default_factory=lambda: {'stock': 0.5, 'etf': 0.5, 'crypto': 25.0, 'forex': 0.5})
+    # Buying power as a multiple of equity. 1 = cash account (stocks, crypto);
+    # forex is traded on margin, so the simulator lends like a broker would.
+    leverage: float = 1.0
 
     @classmethod
     def from_model(cls, cfg, market: str = 'stocks') -> 'RiskConfig':
@@ -37,8 +40,20 @@ class RiskConfig:
             flat_before_close_min=int(cfg.flat_before_close_min), allow_short=True,
             max_hold_minutes=int(cfg.max_hold_minutes), slippage_bps=float(cfg.slippage_bps),
             min_reward_to_cost=float(cfg.min_reward_to_cost),
-            fee_bps={'stock': float(cfg.fee_bps_stock), 'etf': float(cfg.fee_bps_stock), 'crypto': float(cfg.fee_bps_crypto)},
+            fee_bps=cfg.fee_bps(),
         )
+        if market == 'forex':
+            # Margin lane: positions may exceed the account, the cost model is a
+            # spread, the day rolls at the New York close, and positions age out.
+            rc.leverage = float(cfg.forex_leverage)
+            rc.risk_per_trade_pct = float(cfg.forex_risk_per_trade_pct)
+            rc.max_position_pct = float(cfg.forex_max_position_pct)
+            rc.max_open_positions = int(cfg.forex_max_open_positions)
+            rc.max_daily_loss_pct = float(cfg.forex_max_daily_loss_pct)
+            rc.max_trades_per_day = int(cfg.forex_max_trades_per_day)
+            rc.max_hold_minutes = int(cfg.forex_max_hold_minutes)
+            rc.min_reward_to_cost = float(cfg.forex_min_reward_to_cost)
+            rc.slippage_bps = float(cfg.forex_slippage_bps)
         if market == 'degen':
             # The high-risk sandbox: bigger bets, more of them, a looser cost gate,
             # a wider daily loss budget. Fake money, and it says so on the screen.

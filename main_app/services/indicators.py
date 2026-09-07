@@ -43,9 +43,12 @@ def atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
 
 
 def session_key(index: pd.DatetimeIndex, asset_class: str = 'stock') -> pd.Series:
-    """Session label per bar: ET date for stocks, UTC date for crypto."""
+    """Session label per bar: ET date for stocks, UTC date for crypto, the
+    New York-close day (rolls 17:00 ET) for forex."""
     if asset_class == 'crypto':
         return pd.Series(index.tz_convert('UTC').date, index=index)
+    if asset_class == 'forex':
+        return pd.Series((index.tz_convert(cal.ET) + pd.Timedelta(hours=7)).date, index=index)
     return pd.Series(index.tz_convert(cal.ET).date, index=index)
 
 
@@ -95,9 +98,12 @@ def zscore(s: pd.Series, n: int) -> pd.Series:
 
 
 def minutes_to_close(index: pd.DatetimeIndex, asset_class: str = 'stock') -> pd.Series:
-    """Minutes from bar START to the session close; NaN for crypto."""
+    """Minutes from bar START to the session close; NaN for crypto. Forex has
+    one close a week (Friday 17:00 ET), so the week is its session."""
     if asset_class == 'crypto':
         return pd.Series(np.nan, index=index)
+    if asset_class == 'forex':
+        return forex_minutes_to_close(index)
     out = np.full(len(index), np.nan)
     cache = {}
     for i, ts in enumerate(index):
@@ -107,4 +113,21 @@ def minutes_to_close(index: pd.DatetimeIndex, asset_class: str = 'stock') -> pd.
             s = cache[d] = cal.session_for(d)
         if s is not None:
             out[i] = (s.close_utc - ts.to_pydatetime()).total_seconds() / 60
+    return pd.Series(out, index=index)
+
+
+def forex_minutes_to_close(index: pd.DatetimeIndex) -> pd.Series:
+    """Minutes to the Friday 17:00 ET close of each bar's week; NaN on the weekend."""
+    if len(index) == 0:
+        return pd.Series(np.nan, index=index)
+    et = index.tz_convert(cal.ET)
+    wd = np.asarray(et.weekday)
+    mins = np.asarray(et.hour) * 60 + np.asarray(et.minute)
+    closed = (wd == 5) | ((wd == 4) & (mins >= 17 * 60)) | ((wd == 6) & (mins < 17 * 60))
+    days_to_friday = (4 - wd) % 7
+    local_midnight = et.tz_localize(None).normalize()
+    friday_close = (local_midnight + pd.to_timedelta(days_to_friday, unit='D') + pd.Timedelta(hours=17)).tz_localize(
+        cal.ET, ambiguous='NaT', nonexistent='shift_forward')
+    out = (friday_close.tz_convert('UTC') - index.tz_convert('UTC')).total_seconds() / 60.0
+    out = np.where(closed, np.nan, out)
     return pd.Series(out, index=index)

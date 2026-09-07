@@ -51,7 +51,7 @@ def build_status(account: Account, cfg: AgentConfig, run) -> dict:
     bar_age = None
     if run and run.last_bar_ts:
         bar_age = (now - (run.last_bar_ts + tf)).total_seconds()
-    market_open = account.is_24x7 or cal.is_open(now)
+    market_open = account.is_open_at(now)
     if run and market_open and (bar_age is None or bar_age > 2 * tf.total_seconds()):
         blockers.append('market data is stale' if bar_age is not None else 'no completed bar seen yet')
     # reconciliation
@@ -73,7 +73,8 @@ def build_status(account: Account, cfg: AgentConfig, run) -> dict:
     if RiskEvent.objects.filter(account=account, kind='config_changed', acknowledged_at__isnull=True).exists():
         blockers.append('strategy configuration changed — the running agent needs a restart')
     if not market_open:
-        notes.append(f'stock market closed — opens {cal.next_open(now).astimezone(cal.ET):%a %H:%M} ET')
+        nxt = cal.next_open(now, account.lane_asset_class)
+        notes.append(f'{"forex" if account.market == Market.FOREX else "stock"} market closed — opens {nxt.astimezone(cal.ET):%a %H:%M} ET')
     return {
         'mode': account.mode, 'mode_label': MODE_LABEL.get(account.mode, account.mode), 'real_money': account.mode == Mode.LIVE,
         'health': health, 'run': run,

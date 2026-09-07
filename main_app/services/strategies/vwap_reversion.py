@@ -17,7 +17,7 @@ class VwapReversion(Strategy):
     key = 'vwap_reversion'
     name = 'VWAP Reversion'
     description = 'Fade stretches beyond k·σ from session VWAP back to VWAP; ATR stop.'
-    asset_classes = ('stock', 'etf', 'crypto')
+    asset_classes = ('stock', 'etf', 'crypto', 'forex')
     params = (
         Param('entry_z', 'float', 2.0, 1.0, 3.0, 0.5, help='Entry threshold in σ of (close − VWAP)'),
         Param('lookback', 'int', 30, 20, 60, 10, help='Bars for the σ estimate'),

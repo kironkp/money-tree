@@ -25,7 +25,7 @@ class BacktestSpec:
     timeframe: str = '5Min'
     starting_cash: float = 10000.0
     risk: RiskConfig = field(default_factory=RiskConfig)
-    fee_bps: dict = field(default_factory=lambda: {'stock': 0.5, 'etf': 0.5, 'crypto': 25.0})
+    fee_bps: dict = field(default_factory=lambda: {'stock': 0.5, 'etf': 0.5, 'crypto': 25.0, 'forex': 0.5})
     liquidity_cap_pct: float = 1.0
     asset_classes: dict = field(default_factory=dict)
     qty_increments: dict = field(default_factory=dict)
@@ -65,7 +65,8 @@ def run_backtest(spec: BacktestSpec, frames: dict[str, pd.DataFrame],
               if len(df) and any(st.supports(spec.asset_classes.get(s, 'stock')) for st in strategies)}
     broker = SimBroker(spec.starting_cash, immediate_fills=False, slippage_bps=spec.risk.slippage_bps,
                        fee_bps=spec.fee_bps, liquidity_cap_pct=spec.liquidity_cap_pct,
-                       asset_classes=spec.asset_classes, qty_increments=spec.qty_increments)
+                       asset_classes=spec.asset_classes, qty_increments=spec.qty_increments,
+                       leverage=spec.risk.leverage)
     cfg = EngineConfig(timeframe=spec.timeframe, mode='bt', asset_classes=spec.asset_classes, risk=spec.risk,
                        allocations=allocations, strategy_symbols=strategy_symbols)
     rec = MemoryRecorder()
@@ -108,13 +109,16 @@ def date_bounds(start: date, end: date) -> tuple[datetime, datetime]:
 
 def spec_from_models(strategy_key: str, params: dict, symbols: list, timeframe: str, cfg,
                      starting_cash=None) -> BacktestSpec:
-    from main_app.models import Instrument
+    from main_app.models import Instrument, market_for_symbols
     instruments = {i.symbol: i for i in Instrument.objects.filter(symbol__in=symbols)}
+    # The lane's own limits and cost model (leverage and spread for forex, the
+    # looser sandbox limits for degen), so a backtest prices what live would pay.
+    market = market_for_symbols(symbols)
     return BacktestSpec(
         strategy_key=strategy_key, params=params or {}, symbols=list(symbols), timeframe=timeframe,
         starting_cash=float(starting_cash if starting_cash is not None else cfg.starting_cash),
-        risk=RiskConfig.from_model(cfg),
-        fee_bps={'stock': float(cfg.fee_bps_stock), 'etf': float(cfg.fee_bps_stock), 'crypto': float(cfg.fee_bps_crypto)},
+        risk=RiskConfig.from_model(cfg, market),
+        fee_bps=cfg.fee_bps(),
         liquidity_cap_pct=float(cfg.liquidity_cap_pct),
         asset_classes={s: instruments[s].asset_class for s in symbols if s in instruments},
         qty_increments={s: float(instruments[s].qty_increment) for s in symbols if s in instruments},

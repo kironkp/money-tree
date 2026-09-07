@@ -35,10 +35,16 @@ class Command(BaseCommand):
         end = datetime.now(UTC)
         start = end - timedelta(days=o['days'])
         total = 0
+        yahoo = None
         for inst in qs:
             fn = resync if o['resync'] else sync_bars
+            prov = provider
+            if inst.asset_class == 'forex' and provider.name not in ('yahoo', 'synthetic'):
+                # Alpaca has no forex; Yahoo is the lane's feed either way.
+                yahoo = yahoo or get_provider('yahoo')
+                prov = yahoo
             try:
-                res = fn(inst, timeframe, start, end, provider)
+                res = fn(inst, timeframe, start, end, prov)
             except Exception as exc:
                 self.stderr.write(f'  {inst.symbol}: FAILED {exc!r}')
                 continue

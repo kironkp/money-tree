@@ -19,6 +19,7 @@ class AssetClass(models.TextChoices):
     STOCK = 'stock', 'Stock'
     ETF = 'etf', 'ETF'
     CRYPTO = 'crypto', 'Crypto'
+    FOREX = 'forex', 'Forex'
 
 
 class Mode(models.TextChoices):
@@ -32,6 +33,7 @@ class Market(models.TextChoices):
     STOCKS = 'stocks', 'Stocks'   # NYSE/Nasdaq session, 09:30–16:00 ET
     CRYPTO = 'crypto', 'Crypto'   # BTC/ETH, hourly, 24/7
     DEGEN = 'degen', 'Degen'      # altcoins, 1-minute bars, aggressive sizing — the high-risk sandbox
+    FOREX = 'forex', 'Forex'      # USD-quoted majors, 5-minute bars, 24/5 (Sun 17:00 – Fri 17:00 ET), margin sizing
 
 
 class Stage(models.TextChoices):
@@ -45,7 +47,7 @@ class Instrument(models.Model):
     symbol = models.CharField(max_length=16, unique=True)  # AAPL, BTC/USD
     name = models.CharField(max_length=80, blank=True)
     asset_class = models.CharField(max_length=8, choices=AssetClass.choices, default=AssetClass.STOCK)
-    # Which agent trades it: stocks, crypto (BTC/ETH) or degen (altcoins).
+    # Which agent trades it: stocks, crypto (BTC/ETH), degen (altcoins) or forex (majors).
     market = models.CharField(max_length=8, choices=Market.choices, default=Market.STOCKS)
     tick_size = models.DecimalField(max_digits=12, decimal_places=8, default=Decimal('0.01'))
     # Smallest order quantity step. 1 for stocks (whole shares); crypto is
@@ -64,6 +66,10 @@ class Instrument(models.Model):
     @property
     def is_crypto(self):
         return self.asset_class == AssetClass.CRYPTO
+
+    @property
+    def is_forex(self):
+        return self.asset_class == AssetClass.FOREX
 
     @property
     def slug(self):
@@ -135,6 +141,23 @@ class AgentConfig(models.Model):
     degen_max_trades_per_day = models.PositiveIntegerField(default=60)
     degen_max_hold_minutes = models.PositiveIntegerField(default=45)
     degen_min_reward_to_cost = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('1.2'))
+    # The forex lane: USD-quoted majors on 5-minute bars, 24/5. Forex is traded
+    # on margin, so a position may exceed the account (leverage) and the cost
+    # model is a spread, not a commission: fees in bps of notional, slippage in
+    # bps (0.3 bps ≈ a third of a pip on EUR/USD).
+    # 15-minute bars: on 5-minute bars the spread eats every target (backtest
+    # 2026-09-06: PF 0.42 on 5Min vs 0.83 on 15Min, same strategy, same 59 days).
+    forex_timeframe = models.CharField(max_length=8, default='15Min')
+    forex_leverage = models.DecimalField(max_digits=5, decimal_places=1, default=Decimal('10'))
+    forex_risk_per_trade_pct = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal('0.5'))
+    forex_max_position_pct = models.DecimalField(max_digits=7, decimal_places=2, default=Decimal('500'))
+    forex_max_open_positions = models.PositiveIntegerField(default=4)
+    forex_max_daily_loss_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('2'))
+    forex_max_trades_per_day = models.PositiveIntegerField(default=40)
+    forex_max_hold_minutes = models.PositiveIntegerField(default=240)
+    forex_min_reward_to_cost = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('2'))
+    forex_slippage_bps = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.3'))
+    fee_bps_forex = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.5'))
     # Live pulse: seconds between price checks while waiting for the next bar (0 = off).
     pulse_seconds = models.PositiveIntegerField(default=10)
     starting_cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))
@@ -184,10 +207,17 @@ class AgentConfig(models.Model):
         return obj
 
     def fee_bps_for(self, instrument: Instrument) -> Decimal:
-        return self.fee_bps_crypto if instrument.is_crypto else self.fee_bps_stock
+        if instrument.is_crypto:
+            return self.fee_bps_crypto
+        return self.fee_bps_forex if instrument.is_forex else self.fee_bps_stock
+
+    def fee_bps(self) -> dict:
+        return {'stock': float(self.fee_bps_stock), 'etf': float(self.fee_bps_stock),
+                'crypto': float(self.fee_bps_crypto), 'forex': float(self.fee_bps_forex)}
 
     def timeframe_for(self, market: str) -> str:
-        return {Market.CRYPTO: self.crypto_timeframe, Market.DEGEN: self.degen_timeframe}.get(market, self.timeframe)
+        return {Market.CRYPTO: self.crypto_timeframe, Market.DEGEN: self.degen_timeframe,
+                Market.FOREX: self.forex_timeframe}.get(market, self.timeframe)
 
 
 class Account(models.Model):
@@ -242,11 +272,29 @@ class Account(models.Model):
 
     @property
     def asset_classes(self) -> tuple:
-        return (AssetClass.CRYPTO,) if self.market in (Market.CRYPTO, Market.DEGEN) else (AssetClass.STOCK, AssetClass.ETF)
+        if self.market in (Market.CRYPTO, Market.DEGEN):
+            return (AssetClass.CRYPTO,)
+        if self.market == Market.FOREX:
+            return (AssetClass.FOREX,)
+        return (AssetClass.STOCK, AssetClass.ETF)
+
+    @property
+    def lane_asset_class(self) -> str:
+        """The asset class that sets this lane's hours: stock, crypto or forex."""
+        return self.asset_classes[0]
 
     @property
     def is_24x7(self) -> bool:
         return self.market in (Market.CRYPTO, Market.DEGEN)
+
+    @property
+    def hours_label(self) -> str:
+        return {Market.STOCKS: 'US stock session, 09:30–16:00 ET Mon–Fri', Market.CRYPTO: 'around the clock',
+                Market.DEGEN: 'around the clock', Market.FOREX: 'Sun 17:00 – Fri 17:00 ET'}[self.market]
+
+    def is_open_at(self, ts) -> bool:
+        from main_app.services.data import calendar as cal
+        return cal.is_open(ts, self.lane_asset_class)
 
     @property
     def query(self) -> str:
@@ -296,7 +344,8 @@ def market_for_symbols(symbols) -> str:
     symbols = list(symbols or [])
     if not symbols:
         return Market.STOCKS
-    found = list(Instrument.objects.filter(symbol__in=symbols).values_list('market', flat=True).distinct())
+    # (a set, not .distinct(): Meta.ordering would add `symbol` to the DISTINCT)
+    found = sorted(set(Instrument.objects.filter(symbol__in=symbols).values_list('market', flat=True)))
     if len(found) == 1:
         return found[0]
     return Market.CRYPTO if all('/' in s for s in symbols) else Market.STOCKS

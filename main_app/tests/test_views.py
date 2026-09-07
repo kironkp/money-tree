@@ -82,7 +82,10 @@ class PagesRenderWithData(TestCase):
             'slippage_bps': '3', 'fee_bps_stock': '0.5', 'fee_bps_crypto': '25', 'liquidity_cap_pct': '1', 'min_reward_to_cost': '3',
             'live_confirm_orders': 'on', 'live_confirm_minutes': '3', 'degen_timeframe': '1Min', 'pulse_seconds': '10',
             'degen_risk_per_trade_pct': '3', 'degen_max_position_pct': '25', 'degen_max_open_positions': '4', 'degen_max_daily_loss_pct': '10',
-            'degen_max_trades_per_day': '60', 'degen_max_hold_minutes': '45', 'degen_min_reward_to_cost': '1.2'})
+            'degen_max_trades_per_day': '60', 'degen_max_hold_minutes': '45', 'degen_min_reward_to_cost': '1.2',
+            'forex_timeframe': '5Min', 'forex_leverage': '10', 'forex_risk_per_trade_pct': '0.5', 'forex_max_position_pct': '500',
+            'forex_max_open_positions': '4', 'forex_max_daily_loss_pct': '2', 'forex_max_trades_per_day': '40',
+            'forex_max_hold_minutes': '240', 'forex_min_reward_to_cost': '2', 'forex_slippage_bps': '0.3', 'fee_bps_forex': '0.5'})
         self.assertEqual(r.status_code, 302)
         self.cfg.refresh_from_db()
         self.assertEqual(float(self.cfg.risk_per_trade_pct), 0.75)

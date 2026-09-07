@@ -8,7 +8,11 @@ Fill model
 - Fees: `fee_bps` of notional per fill, per asset class.
 - Liquidity: a fill may not exceed `liquidity_cap_pct` of the bar's volume;
   the remainder is canceled ('liquidity').
-- Whole shares for stocks; crypto rounds down to the asset's increment.
+- Whole shares for stocks; crypto rounds down to the asset's increment;
+  forex trades whole units of the base currency.
+- Buying power = equity × leverage − open exposure − pending entries. Leverage
+  is 1 for stocks and crypto (a cash account) and the configured multiple for
+  forex, where a broker lends against the account.
 """
 from __future__ import annotations
 
@@ -30,12 +34,13 @@ class SimBroker(Broker):
 
     def __init__(self, cash: float, *, immediate_fills: bool = False, slippage_bps: float = 3.0,
                  fee_bps: dict | None = None, liquidity_cap_pct: float = 1.0,
-                 asset_classes: dict | None = None, qty_increments: dict | None = None):
+                 asset_classes: dict | None = None, qty_increments: dict | None = None, leverage: float = 1.0):
         self._cash = float(cash)
         self.starting_cash = float(cash)
         self.immediate_fills = immediate_fills
         self.slippage_bps = float(slippage_bps)
-        self.fee_bps = {'stock': 0.5, 'etf': 0.5, 'crypto': 25.0, **(fee_bps or {})}
+        self.leverage = max(1.0, float(leverage))
+        self.fee_bps = {'stock': 0.5, 'etf': 0.5, 'crypto': 25.0, 'forex': 0.5, **(fee_bps or {})}
         self.liquidity_cap_pct = float(liquidity_cap_pct)
         self.asset_classes = asset_classes or {}
         self.qty_increments = qty_increments or {}
@@ -67,11 +72,13 @@ class SimBroker(Broker):
     def account(self) -> AccountState:
         pv = self.positions_value()
         eq = self._cash + pv
-        # Cash account semantics: no margin. Shorts consume cash like longs.
+        # Buying power: what the account can still commit. With leverage 1 and
+        # only longs this is exactly the cash; shorts consume it like longs.
+        gross = sum(abs(p.market_value(self.last_price.get(p.symbol))) for p in self._positions.values())
         pending = sum(o.qty * (o.decision_price or self.last_price.get(o.symbol, 0.0))
                       for o in self.open_orders.values() if o.leg == 'entry')
         return AccountState(cash=self._cash, equity=eq, positions_value=pv,
-                            buying_power=max(0.0, self._cash - pending))
+                            buying_power=max(0.0, eq * self.leverage - gross - pending))
 
     def hydrate(self, cash: float, positions: list[Position]) -> None:
         """Restore state from the DB after a restart."""
@@ -85,7 +92,7 @@ class SimBroker(Broker):
         return self.asset_classes.get(symbol, 'stock')
 
     def _increment(self, symbol: str) -> float:
-        return float(self.qty_increments.get(symbol, 1.0 if self.asset_class(symbol) != 'crypto' else 0.0001))
+        return float(self.qty_increments.get(symbol, 0.0001 if self.asset_class(symbol) == 'crypto' else 1.0))
 
     def _fee(self, symbol: str, notional: float) -> float:
         return abs(notional) * self.fee_bps.get(self.asset_class(symbol), 0.5) / 1e4

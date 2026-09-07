@@ -19,6 +19,7 @@ import pandas as pd
 from .broker.base import Broker, OrderReq
 from .data import calendar as cal
 from .indicators import minutes_to_close as _mtc
+from .indicators import session_key
 from .risk import Decision, RiskConfig, RiskManager
 from .strategies.base import Context, PositionView, Rule, Signal, Strategy
 from .timeframes import tf_minutes
@@ -181,7 +182,7 @@ class Engine:
         self.rec.on_card(card, event)
 
     def _day_of(self, ts: datetime, asset_class: str):
-        return cal.session_date(ts) if asset_class != 'crypto' else ts.astimezone(cal.ET).date()
+        return cal.trading_day(ts, asset_class)
 
     def start_day_if_new(self, ts: datetime, asset_class: str = 'stock') -> bool:
         d = self._day_of(ts, asset_class)
@@ -478,7 +479,7 @@ class Engine:
             self.say('order', f'Order submitted: {side} {card.qty:g} {card.symbol} at market (id {card.id}) — waiting for the broker.',
                      card.symbol, card.strategy_key, ts, {'order_id': card.id, 'broker_order_id': order.broker_order_id},
                      phase='submit', card=card)
-        if self.asset_class(card.symbol) == 'crypto' and self.cfg.risk.max_hold_minutes:
+        if self.asset_class(card.symbol) in ('crypto', 'forex') and self.cfg.risk.max_hold_minutes:
             p = self.broker.positions.get(card.symbol)
             if p is not None:
                 p.max_hold_until = ts + timedelta(minutes=self.cfg.risk.max_hold_minutes)
@@ -516,10 +517,12 @@ class Engine:
         if pos is None or pos.qty == 0 or pos.external:
             return
         price = float(bar.close)
-        if minutes_to_close is not None:
-            if self.cfg.flatten_intraday and minutes_to_close <= self.cfg.risk.flat_before_close_min + self.tfm:
-                self._close(symbol, price, ts, 'eod', f'END OF DAY — closing {symbol} at {price:,.2f} ({minutes_to_close:.0f} min to the close)')
-        else:
+        ac = self.asset_class(symbol)
+        if minutes_to_close is not None and self.cfg.flatten_intraday and \
+                minutes_to_close <= self.cfg.risk.flat_before_close_min + self.tfm:
+            what = 'WEEK\'S END' if ac == 'forex' else 'END OF DAY'
+            self._close(symbol, price, ts, 'eod', f'{what} — closing {symbol} at {price:,.5g} ({minutes_to_close:.0f} min to the close)')
+        elif ac in ('crypto', 'forex'):
             hold_limit = pos.max_hold_until
             if hold_limit is None and self.cfg.risk.max_hold_minutes:
                 hold_limit = pos.entry_ts + timedelta(minutes=self.cfg.risk.max_hold_minutes)
@@ -584,7 +587,7 @@ class Engine:
             base = frames[symbol]
             ac = self.asset_class(symbol)
             mtc[symbol] = _mtc(base.index, ac).tolist()
-            sessions[symbol] = [str(x) for x in (base.index.tz_convert(cal.ET).date if ac != 'crypto' else base.index.tz_convert('UTC').date)]
+            sessions[symbol] = [str(x) for x in session_key(base.index, ac)]
         events = []
         for symbol, df in frames.items():
             if symbol not in prepared or not prepared[symbol]:
@@ -598,7 +601,8 @@ class Engine:
             sess = sessions[symbol][i]
             if prev_session.get(symbol) not in (None, sess):
                 pos = self.broker.positions.get(symbol)
-                if pos is not None and pos.qty != 0 and self.cfg.flatten_intraday and self.asset_class(symbol) != 'crypto':
+                # Stocks flatten at the bell; crypto and forex days roll with positions open.
+                if pos is not None and pos.qty != 0 and self.cfg.flatten_intraday and self.asset_class(symbol) not in ('crypto', 'forex'):
                     prev_bar = next(iter(rows[symbol].values()))[i - 1]
                     self._close(symbol, float(prev_bar.close), prev_bar.Index.to_pydatetime(), 'eod',
                                 f'END OF DAY — closing {symbol} at the last bar')

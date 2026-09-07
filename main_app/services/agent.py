@@ -90,6 +90,8 @@ class Agent:
         self._pulse_prices: dict[str, float] = {}
         self._pulse_ref: dict[str, float] = {}
         self._pulse_ref_at = None
+        self._pulse_failures = 0
+        self.journal_done: date | None = None
 
     # --- setup --------------------------------------------------------------
     def setup(self) -> None:
@@ -98,8 +100,11 @@ class Agent:
             raise RuntimeError('live mode refused: set LIVE_TRADING_ARMED=1 in .env AND arm live mode in Settings')
         if self.mode == Mode.PAPER and not settings.ALPACA_ENABLED:
             raise RuntimeError('paper mode needs Alpaca keys in .env')
+        if self.market == Market.FOREX and self.mode in (Mode.PAPER, Mode.LIVE):
+            raise RuntimeError('the forex lane trades on the simulator only for now — no forex broker adapter yet')
         self._acquire_lock()
         self.account = Account.for_mode(self.mode, self.market)
+        self.lane_asset_class = self.account.lane_asset_class
         if self.mode == Mode.REPLAY:
             self.account.reset()
         self.narrator = Narrator(self.account, echo=not self.quiet)
@@ -128,23 +133,26 @@ class Agent:
         self.risk.kill_switch = self.cfg.kill_switch
         self.risk.trading_enabled = self.cfg.trading_enabled
         if self.mode != Mode.REPLAY:
-            self.provider = get_provider(self.provider_name, live_feed=True)
+            # Alpaca has no forex: that lane quotes from Yahoo (to the minute, no volume).
+            default_provider = 'yahoo' if self.market == Market.FOREX else None
+            self.provider = get_provider(self.provider_name or default_provider, live_feed=True)
             self.exclude_sources = [] if self.provider.name == 'synthetic' else ['synthetic']
             # Live decisions use the feed the loop trades on (IEX for stocks), so
             # relative volume and every other indicator compare like with like.
             self.live_source = {ac: getattr(self.provider, 'source_label', lambda a: self.provider.name)(ac)
-                                for ac in ('stock', 'etf', 'crypto')}
+                                for ac in ('stock', 'etf', 'crypto', 'forex')}
         data_source = 'stored bars' if self.mode == Mode.REPLAY else self.provider.name
         engine_cfg = EngineConfig(timeframe=self.timeframe, mode=self.mode, asset_classes=self.asset_classes, risk=risk_cfg,
                                   allocations=allocations, data_source=data_source,
                                   confirm_entries=(self.mode == Mode.LIVE and self.cfg.live_confirm_orders),
                                   confirm_minutes=int(self.cfg.live_confirm_minutes))
-        fee_bps = {'stock': float(self.cfg.fee_bps_stock), 'etf': float(self.cfg.fee_bps_stock), 'crypto': float(self.cfg.fee_bps_crypto)}
+        fee_bps = self.cfg.fee_bps()
         if self.mode in (Mode.SIM, Mode.REPLAY):
             self.broker = SimBroker(float(self.account.cash), immediate_fills=(self.mode == Mode.SIM),
-                                    slippage_bps=float(self.cfg.slippage_bps), fee_bps=fee_bps,
+                                    slippage_bps=risk_cfg.slippage_bps, fee_bps=fee_bps,
                                     liquidity_cap_pct=float(self.cfg.liquidity_cap_pct),
-                                    asset_classes=self.asset_classes, qty_increments=self.qty_increments)
+                                    asset_classes=self.asset_classes, qty_increments=self.qty_increments,
+                                    leverage=risk_cfg.leverage)
             if self.mode == Mode.SIM:
                 n = hydrate_broker(self.account, self.broker)
                 stale = open_orders_from_db(self.account)
@@ -157,7 +165,7 @@ class Agent:
         self.recorder = DBRecorder(self.account, self.instruments)
         self.engine = Engine(self.strategies, self.broker, engine_cfg, self.recorder, self.risk, narrator=self.narrator)
         # Risk state survives restarts: pick the day up where the last process left it.
-        today = cal.session_date(timezone.now()) if not self.account.is_24x7 else timezone.now().astimezone(cal.ET).date()
+        today = cal.trading_day(timezone.now(), self.lane_asset_class)
         if self.mode != Mode.REPLAY and self.account.day_start_date == today:
             self.risk.restore(today, float(self.account.day_start_equity), self.account.day_entries,
                               self.account.day_halted, self.account.day_halted_reason)
@@ -253,7 +261,7 @@ class Agent:
                 raise AgentStop()
             if time.monotonic() - self._last_control_poll >= CONTROL_POLL_S:
                 self.poll_controls(timezone.now())
-            if self._pulse_enabled() and time.monotonic() - self._last_pulse >= self.cfg.pulse_seconds:
+            if self._pulse_enabled() and time.monotonic() - self._last_pulse >= self.pulse_interval():
                 self.pulse(timezone.now())
             remaining = end - time.monotonic()
             if remaining <= 0:
@@ -264,23 +272,30 @@ class Agent:
 
     # --- the pulse: live prices between bars ---------------------------------
     def _pulse_enabled(self) -> bool:
-        if self.mode == Mode.REPLAY or not self.cfg.pulse_seconds or self.provider is None or self.provider.name != 'alpaca':
+        if self.mode == Mode.REPLAY or not self.cfg.pulse_seconds or self.provider is None \
+                or not hasattr(self.provider, 'latest_prices'):
             return False
-        if self.account.is_24x7:
-            return True
-        return cal.is_open(timezone.now())
+        return cal.is_open(timezone.now(), self.lane_asset_class)
+
+    def pulse_interval(self) -> float:
+        """Yahoo rate-limits by IP, so its pulse is never faster than every 30 s."""
+        base = float(self.cfg.pulse_seconds or 0)
+        if self.provider is not None and self.provider.name == 'yahoo':
+            base = max(base, 30.0)
+        return base * (4 if self._pulse_failures else 1)
 
     def pulse(self, now: datetime) -> None:
         """Every few seconds: last prices, open P&L, distance to stop/target and
         to the nearest trigger — the 'thinking out loud' between bar decisions."""
         self._last_pulse = time.monotonic()
         try:
-            ac = 'crypto' if self.account.is_24x7 else 'stock'
-            prices = self.provider.latest_prices(list(self.instruments), ac)
+            prices = self.provider.latest_prices(list(self.instruments), self.lane_asset_class)
         except Exception as exc:
-            self.say('pulse', f'pulse: price check failed ({exc!r})'[:200], phase='observe')
+            self._pulse_failures += 1
+            self.say('pulse', f'pulse: price check failed ({exc!r}) — backing off'[:200], phase='observe')
             self.narrator.flush()
             return
+        self._pulse_failures = 0
         if not prices:
             return
         self.broker.mark(prices) if hasattr(self.broker, 'mark') else None
@@ -455,35 +470,40 @@ class Agent:
     def run_live(self) -> None:
         provider = self.provider
         grace = GRACE_S.get(provider.name, 20)
-        stock_syms = [s for s, ac in self.asset_classes.items() if ac != 'crypto']
-        crypto_syms = [s for s, ac in self.asset_classes.items() if ac == 'crypto']
+        lane_ac = self.lane_asset_class
+        symbols = list(self.instruments)
         step = self.step
-        lane = {'stocks': 'US stocks', 'crypto': 'BTC/ETH', 'degen': 'altcoins (the high-risk sandbox: fake money, expected to bleed)'}[self.market]
+        lane = {'stocks': 'US stocks', 'crypto': 'BTC/ETH', 'degen': 'altcoins (the high-risk sandbox: fake money, expected to bleed)',
+                'forex': 'forex majors (USD-quoted pairs, traded on margin)'}[self.market]
         tfm = tf_minutes(self.timeframe)
         cadence = f'{tfm} minutes' if tfm < 60 else ('hour' if tfm == 60 else f'{tfm // 60} hours')
-        log.info('live loop: provider=%s timeframe=%s stocks=%d crypto=%d', provider.name, self.timeframe,
-                 len(stock_syms), len(crypto_syms))
-        feed_note = {'alpaca': 'Alpaca (IEX real-time)', 'yahoo': 'Yahoo (free, ~20 s late, rate-limited)',
+        log.info('live loop: provider=%s timeframe=%s lane=%s symbols=%d', provider.name, self.timeframe, lane_ac, len(symbols))
+        feed_note = {'alpaca': 'Alpaca (IEX real-time)', 'yahoo': 'Yahoo (free, to the minute, rate-limited)',
                      'synthetic': 'SYNTHETIC random walk'}.get(provider.name, provider.name)
-        pulse_note = f' Between bars I check prices every {self.cfg.pulse_seconds} s (the pulse).' if self._pulse_enabled() or self.account.is_24x7 else ''
-        self.say('system', f'Lane: {lane}. Quotes from {feed_note}. ' + (
-            f'This lane trades around the clock; I evaluate every {cadence} ({self.timeframe} bars), {grace} s after each bar closes.'
-            if self.account.is_24x7 else
-            f'US stocks trade 09:30–16:00 ET Mon–Fri (early closes 13:00 ET); I evaluate every {cadence} during the session and sleep outside it.')
-            + pulse_note)
+        pulse_note = f' Between bars I check prices every {self.pulse_interval():.0f} s (the pulse).' if self._pulse_enabled() or self.account.is_24x7 else ''
+        hours = {
+            'stock': f'US stocks trade 09:30–16:00 ET Mon–Fri (early closes 13:00 ET); I evaluate every {cadence} during the session and sleep outside it.',
+            'crypto': f'This lane trades around the clock; I evaluate every {cadence} ({self.timeframe} bars), {grace} s after each bar closes.',
+            'forex': f'Forex trades Sunday 17:00 to Friday 17:00 ET; I evaluate every {cadence} ({self.timeframe} bars), {grace} s after '
+                     f'each bar closes, and close everything before the Friday close. Positions may exceed the account '
+                     f'({self.risk.cfg.leverage:g}× leverage), as at a forex broker.',
+        }[lane_ac]
+        self.say('system', f'Lane: {lane}. Quotes from {feed_note}. ' + hours + pulse_note)
         self.narrator.flush()
         closed_note_at = None
         announced_bar = None
         while True:
             now = timezone.now()
             self.poll_controls(now)
-            stocks_open = bool(stock_syms) and cal.is_open(now)
-            if not stocks_open and self.eod_done != cal.session_date(now) and cal.session_for(cal.session_date(now)) \
-                    and now > cal.session_for(cal.session_date(now)).close_utc and self.last_tick is not None:
-                self.end_of_day(now)
-            active = (stock_syms if stocks_open else []) + crypto_syms
+            lane_open = cal.is_open(now, lane_ac)
+            self._daily_roll(now, lane_open)
+            active = symbols if lane_open else []
             if not active:
-                nxt = cal.next_open(now)
+                nxt = cal.next_open(now, lane_ac)
+                if lane_ac == 'forex' and self.last_tick is not None and any(p.qty for p in self.broker.positions.values()):
+                    n = self.engine.flatten_all(now, 'weekend')
+                    self.recorder.on_risk_event('flatten', f'forex week closed: flattened {n} leftover positions', now)
+                    persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
                 if closed_note_at is None or now - closed_note_at > timedelta(hours=1):
                     self.say('system', f'Market closed — next open {nxt.astimezone(cal.ET):%a %b %-d %H:%M} ET '
                              f'({(nxt - now).total_seconds() / 3600:.1f} h). Sleeping until then; controls are still polled every 2 s.')
@@ -619,11 +639,30 @@ class Agent:
         if not self.quiet:
             log.info('tick %s: %d bars processed, equity %.2f', now.astimezone(cal.ET).strftime('%H:%M:%S'), processed, a.equity)
 
-    def end_of_day(self, now: datetime) -> None:
+    def _daily_roll(self, now: datetime, lane_open: bool) -> None:
+        """Once a day: the stocks lane flattens at the bell and writes its journal;
+        the round-the-clock lanes write yesterday's journal at midnight ET and
+        keep their positions (their exits are stops, targets and max hold)."""
+        if self.last_tick is None:
+            return
+        today = cal.session_date(now)
+        if self.lane_asset_class == 'stock':
+            s = cal.session_for(today)
+            if not lane_open and s and now > s.close_utc and self.eod_done != today:
+                self.end_of_day(now, today, flatten=True)
+        else:
+            yesterday = today - timedelta(days=1)
+            if self.journal_done is None:
+                self.journal_done = yesterday  # never write a journal for a day this process did not see
+            elif self.journal_done < yesterday:
+                self.end_of_day(now, yesterday, flatten=False)
+
+    def end_of_day(self, now: datetime, d: date | None = None, flatten: bool = True) -> None:
         from .journal import write_eod_journal
-        d = cal.session_date(now)
+        d = d or cal.session_date(now)
         self.eod_done = d
-        n = self.engine.flatten_all(now, 'eod')
+        self.journal_done = d
+        n = self.engine.flatten_all(now, 'eod') if flatten else 0
         if n:
             self.recorder.on_risk_event('flatten', f'end of day: flattened {n} leftover positions', now)
         if self.mode in (Mode.PAPER, Mode.LIVE):

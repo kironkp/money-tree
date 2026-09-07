@@ -12,11 +12,11 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('--mode', default='sim', choices=['sim', 'paper', 'live'])
-        parser.add_argument('--market', default='stocks', choices=['stocks', 'crypto', 'degen'])
+        parser.add_argument('--market', default='stocks', choices=['stocks', 'crypto', 'degen', 'forex'])
         parser.add_argument('--replay', default='', help='replay this session date into the replay account')
         parser.add_argument('--speed', type=float, default=30.0, help='replay speed multiplier')
         parser.add_argument('--once', action='store_true', help='one tick, then exit')
-        parser.add_argument('--provider', default='', help='alpaca | yahoo (default: alpaca if keyed)')
+        parser.add_argument('--provider', default='', help='alpaca | yahoo (default: alpaca if keyed; forex always yahoo)')
         parser.add_argument('--quiet', action='store_true')
 
     def handle(self, *args, **o):

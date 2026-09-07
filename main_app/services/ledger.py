@@ -41,7 +41,7 @@ class DBRecorder(Recorder):
                 'account': self.account, 'instrument': self._inst(order.symbol), 'strategy_key': order.strategy_key,
                 'side': order.side, 'qty': D(order.qty, '0.00000001'), 'order_type': order.order_type,
                 'limit_price': D(order.limit_price), 'stop_price': D(order.stop_price),
-                'time_in_force': 'gtc' if self._inst(order.symbol).is_crypto else 'day',
+                'time_in_force': 'day' if self._inst(order.symbol).asset_class in ('stock', 'etf') else 'gtc',
                 'status': order.status, 'broker_order_id': order.broker_order_id or '', 'leg': order.leg,
                 'decision_price': D(order.decision_price), 'bar_ts': order.bar_ts, 'reason': order.reason[:200],
                 'submitted_at': order.submitted_ts or timezone.now(), 'filled_at': order.filled_ts,

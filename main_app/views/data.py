@@ -25,7 +25,7 @@ def data_index(request):
     cfg = AgentConfig.get()
     rows = []
     for inst in Instrument.objects.all():
-        tf = cfg.timeframe_for('crypto' if inst.is_crypto else 'stocks')
+        tf = cfg.timeframe_for(inst.market)
         cov = coverage(inst, tf)
         cov['timeframe'] = tf
         rows.append({'inst': inst, 'cov': cov})
@@ -38,7 +38,8 @@ def data_index(request):
         'upcoming': [x for x in cal.sessions_between(now.date(), (now + timedelta(days=21)).date()) if x.early_close][:3],
         'total_bars': Bar.objects.count(),
         'synthetic': synthetic_symbols(Instrument.objects.filter(in_watchlist=True), cfg.timeframe)
-                     + synthetic_symbols(Instrument.objects.filter(in_watchlist=True, asset_class='crypto'), cfg.crypto_timeframe),
+                     + synthetic_symbols(Instrument.objects.filter(in_watchlist=True, asset_class='crypto'), cfg.crypto_timeframe)
+                     + synthetic_symbols(Instrument.objects.filter(in_watchlist=True, asset_class='forex'), cfg.forex_timeframe),
     })
 
 

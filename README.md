@@ -16,10 +16,13 @@ Same engine, same risk manager, same strategy code at every stage. Promotion
 is gated by a checklist (sessions, trades, profit factor, drawdown, live
 expectancy vs backtest, realized slippage) shown on each strategy page.
 
-Three lanes, three piggy banks: **Stocks** (NYSE/Nasdaq session), **Crypto**
-(BTC/ETH, hourly, careful) and **Degen** (Alpaca altcoins on 1-minute bars,
+Four lanes, four piggy banks: **Stocks** (NYSE/Nasdaq session), **Crypto**
+(BTC/ETH, hourly, careful), **Degen** (Alpaca altcoins on 1-minute bars,
 aggressive sizing, its own loose limits — the high-risk sandbox, clearly
-labeled, expected to bleed). Every lane has a live **pulse** every 10 seconds
+labeled, expected to bleed) and **Forex** (EUR/GBP/AUD/NZD against the dollar
+on 15-minute bars, Sunday 17:00 to Friday 17:00 ET, traded on 10× margin like
+a retail forex account, Yahoo quotes, simulator only until a forex broker
+adapter exists). Every lane has a live **pulse** every 10 seconds
 between bar decisions: prices, open P&L, distance to stop/target and to the
 nearest trigger, streamed into the decision journal.
 
@@ -47,6 +50,7 @@ Then, in a second terminal, the agent:
 pipenv run python manage.py run_agent --mode sim --market stocks   # fake currency, live quotes
 pipenv run python manage.py run_agent --mode sim --market crypto   # BTC/ETH, hourly
 pipenv run python manage.py run_agent --mode sim --market degen    # altcoins, 1-minute bars, the sandbox
+pipenv run python manage.py run_agent --mode sim --market forex    # majors, 15-minute bars, 24/5, on margin
 pipenv run python manage.py run_agent --replay 2026-08-28 --speed 30 --market stocks   # demo a past session
 ```
 

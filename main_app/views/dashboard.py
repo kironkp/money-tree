@@ -109,6 +109,9 @@ def agent_start(request):
     if mode == 'live' and cfg.mode != Mode.LIVE:
         messages.error(request, 'arm live mode in Settings first')
         return redirect('dashboard')
+    if market == Market.FOREX and mode != 'sim':
+        messages.error(request, 'the forex lane trades on the simulator only for now (no forex broker adapter yet)')
+        return _back(request, account)
     pid = procs.spawn_manage(['run_agent', '--mode', mode, '--market', market], account.log_name)
     messages.success(request, f'{market} agent started in {mode} mode (pid {pid}) — watch the decision journal')
     return _back(request, account)
@@ -145,7 +148,7 @@ def kill_switch(request):
     account = current_account(request, cfg)
     if turn_on:
         closed, running = 0, []
-        for acct in (Account.for_mode(cfg.mode, Market.STOCKS), Account.for_mode(cfg.mode, Market.CRYPTO)):
+        for acct in (Account.for_mode(cfg.mode, m) for m in Market.values):
             if control.running_agent(acct):
                 running.append(acct.market)
             else:

@@ -25,7 +25,7 @@ def _account_for_stage(stage: str, market: str) -> Account | None:
 @login_required
 def strategy_list(request):
     cfg = AgentConfig.get()
-    groups = {'stocks': [], 'crypto': [], 'degen': []}
+    groups = {'stocks': [], 'crypto': [], 'degen': [], 'forex': []}
     for row in Strategy.objects.all():
         cls = STRATEGIES.get(row.key)
         if cls is None:

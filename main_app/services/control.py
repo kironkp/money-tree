@@ -39,11 +39,14 @@ def flatten_account(mode: str, reason: str = 'manual', market: str = 'stocks') -
     account = Account.for_mode(mode, market)
     instruments = {i.symbol: i for i in Instrument.objects.filter(market=account.market)}
     ac = {s: i.asset_class for s, i in instruments.items()}
+    risk = RiskConfig.from_model(cfg, account.market)
+    timeframe = cfg.timeframe_for(account.market)
     if mode in ('sim', 'replay'):
-        broker = SimBroker(float(account.cash), immediate_fills=True, slippage_bps=float(cfg.slippage_bps), asset_classes=ac)
+        broker = SimBroker(float(account.cash), immediate_fills=True, slippage_bps=risk.slippage_bps, asset_classes=ac,
+                           fee_bps=cfg.fee_bps(), leverage=risk.leverage)
         hydrate_broker(account, broker)
         for symbol in list(broker.positions):
-            df = load_frame(instruments[symbol], cfg.timeframe, limit=1)
+            df = load_frame(instruments[symbol], timeframe, limit=1)
             if len(df):
                 broker.last_price[symbol] = float(df['close'].iloc[-1])
     else:
@@ -51,8 +54,8 @@ def flatten_account(mode: str, reason: str = 'manual', market: str = 'stocks') -
         broker = AlpacaBroker(paper=(mode == 'paper'), asset_classes=ac, mode_is_live=(cfg.mode == 'live'))
         hydrate_broker(account, broker)
         broker.sync()
-    engine = Engine([], broker, EngineConfig(timeframe=cfg.timeframe, mode=mode, asset_classes=ac,
-                                             risk=RiskConfig.from_model(cfg)), DBRecorder(account, instruments))
+    engine = Engine([], broker, EngineConfig(timeframe=timeframe, mode=mode, asset_classes=ac, risk=risk),
+                    DBRecorder(account, instruments))
     n = engine.flatten_all(timezone.now(), reason)
     persist_broker(account, broker, instruments)
     RiskEvent.objects.create(account=account, kind='flatten', message=f'{reason}: closed {n} positions from the dashboard')

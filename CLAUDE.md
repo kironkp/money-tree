@@ -103,6 +103,39 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   Never `load_frame` without a source and expect one feed — the default picker
   handles it.
 
+## v1.5 — Forex lane
+
+- `Market.FOREX` / `AssetClass.FOREX`: four USD-quoted majors (EUR, GBP, AUD, NZD
+  against USD — every P&L is already in dollars; USD/JPY-style pairs need a quote
+  conversion, not built). Data: **Yahoo only** (`EURUSD=X`, 59 days of intraday
+  bars, no volume → relative volume reads neutral, session VWAP is equal-weighted).
+  `sync_bars` swaps to Yahoo for forex instruments whatever `--provider` says.
+- Hours: 24/5, Sunday 17:00 → Friday 17:00 ET (`calendar.forex_is_open`,
+  `forex_next_open`, `forex_week_close`). The forex *day* rolls at 17:00 ET
+  (`calendar.trading_day(ts, 'forex')`, `indicators.session_key`); the *week* is the
+  session: `minutes_to_close` counts down to Friday 17:00 ET, so the engine's usual
+  "no entries in the last 30 min / flat 5 min before the close" rules close the week,
+  and the agent flattens any leftover the moment the lane closes (`'weekend'`).
+- Margin: `RiskConfig.leverage` (forex 10×, everything else 1×) → `SimBroker`
+  buying power = equity × leverage − gross exposure − pending entries. Cash goes
+  negative on a forex entry, equity does not. `forex_max_position_pct` 500 caps one
+  position at 5× equity. Cost model = spread: `fee_bps_forex` 0.5 + `forex_slippage_bps`
+  0.3 per side (1.6 bps a round trip), cost gate 2×. `forex_max_hold_minutes` 240.
+- Lane hours are now generic: `Account.lane_asset_class` / `is_open_at(now)`,
+  `cal.is_open(ts, asset_class)`, `cal.next_open(ts, asset_class)`. The agent loop
+  runs on `lane_open` + `_daily_roll`: stocks flatten at the bell and journal;
+  round-the-clock lanes journal yesterday at midnight ET and **keep positions**
+  (the old loop flattened crypto at 16:00 ET by accident).
+- `spec_from_models` now builds `RiskConfig.from_model(cfg, market_for_symbols(symbols))`
+  so backtests/walk-forwards price each lane's own costs and leverage.
+  `market_for_symbols` uses a set — `.distinct()` on a model with `Meta.ordering`
+  silently added `symbol` to the DISTINCT and returned one row per symbol.
+- Forex has no broker adapter: `run_agent --market forex` refuses paper/live
+  (OANDA v20 practice is the plan; needs an account). Evidence 2026-09-06 (59 days):
+  EMA and VWAP both lose about their costs on every timeframe (5Min PF 0.42,
+  15Min 0.83, 1Hour 0.87 over 2 years) — the lane runs at 15Min so the spread does
+  not shred it, enabled at Sprout "to be watched" like degen.
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live
@@ -114,7 +147,8 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
 - `client_order_id` is deterministic (`mt-{mode}-{strategy}-{symbol}-{bar_ts}-{leg}`).
 - Session times come from offsets before the close (early closes, DST safe).
 - Crypto: no brackets, no shorts, 25 bps taker fees, sessions at 00:00 UTC,
-  positions age out via `max_hold_minutes`.
+  positions age out via `max_hold_minutes`. Forex: sessions roll 17:00 ET, the
+  week closes Friday 17:00 ET, leverage 10×, whole units, Yahoo bars only.
 - SQLite runs WAL + IMMEDIATE + 30 s timeout: web, agent and optimizer all
   write it. Don't add a fourth chatty writer.
 - Template comments: `{# #}` is single-line only; multi-line → `{% comment %}`

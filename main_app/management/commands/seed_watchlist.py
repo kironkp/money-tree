@@ -22,6 +22,10 @@ DEFAULTS = [
     ('PEPE/USD', 'Pepe', AssetClass.CRYPTO, 'degen'), ('SHIB/USD', 'Shiba Inu', AssetClass.CRYPTO, 'degen'),
     ('WIF/USD', 'dogwifhat', AssetClass.CRYPTO, 'degen'), ('BONK/USD', 'Bonk', AssetClass.CRYPTO, 'degen'),
     ('TRUMP/USD', 'Official Trump', AssetClass.CRYPTO, 'degen'), ('HYPE/USD', 'Hyperliquid', AssetClass.CRYPTO, 'degen'),
+    # The forex lane: USD-quoted majors only, so every P&L is already in dollars.
+    # (USD/JPY and friends settle in the other currency and need a conversion — later.)
+    ('EUR/USD', 'Euro / US dollar', AssetClass.FOREX, 'forex'), ('GBP/USD', 'Pound / US dollar', AssetClass.FOREX, 'forex'),
+    ('AUD/USD', 'Aussie / US dollar', AssetClass.FOREX, 'forex'), ('NZD/USD', 'Kiwi / US dollar', AssetClass.FOREX, 'forex'),
 ]
 CRYPTO_INCREMENTS = {'BTC/USD': Decimal('0.0001'), 'ETH/USD': Decimal('0.001')}
 ALT_INCREMENT = Decimal('0.00000001')
@@ -33,10 +37,11 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         cfg = AgentConfig.get()
         for symbol, name, ac, market in DEFAULTS:
+            tick = {AssetClass.CRYPTO: Decimal('0.00000001'), AssetClass.FOREX: Decimal('0.00001')}.get(ac, Decimal('0.01'))
             inst, created = Instrument.objects.get_or_create(symbol=symbol, defaults={
                 'name': name, 'asset_class': ac, 'market': market,
                 'qty_increment': CRYPTO_INCREMENTS.get(symbol, ALT_INCREMENT if ac == AssetClass.CRYPTO else Decimal('1')),
-                'tick_size': Decimal('0.01') if ac != AssetClass.CRYPTO else Decimal('0.00000001'),
+                'tick_size': tick,
             })
             if created:
                 self.stdout.write(f'  + {symbol} ({market})')
@@ -45,19 +50,23 @@ class Command(BaseCommand):
                 inst.save(update_fields=['market'])
         if settings.ALPACA_ENABLED:
             self.refresh_increments()
+        markets = (Market.STOCKS, Market.CRYPTO, Market.DEGEN, Market.FOREX)
         for mode in (Mode.SIM, Mode.PAPER, Mode.REPLAY):
-            for market in (Market.STOCKS, Market.CRYPTO, Market.DEGEN):
+            for market in markets:
                 Account.for_mode(mode, market)
-        by_market = {m: [s for s, _, _, mk in DEFAULTS if mk == m] for m in (Market.STOCKS, Market.CRYPTO, Market.DEGEN)}
-        wanted = {'orb': [Market.STOCKS], 'vwap_reversion': [Market.STOCKS, Market.CRYPTO],
-                  'ema_momentum': [Market.STOCKS, Market.CRYPTO, Market.DEGEN], 'burst': [Market.DEGEN]}
+        by_market = {m: [s for s, _, _, mk in DEFAULTS if mk == m] for m in markets}
+        wanted = {'orb': [Market.STOCKS], 'vwap_reversion': [Market.STOCKS, Market.CRYPTO, Market.FOREX],
+                  'ema_momentum': [Market.STOCKS, Market.CRYPTO, Market.DEGEN, Market.FOREX], 'burst': [Market.DEGEN]}
+        # Lanes that exist to be watched start their strategies enabled at Sprout:
+        # the degen burst strategy, and both forex strategies.
+        watched = {('burst', Market.DEGEN), ('ema_momentum', Market.FOREX), ('vwap_reversion', Market.FOREX)}
         for cls in all_strategies():
             for market in wanted.get(cls.key, [Market.STOCKS]):
+                on = (cls.key, market) in watched
                 row, created = Strategy.objects.get_or_create(key=cls.key, market=market, defaults={
                     'name': cls.name, 'params': cls.defaults(), 'timeframe': cfg.timeframe_for(market),
                     'symbols': by_market[market], 'notes': cls.description,
-                    # The degen lane exists to be watched: its burst strategy starts enabled at Sprout.
-                    'enabled': cls.key == 'burst', 'stage': 'sprout' if cls.key == 'burst' else 'seed',
+                    'enabled': on, 'stage': 'sprout' if on else 'seed',
                 })
                 if created:
                     self.stdout.write(f'  + strategy {cls.key} ({market})')

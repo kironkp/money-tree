@@ -18,7 +18,9 @@ INTRADAY_LOOKBACK = {'1Min': timedelta(days=7), '5Min': timedelta(days=59), '15M
                      '30Min': timedelta(days=59), '1Hour': timedelta(days=729)}
 
 
-def yahoo_symbol(symbol: str) -> str:
+def yahoo_symbol(symbol: str, asset_class: str = 'stock') -> str:
+    if asset_class == 'forex':
+        return symbol.replace('/', '') + '=X'  # EUR/USD -> EURUSD=X
     return symbol.replace('/', '-')  # BTC/USD -> BTC-USD
 
 
@@ -41,7 +43,7 @@ class YahooProvider(BarProvider):
         for attempt in range(self.max_retries):
             try:
                 raw = yf.download(
-                    yahoo_symbol(symbol), start=start, end=end, interval=interval,
+                    yahoo_symbol(symbol, asset_class), start=start, end=end, interval=interval,
                     prepost=False, auto_adjust=False, progress=False, threads=False,
                     multi_level_index=False,
                 )
@@ -61,3 +63,28 @@ class YahooProvider(BarProvider):
         if len(df) and df.index[-1] + tf_delta(timeframe) > now:
             df = df.iloc[:-1]
         return df
+
+    def latest_prices(self, symbols, asset_class='stock') -> dict[str, float]:
+        """Last 1-minute close per symbol, one Yahoo call for the whole list
+        (the forex pulse). Yahoo prints forex to the minute; volume is absent."""
+        import yfinance as yf
+
+        if not symbols:
+            return {}
+        names = {yahoo_symbol(s, asset_class): s for s in symbols}
+        raw = yf.download(list(names), period='1d', interval='1m', prepost=False, auto_adjust=False,
+                          progress=False, threads=True)
+        if raw is None or len(raw) == 0:
+            return {}
+        closes = raw['Close'] if 'Close' in raw.columns.get_level_values(0) else raw
+        out = {}
+        if isinstance(closes, pd.DataFrame):
+            for col in closes.columns:
+                series = closes[col].dropna()
+                if len(series):
+                    out[names.get(col, col)] = float(series.iloc[-1])
+        else:
+            series = closes.dropna()
+            if len(series):
+                out[symbols[0]] = float(series.iloc[-1])
+        return out

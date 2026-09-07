@@ -16,7 +16,7 @@ class EmaMomentum(Strategy):
     key = 'ema_momentum'
     name = 'EMA Momentum'
     description = 'EMA 9/21 cross with RSI + relative-volume filters; ATR stop; exit on cross back.'
-    asset_classes = ('stock', 'etf', 'crypto')
+    asset_classes = ('stock', 'etf', 'crypto', 'forex')
     params = (
         Param('fast', 'int', 9, 5, 13, 2, help='Fast EMA length'),
         Param('slow', 'int', 21, 15, 34, 4, help='Slow EMA length'),

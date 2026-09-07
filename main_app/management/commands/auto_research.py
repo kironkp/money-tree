@@ -21,7 +21,7 @@ class Command(BaseCommand):
     help = 'Walk-forward every enabled strategy on trailing data; promote only proven improvements'
 
     def add_arguments(self, parser):
-        parser.add_argument('--market', default='', help='stocks|crypto|degen (default: all)')
+        parser.add_argument('--market', default='', help='stocks|crypto|degen|forex (default: all)')
         parser.add_argument('--days', type=int, default=0, help='trailing window (default per market)')
         parser.add_argument('--dry-run', action='store_true')
 
@@ -32,8 +32,9 @@ class Command(BaseCommand):
             rows = rows.filter(market=o['market'])
         end = date.today()
         for row in rows:
-            days = o['days'] or {'stocks': 240, 'crypto': 540, 'degen': 6}[row.market]
-            train, test = {'stocks': (120, 40), 'crypto': (180, 60), 'degen': (3, 1)}[row.market]
+            # Forex history comes from Yahoo, which keeps 59 days of intraday bars.
+            days = o['days'] or {'stocks': 240, 'crypto': 540, 'degen': 6, 'forex': 58}[row.market]
+            train, test = {'stocks': (120, 40), 'crypto': (180, 60), 'degen': (3, 1), 'forex': (21, 7)}[row.market]
             start = end - timedelta(days=days)
             tf = cfg.timeframe_for(row.market)
             self.stdout.write(f'{row.key} ({row.market}) — walk-forward {start}→{end} on {tf}, train {train}d / test {test}d')

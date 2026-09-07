@@ -54,6 +54,12 @@ pipenv run python manage.py run_agent --mode sim --market forex    # majors, 15-
 pipenv run python manage.py run_agent --replay 2026-08-28 --speed 30 --market stocks   # demo a past session
 ```
 
+Backups: `deploy/git-push.sh` runs nightly at 02:00 (launchd job
+`com.kiron.moneytree.gitpush`), committing anything uncommitted and pushing
+code and tags to the private `kironkp/money-tree` repo. The database and the
+`backups/` snapshots stay local — they are gitignored and far over GitHub's
+file-size limit.
+
 Or start/stop it from the dashboard. One agent per account (file lock in
 `run/`). Ctrl-C / SIGTERM flattens sim and paper positions on the way out.
 

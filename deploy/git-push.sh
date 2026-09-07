@@ -49,11 +49,23 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>" || fail 'git commit'
 fi
 
 ahead=$("$GIT" rev-list --count '@{u}..HEAD' 2>/dev/null || echo unknown)
-out=$("$GIT" push origin "$branch" 2>&1) || fail "git push — $out"
-if printf '%s' "$out" | grep -q 'Everything up-to-date'; then
-    say 'nothing new to push'
+if out=$("$GIT" push origin "$branch" 2>&1); then
+    if printf '%s' "$out" | grep -q 'Everything up-to-date'; then
+        say 'nothing new to push'
+    else
+        say "pushed $ahead commit(s) to origin/$branch: $(printf '%s' "$out" | tr '\n' ' ' | tail -c 200)"
+    fi
 else
-    say "pushed $ahead commit(s) to origin/$branch: $(printf '%s' "$out" | tr '\n' ' ' | tail -c 200)"
+    # Someone else (another agent, another machine) pushed to main first. Never
+    # rebase unattended and never force: park the work on a dated branch so it
+    # is safe on GitHub, and leave main for a human to reconcile.
+    say "main has diverged — $(printf '%s' "$out" | tr '\n' ' ' | tail -c 160)"
+    parked="backup/$(date '+%Y-%m-%d')-$("$GIT" rev-parse --short HEAD)"
+    if out=$("$GIT" push origin "HEAD:refs/heads/$parked" 2>&1); then
+        say "parked this machine's work on origin/$parked — reconcile main by hand"
+    else
+        fail "could not park the work either — $(printf '%s' "$out" | tr '\n' ' ' | tail -c 160)"
+    fi
 fi
 
 # Release tags separately: the ritual makes lightweight tags, which

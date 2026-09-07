@@ -154,6 +154,29 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
 - Template comments: `{# #}` is single-line only; multi-line → `{% comment %}`
   (a test guards this).
 
+## Backups / remote
+
+- **GitHub**: `origin` = `git@github.com:kironkp/money-tree` over HTTPS
+  (`https://github.com/kironkp/money-tree.git`), **private**. Pushed 2026-09-07
+  with all v1.x tags. Credentials come from the osxkeychain helper (gh is logged
+  in as kironkp), which works from launchd without prompting.
+- **Nightly push 02:00 PT**: `deploy/git-push.sh` +
+  `com.kiron.moneytree.gitpush.plist` (loaded 2026-09-07). It commits whatever
+  is uncommitted as "Nightly snapshot <date>", pushes commits, then pushes tags
+  separately (the release ritual makes *lightweight* tags, which
+  `--follow-tags` skips). Locks against overlap in `run/git-push.lock`, clears a
+  stale lock after an hour, `GIT_TERMINAL_PROMPT=0` so a credential problem is a
+  log line and not a hung process. Log: `run/git-push.log`.
+- If `main` has diverged (another agent or machine pushed first) it never
+  rebases and never forces: it parks the local work on `backup/<date>-<sha>` and
+  says so in the log, leaving `main` for a human. **Codex also works in this
+  repo** — expect its in-progress edits to land in the nightly snapshot commit.
+- Only code goes up: `db.sqlite3`, `backups/` (the v1.x snapshots are ~200 MB,
+  over GitHub's 100 MB file limit), `run/` and `.env` are gitignored. The
+  trading ledger is not backed up anywhere off this machine.
+- `MONEYTREE_REPO` overrides the script's target repo — that is how it gets
+  tested against a scratch clone without touching the real history.
+
 ## Local dev
 
 - Port **8003** (map: findit 8000/443, inflow 8001/8444, secretary 8443/3000,

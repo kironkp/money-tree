@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Nightly backup push at 02:00 PT: commit anything uncommitted, then push
+       commits and tags to github.com/kironkp/money-tree (private). Code only —
+       db.sqlite3, backups/, run/ and .env are gitignored. RunAtLoad is off so
+       loading this file does not fire a push; it catches up on the next wake
+       if the laptop was asleep at 02:00. -->
+  <key>Label</key><string>com.kiron.moneytree.gitpush</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/kironkp/code/moneytree/deploy/git-push.sh</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>2</integer><key>Minute</key><integer>0</integer></dict>
+  <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/git-push.log</string>
+  <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/git-push.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>

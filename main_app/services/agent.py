@@ -631,7 +631,13 @@ class Agent:
         n_pos = len([p for p in self.broker.positions.values() if p.qty])
         risk_open = sum(abs(p.qty) * abs(p.avg_price - p.stop) for p in self.broker.positions.values() if p.qty and p.stop)
         nxt = floor_to_bar(now, self.timeframe) + step + timedelta(seconds=grace)
-        self.say('system', f'Equity ${a.equity:,.2f} (day {self.risk.day_pnl(a.equity):+,.2f}), cash ${a.cash:,.2f}, '
+        if self.risk.cfg.leverage > 1:
+            # A margin lane: cash swings by the notional on every entry, so report what matters instead.
+            exposure = sum(abs(p.market_value(self.broker.last_price.get(p.symbol))) for p in self.broker.positions.values() if p.qty)
+            money = f'exposure ${exposure:,.0f} ({exposure / a.equity if a.equity else 0:.1f}× equity, buying power ${a.buying_power:,.0f} left)'
+        else:
+            money = f'cash ${a.cash:,.2f}'
+        self.say('system', f'Equity ${a.equity:,.2f} (day {self.risk.day_pnl(a.equity):+,.2f}), {money}, '
                  f'{n_pos} open position(s), ${risk_open:,.2f} at risk to stops. Next evaluation {nxt.astimezone(cal.ET):%H:%M:%S} ET.',
                  phase='manage')
         self.heartbeat(f'tick ok — {processed} bars, equity {a.equity:,.2f}, {n_pos} positions', state='waiting', next_action_at=nxt)

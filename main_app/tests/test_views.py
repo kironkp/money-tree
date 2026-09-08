@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 from django.test import TestCase
 from django.urls import reverse
@@ -321,11 +321,16 @@ class StatusStripTellsTheTruth(TestCase):
 
 class PortfolioBacktestRunsAllEnabledStrategies(TestCase):
     def test_portfolio_run_has_per_strategy_breakdown(self):
-        cfg, instruments = seed_db(('QQQ', 'NVDA'))
+        # The view backtests [today − days, today], so the fixture has to sit
+        # inside that window. Seeding a FIXED calendar week meant this test
+        # slowly aged out of it and went red on 2026-09-08; the bars now trail
+        # today, with margin on both sides.
+        end = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        cfg, instruments = seed_db(('QQQ', 'NVDA'), start=end - timedelta(days=15), end=end)
         enable_strategy('orb', {'min_relvol': 0.0}, ['QQQ', 'NVDA'])
         enable_strategy('ema_momentum', {'min_relvol': 0.0}, ['QQQ', 'NVDA'])
         self.client.force_login(make_user())
-        r = self.client.post(reverse('portfolio-backtest', args=['stocks']), {'days': 10})
+        r = self.client.post(reverse('portfolio-backtest', args=['stocks']), {'days': 20})
         self.assertEqual(r.status_code, 302)
         run = BacktestRun.objects.get(strategy_key='portfolio')
         self.assertEqual(run.status, 'done')

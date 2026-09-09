@@ -66,4 +66,6 @@ urlpatterns = [
     path('settings/people/', views.people, name='people'),
     path('feed/', views.feed_page, name='feed'),
     path('api/feed/', views.api_feed, name='api-feed'),
+    path('api/spend/', views.api_spend_ingest, name='api-spend-ingest'),
+    path('spend/', views.spend_page, name='spend'),
 ]

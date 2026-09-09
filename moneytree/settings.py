@@ -220,6 +220,10 @@ ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
 ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
 ACCOUNT_LOGOUT_ON_GET = False
 # Sign-up is invite-only. These addresses are always allowed and become operators.
+# Shared secret other apps use to POST their model usage to /api/spend/.
+# Empty disables ingest entirely (the endpoint returns 503).
+SPEND_INGEST_TOKEN = os.getenv('SPEND_INGEST_TOKEN', '')
+
 # Where the 17:30 daily report goes. Falls back to the owner's address.
 REPORT_EMAIL = os.getenv('REPORT_EMAIL', os.getenv('DJANGO_SUPERUSER_EMAIL', ''))
 

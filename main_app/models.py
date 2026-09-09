@@ -794,15 +794,33 @@ class JournalEntry(models.Model):
 
 
 class ApiUsage(models.Model):
+    """One paid API call. The spend ledger.
+
+    Not only this app: `project` lets other apps on this machine post their
+    usage here, so a single table answers "where is the API money going".
+    Cost is computed at write time from services/spend.PRICES, because a price
+    looked up later would be the wrong price.
+    """
     ts = models.DateTimeField(default=timezone.now)
+    provider = models.CharField(max_length=20, default='anthropic')  # anthropic, openai, serper, …
+    project = models.CharField(max_length=30, default='moneytree')
     model = models.CharField(max_length=60)
     purpose = models.CharField(max_length=40, default='coach')
     input_tokens = models.PositiveIntegerField(default=0)
     output_tokens = models.PositiveIntegerField(default=0)
+    # Cached input is billed at a fraction of the input rate; kept separately so
+    # a caching change shows up as a cost change instead of hiding in the total.
+    cached_tokens = models.PositiveIntegerField(default=0)
+    calls = models.PositiveIntegerField(default=1)
     cost_usd = models.DecimalField(max_digits=10, decimal_places=5, default=D0)
+    note = models.CharField(max_length=200, blank=True)
 
     class Meta:
         ordering = ['-ts']
+        indexes = [models.Index(fields=['ts', 'project']), models.Index(fields=['provider', 'model'])]
+
+    def __str__(self):
+        return f'{self.project}/{self.provider} {self.model} ${self.cost_usd}'
 
 
 class FeedEvent(models.Model):

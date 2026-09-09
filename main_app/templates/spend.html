@@ -1,0 +1,38 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}API spend · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>API spend</h1>
+  <div class="tabs">{% for d in day_options %}<a href="?days={{ d }}" class="{% if days == d %}active{% endif %}">{{ d }}d</a>{% endfor %}</div>
+</div>
+<div class="grid cols-4">
+  <div class="tile"><div class="label">Today</div><div class="value">${{ today.total|floatformat:2 }}</div><div class="sub">{{ today.calls }} call(s)</div></div>
+  <div class="tile"><div class="label">Last {{ days }} days</div><div class="value">${{ range.total|floatformat:2 }}</div><div class="sub">{{ range.calls }} call(s)</div></div>
+  <div class="tile"><div class="label">At this rate</div><div class="value">${{ projected|floatformat:2 }}</div><div class="sub">per month</div></div>
+  <div class="tile"><div class="label">Ingest</div><div class="value">{% if ingest_enabled %}<span class="up">on</span>{% else %}<span class="warn">off</span>{% endif %}</div><div class="sub">other apps reporting in</div></div>
+</div>
+{% if not range.calls %}
+<p class="message">Nothing recorded yet. This ledger only knows about calls that write to it: this app's
+coach does automatically, and other projects have to POST to <code>/api/spend/</code>. Anything not
+reporting in stays visible only in the provider's own dashboard.</p>
+{% endif %}
+<div class="grid cols-2" style="margin-top:var(--s-4)">
+  {% for title, rows in breakdowns %}{% endfor %}
+  <div class="card"><h3>By project</h3><div class="table-wrap"><table>
+    <thead><tr><th>Project</th><th class="num">Cost</th><th class="num">Calls</th><th class="num">In</th><th class="num">Out</th></tr></thead>
+    <tbody>{% for name, v in range.by_project.items %}<tr><td><strong>{{ name }}</strong></td><td class="num">${{ v.cost|floatformat:2 }}</td><td class="num">{{ v.calls }}</td><td class="num">{{ v.in }}</td><td class="num">{{ v.out }}</td></tr>{% endfor %}</tbody>
+  </table></div></div>
+  <div class="card"><h3>By provider</h3><div class="table-wrap"><table>
+    <thead><tr><th>Provider</th><th class="num">Cost</th><th class="num">Calls</th></tr></thead>
+    <tbody>{% for name, v in range.by_provider.items %}<tr><td><strong>{{ name }}</strong></td><td class="num">${{ v.cost|floatformat:2 }}</td><td class="num">{{ v.calls }}</td></tr>{% endfor %}</tbody>
+  </table></div></div>
+  <div class="card"><h3>By model</h3><div class="table-wrap"><table>
+    <thead><tr><th>Model</th><th class="num">Cost</th><th class="num">Calls</th></tr></thead>
+    <tbody>{% for name, v in range.by_model.items %}<tr><td>{{ name }}</td><td class="num">${{ v.cost|floatformat:2 }}</td><td class="num">{{ v.calls }}</td></tr>{% endfor %}</tbody>
+  </table></div></div>
+  <div class="card"><h3>By purpose</h3><div class="table-wrap"><table>
+    <thead><tr><th>Purpose</th><th class="num">Cost</th><th class="num">Calls</th></tr></thead>
+    <tbody>{% for name, v in range.by_purpose.items %}<tr><td>{{ name }}</td><td class="num">${{ v.cost|floatformat:2 }}</td><td class="num">{{ v.calls }}</td></tr>{% endfor %}</tbody>
+  </table></div></div>
+</div>
+{% endblock %}

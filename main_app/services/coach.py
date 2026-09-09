@@ -90,13 +90,9 @@ def build_context(account: Account, d: date, days: int = 10) -> dict:
 
 
 def _record_usage(model: str, usage, purpose: str = 'coach') -> None:
-    inp = getattr(usage, 'input_tokens', 0) or 0
-    out = getattr(usage, 'output_tokens', 0) or 0
-    cache_read = getattr(usage, 'cache_read_input_tokens', 0) or 0
-    pin, pout = PRICING.get(model, (5.0, 25.0))
-    cost = (inp * pin + cache_read * pin * 0.1 + out * pout) / 1e6
-    ApiUsage.objects.create(model=model, purpose=purpose, input_tokens=inp + cache_read, output_tokens=out,
-                            cost_usd=Decimal(str(round(cost, 5))))
+    """One ledger for every paid call — see services/spend.py."""
+    from .spend import record_anthropic
+    record_anthropic(model, usage, purpose=purpose, project='moneytree')
 
 
 def _call(client, model: str, context: dict):

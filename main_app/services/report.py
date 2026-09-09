@@ -22,6 +22,7 @@ from main_app.models import (Account, AgentConfig, AgentRun, Experiment, Journal
 
 from .data import calendar as cal
 from .promotion import baseline_metrics, live_stats, qualification_assessment
+from .spend import day_spend, projected_monthly, range_spend
 from .journal import DRIFT_MIN_TRADES as DRIFT_TRADES
 from .risk import RiskConfig
 
@@ -311,7 +312,10 @@ def build_report(d: date | None = None, mode: str = Mode.SIM) -> dict:
         total_trades += p['trades']
         total_equity += p['equity']
         total_start += p['starting_cash']
-    return {'date': d, 'mode': mode, 'lanes': lanes, 'generated_at': timezone.now(),
+    spend = day_spend(d)
+    spend['month_to_date'] = range_spend(30)
+    spend['projected_monthly'] = projected_monthly(30)
+    return {'date': d, 'mode': mode, 'lanes': lanes, 'generated_at': timezone.now(), 'spend': spend,
             'total': {'net': total_net, 'trades': total_trades, 'equity': total_equity,
                       'starting_cash': total_start, 'total_pnl': total_equity - total_start}}
 
@@ -344,6 +348,19 @@ def render_text(rep: dict) -> str:
         for line in lane['improve']:
             L.append(f"   → {line}")
         L.append('')
+    sp = rep.get('spend') or {}
+    L.append('── API SPEND ' + '─' * 46)
+    L.append(f"Today ${sp.get('total', 0):.2f} across {sp.get('calls', 0)} call(s) · "
+             f"last 30 days ${(sp.get('month_to_date') or {}).get('total', 0):.2f} · "
+             f"at this rate ${sp.get('projected_monthly', 0):.2f}/month")
+    for label, key in (('by project', 'by_project'), ('by provider', 'by_provider'), ('by purpose', 'by_purpose')):
+        rows = (sp.get('month_to_date') or {}).get(key) or {}
+        if rows:
+            L.append(f"  30-day {label}: " + ', '.join(f'{k} ${v["cost"]:.2f}' for k, v in list(rows.items())[:6]))
+    if not sp.get('calls'):
+        L.append('  Nothing recorded today. Only calls that write to the ledger appear here — see the')
+        L.append('  spend command for which projects report in.')
+    L.append('')
     L.append(f"Generated {rep['generated_at'].astimezone(cal.ET):%Y-%m-%d %H:%M ET} · MoneyTree runs on fake money.")
     return '\n'.join(L)
 
@@ -380,6 +397,17 @@ def render_html(rep: dict) -> str:
         for line in lane['improve']:
             P.append(f'<li>{line}</li>')
         P.append('</ul>')
+    sp = rep.get('spend') or {}
+    mtd = sp.get('month_to_date') or {}
+    P.append(f'<h2>API spend <span class="det">today ${sp.get("total", 0):.2f} · 30 days ${mtd.get("total", 0):.2f} · '
+             f'at this rate ${sp.get("projected_monthly", 0):.2f}/month</span></h2>')
+    rows = mtd.get('by_project') or {}
+    if rows:
+        P.append('<ul>' + ''.join(
+            f'<li>{k} <span class="det">${v["cost"]:.2f} over {v["calls"]} calls</span></li>'
+            for k, v in list(rows.items())[:8]) + '</ul>')
+    else:
+        P.append('<p class="det">Nothing recorded yet — only calls that write to the ledger appear here.</p>')
     P.append(f'<p class="det" style="margin-top:32px">Generated {rep["generated_at"].astimezone(cal.ET):%Y-%m-%d %H:%M ET}. '
              'Fake money until it earns its stripes.</p></div>')
     return '\n'.join(P)

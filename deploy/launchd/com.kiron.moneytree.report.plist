@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The daily report at 17:30 PT: per lane, what it LEARNED today, what it
+       made or lost, and what changes tomorrow. Emailed via Resend, written to
+       the Journal, and printed to run/report.log. Runs every day including
+       weekends — a quiet lane still has to account for itself. -->
+  <key>Label</key><string>com.kiron.moneytree.report</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/kironkp/.local/bin/pipenv</string>
+    <string>run</string><string>python</string><string>manage.py</string><string>daily_report</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
+  <key>StartCalendarInterval</key><dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>30</integer></dict>
+  <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/report.log</string>
+  <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/report.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/kironkp/.local/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>

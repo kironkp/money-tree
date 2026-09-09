@@ -220,6 +220,9 @@ ACCOUNT_LOGIN_ON_EMAIL_CONFIRMATION = True
 ACCOUNT_LOGIN_ON_PASSWORD_RESET = True
 ACCOUNT_LOGOUT_ON_GET = False
 # Sign-up is invite-only. These addresses are always allowed and become operators.
+# Where the 17:30 daily report goes. Falls back to the owner's address.
+REPORT_EMAIL = os.getenv('REPORT_EMAIL', os.getenv('DJANGO_SUPERUSER_EMAIL', ''))
+
 SIGNUP_ALLOWED_EMAILS = [e.strip().lower() for e in
                          os.getenv('SIGNUP_ALLOWED_EMAILS', os.getenv('DJANGO_SUPERUSER_EMAIL', '')).split(',') if e.strip()]
 
@@ -255,7 +258,7 @@ COACH_MODEL = os.getenv('COACH_MODEL', 'claude-opus-5')
 COACH_ENABLED = bool(ANTHROPIC_API_KEY)
 
 # Timeframes the app knows how to store and trade on.
-TIMEFRAMES = ['1Min', '5Min', '15Min', '30Min', '1Hour', '1Day']
+TIMEFRAMES = ['1Min', '5Min', '15Min', '30Min', '1Hour', '4Hour', '1Day']
 DEFAULT_TIMEFRAME = '5Min'
 
 LOGGING = {

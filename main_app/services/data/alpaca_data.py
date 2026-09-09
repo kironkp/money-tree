@@ -49,9 +49,10 @@ def _timeframe(timeframe: str):
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
     if timeframe == '1Day':
         return TimeFrame.Day
-    if timeframe == '1Hour':
-        return TimeFrame(1, TimeFrameUnit.Hour)
-    return TimeFrame(tf_minutes(timeframe), TimeFrameUnit.Minute)
+    minutes = tf_minutes(timeframe)
+    if minutes % 60 == 0:
+        return TimeFrame(minutes // 60, TimeFrameUnit.Hour)
+    return TimeFrame(minutes, TimeFrameUnit.Minute)
 
 
 def _to_frame(bars, symbol: str) -> pd.DataFrame:

@@ -72,6 +72,7 @@ class RiskConfig:
             rc.max_trades_per_day = int(cfg.degen_max_trades_per_day)
             rc.max_hold_minutes = int(cfg.degen_max_hold_minutes)
             rc.min_reward_to_cost = float(cfg.degen_min_reward_to_cost)
+            rc.max_directional_exposure_pct = float(cfg.degen_max_directional_exposure_pct)
         return rc
 
     def round_trip_cost_pct(self, asset_class: str) -> float:

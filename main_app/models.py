@@ -135,18 +135,26 @@ class AgentConfig(models.Model):
     trading_enabled = models.BooleanField(default=True)
     kill_switch = models.BooleanField(default=False)
     timeframe = models.CharField(max_length=8, default='5Min')
-    # Crypto pays ~50 bps a round trip; 5-minute targets are smaller than that.
-    # Hourly bars give the trade room to clear its costs.
-    crypto_timeframe = models.CharField(max_length=8, default='1Hour')
-    # The degen lane: altcoins on 1-minute bars, its own (looser) risk limits.
-    degen_timeframe = models.CharField(max_length=8, default='1Min')
+    # Crypto pays ~50 bps a round trip. Measured 2026-09-09 over 200 days: the
+    # typical 2-ATR target is 2.1x the round trip on 1Hour bars but 4.3-5.5x on
+    # 4Hour, so hourly bars left almost nothing after costs and the cost gate
+    # blocked 8 of 8 signals. Four-hour bars give a trade room to pay for itself.
+    crypto_timeframe = models.CharField(max_length=8, default='4Hour')
+    # The degen lane. It ran on 1-minute bars and lost $2,210 of which $1,698 was
+    # fees, because at 1Min the typical 2-ATR target is 0.3-0.7x the 0.56% round
+    # trip: the fee is larger than the move the trade is trying to capture, so no
+    # parameter set can win. At 15Min the same measurement is 1.4-2.3x.
+    degen_timeframe = models.CharField(max_length=8, default='15Min')
     degen_risk_per_trade_pct = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal('3'))
     degen_max_position_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('25'))
     degen_max_open_positions = models.PositiveIntegerField(default=4)
     degen_max_daily_loss_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('10'))
     degen_max_trades_per_day = models.PositiveIntegerField(default=60)
-    degen_max_hold_minutes = models.PositiveIntegerField(default=45)
-    degen_min_reward_to_cost = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('1.2'))
+    degen_max_hold_minutes = models.PositiveIntegerField(default=180)
+    # Altcoins move together: 121 of the first 165 degen trades were stacked 3+
+    # deep in the SAME direction and carried $1,625 of the lane's $2,210 loss.
+    degen_max_directional_exposure_pct = models.DecimalField(max_digits=7, decimal_places=2, default=Decimal('50'))
+    degen_min_reward_to_cost = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('1.5'))
     # The forex lane: USD-quoted majors on 5-minute bars, 24/5. Forex is traded
     # on margin, so a position may exceed the account (leverage) and the cost
     # model is a spread, not a commission: fees in bps of notional, slippage in

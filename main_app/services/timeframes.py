@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-TIMEFRAME_MINUTES = {'1Min': 1, '5Min': 5, '15Min': 15, '30Min': 30, '1Hour': 60, '1Day': 1440}
-YAHOO_INTERVAL = {'1Min': '1m', '5Min': '5m', '15Min': '15m', '30Min': '30m', '1Hour': '60m', '1Day': '1d'}
+TIMEFRAME_MINUTES = {'1Min': 1, '5Min': 5, '15Min': 15, '30Min': 30, '1Hour': 60, '4Hour': 240, '1Day': 1440}
+# Yahoo has no 4-hour candle; 1Hour bars are resampled by the caller when needed.
+YAHOO_INTERVAL = {'1Min': '1m', '5Min': '5m', '15Min': '15m', '30Min': '30m', '1Hour': '60m', '4Hour': '60m', '1Day': '1d'}
 
 
 def tf_minutes(timeframe: str) -> int:

@@ -1,8 +1,14 @@
-"""Nightly self-improvement: for every enabled strategy, walk-forward the
+"""Nightly self-improvement: for EVERY strategy, enabled or parked, walk-forward the
 trailing window on real bars; promote the search's recommendation only when
 its out-of-sample edge beats the current params' out-of-sample edge and clears
 costs. Everything is written to the journal so the operator can see what the
-machine tried, what it kept, and why."""
+machine tried, what it kept, and why.
+
+Parked strategies are researched too. Restricting the search to enabled rows
+made parking a one-way door: a disabled strategy generated no evidence, and no
+evidence meant it could never be re-enabled. A parked strategy that produces a
+promotion-grade held-out result is un-parked here, back at Sprout, which is the
+only way a lane earns its way back."""
 from datetime import date, timedelta
 
 from django.core.management.base import BaseCommand
@@ -66,23 +72,25 @@ def comparable_verdict(best_params: dict, current_params: dict, candidate: dict,
 
 
 class Command(BaseCommand):
-    help = 'Walk-forward every enabled strategy on trailing data; promote only proven improvements'
+    help = 'Walk-forward every strategy (parked ones too) on trailing data; promote only proven improvements'
 
     def add_arguments(self, parser):
         parser.add_argument('--market', default='', help='stocks|crypto|degen|forex (default: all)')
         parser.add_argument('--days', type=int, default=0, help='trailing window (default per market)')
+        parser.add_argument('--enabled-only', action='store_true',
+                            help='skip parked strategies (they can then never earn their way back)')
         parser.add_argument('--dry-run', action='store_true')
 
     def handle(self, *args, **o):
         cfg = AgentConfig.get()
-        rows = Strategy.objects.filter(enabled=True)
+        rows = Strategy.objects.filter(enabled=True) if o['enabled_only'] else Strategy.objects.all()
         if o['market']:
             rows = rows.filter(market=o['market'])
         end = date.today()
         for row in rows:
             # Forex history comes from Yahoo, which keeps 59 days of intraday bars.
-            days = o['days'] or {'stocks': 240, 'crypto': 540, 'degen': 6, 'forex': 58}[row.market]
-            train, test = {'stocks': (120, 40), 'crypto': (180, 60), 'degen': (3, 1), 'forex': (21, 7)}[row.market]
+            days = o['days'] or {'stocks': 240, 'crypto': 540, 'degen': 120, 'forex': 58}[row.market]
+            train, test = {'stocks': (120, 40), 'crypto': (180, 60), 'degen': (30, 10), 'forex': (21, 7)}[row.market]
             start = end - timedelta(days=days)
             tf = cfg.timeframe_for(row.market)
             self.stdout.write(f'{row.key} ({row.market}) — walk-forward {start}→{end} on {tf}, train {train}d / test {test}d')
@@ -116,12 +124,22 @@ class Command(BaseCommand):
             if should_promote:
                 action = 'WOULD PROMOTE' if o['dry_run'] else 'PROMOTED'
                 verdict = f'{action} v{row.version + 1}: ' + verdict.removeprefix('PROMOTE: ')
+                was_parked = not row.enabled
                 if not o['dry_run']:
                     promote(
                         row, exp.best_params, source=f'auto-research experiment #{exp.pk}', metrics=candidate,
                         evidence={'kind': 'held_out_validation', 'experiment': exp.pk,
                                   'window': validation_window, 'same_bars': True},
                     )
+                    if was_parked:
+                        # Earned its way back: held-out evidence beat the champion on the same bars.
+                        row.refresh_from_db()
+                        row.enabled = True
+                        row.stage = 'sprout'
+                        row.qualification_reason = (f'un-parked by auto-research #{exp.pk}: held-out candidate '
+                                                    f'passed the gate and beat the champion')[:300]
+                        row.save(update_fields=['enabled', 'stage', 'qualification_reason'])
+                        verdict += ' — UN-PARKED back to Sprout'
             validation['champion'] = champion
             validation['verdict'] = verdict
             validation['final_candidate_qualified'] = evidence_passes(candidate)

@@ -258,7 +258,11 @@ LIVE_FLATTEN_ON_EXIT = os.getenv('LIVE_FLATTEN_ON_EXIT', '0') == '1'
 
 # Coach.
 ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
-COACH_MODEL = os.getenv('COACH_MODEL', 'claude-opus-5')
+# Measured 2026-09-09 on a real review: 5,073 in / 4,431 out = $0.41 on Opus,
+# $0.08 on Sonnet. Four lanes daily is $49/month against $10. The coach
+# summarises evidence and proposes experiments, which Sonnet does well;
+# set COACH_MODEL=claude-opus-5 in .env to buy the deeper review back.
+COACH_MODEL = os.getenv('COACH_MODEL', 'claude-sonnet-5')
 COACH_ENABLED = bool(ANTHROPIC_API_KEY)
 
 # Timeframes the app knows how to store and trade on.

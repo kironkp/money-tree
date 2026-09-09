@@ -183,6 +183,14 @@ class Agent:
             self.risk.restore(today, float(self.account.day_start_equity), self.account.day_entries,
                               self.account.day_halted, self.account.day_halted_reason)
             self.engine.current_day = today
+        # A restart between the close and midnight must not re-run end of day: that
+        # would re-flatten, rewrite the journal and pay for a second coach review of a
+        # day already closed. If today's journal exists, treat the day as done.
+        if self.mode != Mode.REPLAY:
+            from main_app.models import JournalEntry
+            if JournalEntry.objects.filter(account=self.account, kind='auto_eod', date=today).exists():
+                self.eod_done = today
+                self.journal_done = today
         n_cards = hydrate_cards(self.account, self.engine)
         if self.mode in (Mode.PAPER, Mode.LIVE):
             self.reconcile(timezone.now(), announce=True)

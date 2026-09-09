@@ -50,7 +50,22 @@ SCHEMA = {
                     'title': {'type': 'string'},
                     'strategy_key': {'type': 'string'},
                     'method': {'type': 'string', 'enum': ['grid', 'random', 'walk_forward']},
-                    'param_grid': {'type': 'object', 'additionalProperties': {'type': 'array', 'items': {'type': ['number', 'string', 'boolean']}}},
+                    # NOT an object with typed additionalProperties: the API rejects that
+                    # with a 400 ("set additionalProperties to false"), which silently killed
+                    # every coach review from 2026-09-04 to 09-09. A list of named parameters
+                    # says the same thing and is schema-legal.
+                    'param_grid': {
+                        'type': 'array',
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'name': {'type': 'string'},
+                                'values': {'type': 'array', 'items': {'type': ['number', 'string', 'boolean']}},
+                            },
+                            'required': ['name', 'values'],
+                            'additionalProperties': False,
+                        },
+                    },
                     'rationale': {'type': 'string'},
                 },
                 'required': ['title', 'strategy_key', 'method', 'param_grid', 'rationale'],
@@ -104,8 +119,17 @@ def _call(client, model: str, context: dict):
         # Server-side refusal fallbacks (routes by refusal category) — default on for Opus 5 / Fable.
         return client.beta.messages.create(betas=['server-side-fallback-2026-07-01'], fallbacks='default', **kwargs)
     except TypeError:
+        # The SDK does not know these kwargs at all — nothing was sent, so retrying is free.
         return client.messages.create(**kwargs)
-    except Exception as exc:  # beta not available on this account/SDK → plain call
+    except Exception as exc:
+        # Only retry when the BETA is unavailable. A 400 means the server read the
+        # request and refused it; re-sending the identical body fails identically and
+        # bills twice, and a failure raised while reading the response means the
+        # tokens were already generated and paid for.
+        status = getattr(exc, 'status_code', None)
+        if status is not None and status != 404 and not (status == 400 and 'beta' in str(exc).lower()):
+            log.error('coach request refused (%s) — not retrying: %s', status, exc)
+            raise
         log.info('fallback beta unavailable (%s); plain call', exc)
         return client.messages.create(**kwargs)
 
@@ -119,7 +143,10 @@ def sanitize_proposals(proposals: list) -> list:
         except KeyError:
             continue
         grid = {}
-        for name, values in (p.get('param_grid') or {}).items():
+        raw_grid = p.get('param_grid') or []
+        pairs = (raw_grid.items() if isinstance(raw_grid, dict)
+                 else [(g.get('name'), g.get('values')) for g in raw_grid if isinstance(g, dict)])
+        for name, values in pairs:
             spec = cls.param_map().get(name)
             if spec is None or not isinstance(values, list):
                 continue

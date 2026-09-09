@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from calendar import monthrange
 from datetime import date, datetime, time as dtime, timedelta
 from decimal import Decimal
 
@@ -166,3 +167,110 @@ def projected_monthly(days: int = 30) -> float:
     s = range_spend(days)
     seen = len(s.get('per_day') or {}) or 1
     return s['total'] / seen * 30.0
+
+
+# --- navigable windows: 1 day / 7 days / 30 days, stepped by period ---------
+#
+# Boundaries are LOCAL calendar boundaries in market time, not "N x 24h ago": a
+# week starts on Monday and a month is a real month. A late-evening call
+# otherwise lands in the wrong day.
+
+PERIODS = ('day', 'week', 'month')
+
+
+def _local_midnight(y: int, m: int, d: int) -> datetime:
+    """Midnight ET for a possibly out-of-range date, normalised by arithmetic."""
+    while m > 12:
+        y, m = y + 1, m - 12
+    while m < 1:
+        y, m = y - 1, m + 12
+    base = datetime(y, m, 1, tzinfo=cal.ET)
+    return base + timedelta(days=d - 1)
+
+
+def spend_window(period: str = 'day', offset: int = 0, now: datetime | None = None) -> dict:
+    """The window for a period at an offset. Offset 0 is current, -1 the previous."""
+    period = period if period in PERIODS else 'day'
+    offset = min(0, int(offset))
+    now = (now or timezone.now()).astimezone(cal.ET)
+    if period == 'day':
+        start = _local_midnight(now.year, now.month, now.day + offset)
+        end = start + timedelta(days=1)
+        label = 'Today' if offset == 0 else ('Yesterday' if offset == -1 else f'{start:%a %b %-d}')
+    elif period == 'week':
+        back_to_monday = now.weekday()          # Monday = 0, which is how a working week reads
+        start = _local_midnight(now.year, now.month, now.day - back_to_monday + offset * 7)
+        end = start + timedelta(days=7)
+        last = end - timedelta(days=1)
+        label = ('This week' if offset == 0 else 'Last week' if offset == -1
+                 else f'{start:%b %-d} – {last:%b %-d}')
+    else:
+        start = _local_midnight(now.year, now.month + offset, 1)
+        days_in = monthrange(start.year, start.month)[1]
+        end = start + timedelta(days=days_in)
+        label = 'This month' if offset == 0 else f'{start:%B %Y}'
+    return {'period': period, 'offset': offset, 'start': start, 'end': end, 'label': label,
+            'has_next': offset < 0, 'days': max(1, round((end - start).total_seconds() / 86400))}
+
+
+def _bucket(rows, key) -> list[dict]:
+    out: dict[str, dict] = {}
+    for r in rows:
+        cell = out.setdefault(key(r), {'key': key(r), 'calls': 0, 'usd': 0.0,
+                                       'input_tokens': 0, 'output_tokens': 0, 'estimated': False})
+        cell['calls'] += r.calls
+        cell['usd'] += float(r.cost_usd)
+        cell['input_tokens'] += r.input_tokens + r.cached_tokens
+        cell['output_tokens'] += r.output_tokens
+        # A price we had to guess is an upper bound, and the panel says so.
+        if r.model not in PRICES and not any(r.model.startswith(k) for k in PRICES):
+            cell['estimated'] = True
+    return sorted(out.values(), key=lambda c: -c['usd'])
+
+
+def spend_report(window: dict | None = None) -> dict:
+    """Everything the spend panel renders for one window."""
+    w = window or spend_window()
+    rows = list(ApiUsage.objects.filter(ts__gte=w['start'], ts__lt=w['end']))
+    total = sum(float(r.cost_usd) for r in rows)
+    calls = sum(r.calls for r in rows)
+    days = w['days']
+
+    daily: list[dict] = []
+    if w['period'] != 'day':
+        per: dict[str, float] = {}
+        for r in rows:
+            per[r.ts.astimezone(cal.ET).date().isoformat()] = per.get(
+                r.ts.astimezone(cal.ET).date().isoformat(), 0.0) + float(r.cost_usd)
+        for i in range(days):                 # every day, including the empty ones — a gap is information
+            d = (w['start'] + timedelta(days=i)).date().isoformat()
+            daily.append({'day': d, 'usd': round(per.get(d, 0.0), 6)})
+
+    biggest = sorted(rows, key=lambda r: -float(r.cost_usd))[:5]
+    return {
+        'window': {**w, 'start': w['start'].isoformat(), 'end': w['end'].isoformat()},
+        'days': days, 'total_usd': total, 'calls': calls,
+        'per_day_usd': total / days if days else 0.0,
+        'monthly_run_rate_usd': total / days * 30 if days else 0.0,
+        'by_kind': _bucket(rows, lambda r: r.purpose or 'other'),
+        'by_model': _bucket(rows, lambda r: r.model or 'unknown'),
+        'by_project': _bucket(rows, lambda r: r.project or 'unknown'),
+        'daily': daily,
+        'biggest': [{'id': r.pk, 'kind': r.purpose or 'other', 'model': r.model,
+                     'project': r.project, 'usd': float(r.cost_usd),
+                     'input_tokens': r.input_tokens + r.cached_tokens, 'output_tokens': r.output_tokens,
+                     'at': r.ts.isoformat()} for r in biggest],
+        'any_estimated': any(b['estimated'] for b in _bucket(rows, lambda r: r.model or 'unknown')),
+    }
+
+
+def all_time() -> dict:
+    rows = ApiUsage.objects.all()
+    return {'usd': float(sum(r.cost_usd for r in rows)), 'calls': sum(r.calls for r in rows)}
+
+
+KIND_LABEL = {
+    'coach': 'Coach reviews', 'assistant': 'Assistant', 'research': 'Research',
+    'embedding': 'Embeddings', 'voice': 'Voice calls', 'transcribe': 'Dictation',
+    'chat': 'Chat', 'unknown': 'Unattributed', 'other': 'Other',
+}

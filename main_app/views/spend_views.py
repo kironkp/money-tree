@@ -16,7 +16,8 @@ from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 
-from main_app.services.spend import day_spend, projected_monthly, range_spend, record
+from main_app.services.spend import (KIND_LABEL, all_time, day_spend, projected_monthly, range_spend,
+                                     record, spend_report, spend_window)
 
 from .common import parse_days
 
@@ -59,6 +60,17 @@ def api_spend_ingest(request):
     if row is None:
         return JsonResponse({'error': 'could not record'}, status=500)
     return JsonResponse({'ok': True, 'id': row.pk, 'cost_usd': float(row.cost_usd)})
+
+
+@login_required
+def api_spend(request):
+    """One window of spend for the settings panel: ?period=day|week|month&offset=-N."""
+    try:
+        offset = int(request.GET.get('offset', 0))
+    except (TypeError, ValueError):
+        offset = 0
+    window = spend_window(request.GET.get('period', 'day'), offset)
+    return JsonResponse({'report': spend_report(window), 'kind_labels': KIND_LABEL})
 
 
 @login_required

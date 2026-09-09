@@ -77,3 +77,59 @@ class IngestAcceptsServersAndRefusesStrangers(TestCase):
         self.assertEqual(self.client.get(reverse('spend')).status_code, 302)
         self.client.force_login(make_user())
         self.assertEqual(self.client.get(reverse('spend')).status_code, 200)
+
+
+class WindowsAreRealCalendarPeriods(TestCase):
+    """Boundaries are local calendar boundaries, not N x 24h ago."""
+
+    def test_day_week_and_month_boundaries(self):
+        from datetime import datetime
+        from main_app.services.data import calendar as cal
+        from main_app.services.spend import spend_window
+        # A Wednesday.
+        now = datetime(2026, 9, 9, 15, 0, tzinfo=cal.ET)
+        d = spend_window('day', 0, now)
+        self.assertEqual((d['label'], d['days']), ('Today', 1))
+        self.assertEqual(spend_window('day', -1, now)['label'], 'Yesterday')
+        w = spend_window('week', 0, now)
+        self.assertEqual(w['start'].strftime('%A'), 'Monday')   # weeks start Monday
+        self.assertEqual((w['label'], w['days']), ('This week', 7))
+        m = spend_window('month', 0, now)
+        self.assertEqual((m['start'].day, m['days']), (1, 30))  # September is a real 30-day month
+        self.assertEqual(spend_window('month', -1, now)['days'], 31)   # August has 31
+
+    def test_month_arithmetic_crosses_the_year(self):
+        from datetime import datetime
+        from main_app.services.data import calendar as cal
+        from main_app.services.spend import spend_window
+        w = spend_window('month', -2, datetime(2026, 1, 15, 12, 0, tzinfo=cal.ET))
+        self.assertEqual((w['start'].year, w['start'].month), (2025, 11))
+
+    def test_you_cannot_step_into_the_future(self):
+        from main_app.services.spend import spend_window
+        self.assertEqual(spend_window('day', 3)['offset'], 0)
+        self.assertFalse(spend_window('day', 0)['has_next'])
+        self.assertTrue(spend_window('day', -1)['has_next'])
+
+    def test_report_fills_every_day_in_the_window(self):
+        from main_app.services.spend import spend_report, spend_window
+        rep = spend_report(spend_window('week', 0))
+        self.assertEqual(len(rep['daily']), 7)          # gaps are information
+        self.assertEqual(spend_report(spend_window('day', 0))['daily'], [])
+
+    def test_unknown_model_marks_the_bucket_estimated(self):
+        from main_app.services.spend import record, spend_report, spend_window
+        record('a-model-with-no-published-rate', purpose='chat', input_tokens=1000)
+        rep = spend_report(spend_window('day', 0))
+        self.assertTrue(rep['any_estimated'])
+        self.assertTrue(rep['by_model'][0]['estimated'])
+
+    def test_report_endpoint_requires_login_and_returns_a_window(self):
+        from django.urls import reverse
+        url = reverse('api-spend-report')
+        self.assertEqual(self.client.get(url).status_code, 302)
+        self.client.force_login(make_user())
+        d = self.client.get(url + '?period=month&offset=-1').json()
+        self.assertEqual(d['report']['window']['period'], 'month')
+        self.assertEqual(d['report']['window']['offset'], -1)
+        self.assertIn('coach', d['kind_labels'])

@@ -1,0 +1,51 @@
+{% comment %}
+  Where the money went, navigable — the same interface as Secretary's settings.
+  Two interactions: a 1-day / 7-day / 30-day toggle, and swiping (or the
+  chevrons, or the arrow keys) to step through specific days, weeks and months.
+  The first period is server-rendered so the panel has real numbers before any
+  JavaScript runs; later periods are fetched from /api/spend/report/.
+{% endcomment %}
+<section class="card spend-panel" id="spend-panel"
+         data-report="{{ report_json }}" data-labels="{{ kind_labels_json }}"
+         data-alltime-usd="{{ all_time.usd|floatformat:4 }}" data-alltime-calls="{{ all_time.calls }}">
+  <div class="spend-head">
+    <h3>API spend</h3>
+    <div class="spend-periods" role="tablist">
+      <button type="button" role="tab" class="active" data-period="day">1 day</button>
+      <button type="button" role="tab" data-period="week">7 days</button>
+      <button type="button" role="tab" data-period="month">30 days</button>
+    </div>
+  </div>
+
+  <div class="spend-body" data-swipe>
+    <div class="spend-stepper">
+      <button type="button" class="spend-nav" data-step="older" aria-label="Previous period">‹</button>
+      <div class="spend-now">
+        <div class="spend-label" data-label>—</div>
+        <div class="spend-total mono" data-total>$0.00</div>
+        <div class="spend-sub mono" data-sub></div>
+      </div>
+      <button type="button" class="spend-nav" data-step="newer" aria-label="Next period" disabled>›</button>
+    </div>
+
+    <div class="spend-bars" data-bars hidden></div>
+
+    <div class="spend-cols">
+      <div>
+        <h4>What it was doing</h4>
+        <ul class="spend-rows" data-rows="kind"></ul>
+      </div>
+      <div>
+        <h4>Which model</h4>
+        <ul class="spend-rows" data-rows="model" data-tone="alt"></ul>
+      </div>
+    </div>
+
+    <div data-biggest-wrap hidden>
+      <h4>Most expensive single calls</h4>
+      <ul class="spend-biggest" data-biggest></ul>
+    </div>
+  </div>
+
+  <p class="spend-foot small" data-foot></p>
+</section>

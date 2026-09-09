@@ -43,7 +43,6 @@
           <li><a href="{% url 'replay' %}" {% if request.resolver_match.url_name == 'replay' %}class="active"{% endif %}>Replay</a></li>
           <li><a href="{% url 'data-index' %}" {% if 'data' in request.resolver_match.url_name or 'instrument' in request.resolver_match.url_name %}class="active"{% endif %}>Data</a></li>
           <li><a href="{% url 'journal-list' %}" {% if 'journal' in request.resolver_match.url_name %}class="active"{% endif %}>Journal</a></li>
-          <li><a href="{% url 'spend' %}" {% if request.resolver_match.url_name == 'spend' %}class="active"{% endif %}>Spend</a></li>
           <li><a href="{% url 'settings' %}" {% if request.resolver_match.url_name == 'settings' %}class="active"{% endif %}>Settings</a></li>
         </ul>
       </nav>
@@ -77,7 +76,6 @@
         <li><a href="{% url 'replay' %}">Replay</a></li>
         <li><a href="{% url 'data-index' %}">Data</a></li>
         <li><a href="{% url 'journal-list' %}">Journal</a></li>
-        <li><a href="{% url 'spend' %}">Spend</a></li>
         <li><a href="{% url 'settings' %}">Settings</a></li>
       </ul>
     </nav>

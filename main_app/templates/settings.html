@@ -1,8 +1,11 @@
 {% extends 'base.html' %}
 {% load mt_tags %}
+{% load asset_tags %}
 {% block title %}Settings · MoneyTree{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Settings</h1><div class="actions"><span class="small muted">v{{ VERSION }}</span></div></div>
+{% include 'partials/spend_panel.html' %}
+
 <div class="grid cols-2">
   <div class="card">
     <h3>Risk &amp; fill model</h3>
@@ -73,3 +76,4 @@
   </div>
 </div>
 {% endblock %}
+{% block scripts %}<script src="{% static_v 'js/spend.js' %}" defer></script>{% endblock %}

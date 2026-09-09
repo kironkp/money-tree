@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -9,6 +11,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_POST
 
 from main_app.forms import AgentConfigForm, InviteForm
+from main_app.services.spend import KIND_LABEL, all_time, spend_report, spend_window
 from main_app.models import Account, AgentConfig, Market, Mode, SignupInvite
 from main_app.services import control
 
@@ -35,7 +38,11 @@ def settings_view(request):
         for market in Market.values:
             accounts.append(Account.for_mode(mode, market))
     User = get_user_model()
+    # First period server-rendered, so the panel shows real numbers before any JS runs.
+    report = spend_report(spend_window('day', 0))
     return render(request, 'settings.html', {
+        'report_json': json.dumps(report, default=str), 'kind_labels_json': json.dumps(KIND_LABEL),
+        'all_time': all_time(),
         'form': form, 'cfg': cfg, 'accounts': accounts,
         'keys': {'alpaca_paper': settings.ALPACA_ENABLED, 'alpaca_live': bool(settings.ALPACA_LIVE_API_KEY),
                  'live_armed_env': settings.LIVE_TRADING_ARMED, 'coach': settings.COACH_ENABLED,

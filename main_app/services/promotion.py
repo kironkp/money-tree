@@ -65,6 +65,8 @@ def promote(row: Strategy, params: dict, source: str, note: str = '', metrics: d
     row.qualification = Qualification.UNPROVEN
     row.qualification_reason = 'new strategy version must earn fresh forward-simulation evidence'
     row.qualification_updated_at = timezone.now()
+    # Forward evidence restarts with the parameters it is meant to judge.
+    row.evidence_since = timezone.now()
     row.history = (row.history or []) + [{
         'at': timezone.now().isoformat(), 'version': row.version, 'params': dict(params), 'source': source,
         'note': note, 'run_id': run_id, 'metrics': _subset(metrics or {}), 'evidence': dict(evidence or {}),
@@ -109,9 +111,18 @@ def previous_stage(stage: str) -> str | None:
 
 
 def live_stats(row: Strategy, account: Account | None, days: int = 60) -> dict:
+    """Forward evidence for THIS configuration.
+
+    Never counts trades made before `evidence_since` — a promotion or a lane
+    timeframe change resets it, because trades taken under the old parameters
+    say nothing about the new ones and would otherwise make a quarantine earned
+    by a replaced configuration permanent.
+    """
     if account is None:
         return {'trades': 0, 'sessions': 0}
     since = timezone.now() - timedelta(days=days)
+    if row.evidence_since and row.evidence_since > since:
+        since = row.evidence_since
     trades = list(Trade.objects.filter(account=account, strategy_key=row.key, exit_ts__gte=since).order_by('exit_ts'))
     n = len(trades)
     pnls = [float(t.pnl) for t in trades]

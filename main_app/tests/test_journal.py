@@ -1,7 +1,10 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
 from django.test import TestCase
+from django.utils import timezone
+
+from main_app.services.data import calendar as cal
 
 from main_app.models import Account, Qualification, Strategy, Trade
 from main_app.services.journal import day_summary, drift_check, write_eod_journal
@@ -16,14 +19,19 @@ class JournalSummarisesTheDayAndCatchesDrift(TestCase):
         self.account = Account.for_mode('sim')
         self.row = enable_strategy('orb', symbols=['QQQ'])
         promote(self.row, self.row.params, 'backtest #1', metrics={'expectancy': 5.0, 'trades': 40, 'profit_factor': 1.5})
-        t = datetime(2026, 8, 28, 15, 0, tzinfo=UTC)
+        # Promoted a month ago, traded since: forward evidence has to post-date the
+        # parameters it judges. Relative to today so the window never ages out.
+        self.row.evidence_since = timezone.now() - timedelta(days=30)
+        self.row.save(update_fields=['evidence_since'])
+        t = (timezone.now() - timedelta(days=5)).replace(hour=15, minute=0, second=0, microsecond=0)
+        self.day = t.astimezone(cal.ET).date()
         for i in range(25):
             Trade.objects.create(account=self.account, instrument=self.instruments['QQQ'], strategy_key='orb', side='long',
                                  qty=1, entry_ts=t, exit_ts=t, entry_price=100, exit_price=99, pnl=Decimal('-2.00'),
                                  pnl_pct=Decimal('-1'), exit_reason='stop')
 
     def test_day_summary_counts_trades(self):
-        s = day_summary(self.account, date(2026, 8, 28))
+        s = day_summary(self.account, self.day)
         self.assertEqual(s['trades'], 25)
         self.assertEqual(s['net_pnl'], -50.0)
         self.assertEqual(s['exit_reasons'], {'stop': 25})
@@ -31,7 +39,7 @@ class JournalSummarisesTheDayAndCatchesDrift(TestCase):
     def test_drift_auto_disables_the_strategy(self):
         dc = drift_check(self.account, self.row)
         self.assertTrue(dc['drift'])
-        entry = write_eod_journal(self.account, date(2026, 8, 28))
+        entry = write_eod_journal(self.account, self.day)
         self.row.refresh_from_db()
         self.assertFalse(self.row.enabled)
         self.assertIn('DRIFT', entry.body)
@@ -48,7 +56,7 @@ class JournalSummarisesTheDayAndCatchesDrift(TestCase):
         self.assertFalse(check['ready'])
 
     def test_sufficient_losing_forward_sample_is_quarantined_and_disabled(self):
-        t = datetime(2026, 8, 29, 15, 0, tzinfo=UTC)
+        t = (timezone.now() - timedelta(days=4)).replace(hour=15, minute=0, second=0, microsecond=0)
         for _ in range(5):
             Trade.objects.create(account=self.account, instrument=self.instruments['QQQ'], strategy_key='orb', side='long',
                                  qty=1, entry_ts=t, exit_ts=t, entry_price=100, exit_price=99, pnl=Decimal('-2.00'),
@@ -70,9 +78,11 @@ class ProfitableEvidenceCanQualify(TestCase):
                 metrics={'expectancy': 4.0, 'net_pnl': 160, 'trades': 40, 'profit_factor': 1.5},
                 evidence={'kind': 'held_out_validation', 'same_bars': True,
                           'window': {'test_start': '2026-06-01', 'test_end': '2026-07-31'}})
-        start = datetime(2026, 8, 1, 15, 0, tzinfo=UTC)
+        # Twenty distinct sessions of forward trading AFTER the promotion.
+        row.evidence_since = timezone.now() - timedelta(days=25)
+        row.save(update_fields=['evidence_since'])
         for i in range(30):
-            t = start.replace(day=(i % 20) + 1)
+            t = (timezone.now() - timedelta(days=(i % 20) + 1)).replace(hour=15, minute=0, second=0, microsecond=0)
             pnl = Decimal('3.00') if i % 4 else Decimal('-1.00')
             Trade.objects.create(account=account, instrument=instruments['QQQ'], strategy_key='orb', side='long',
                                  qty=1, entry_ts=t, exit_ts=t, entry_price=100, exit_price=101, pnl=pnl,

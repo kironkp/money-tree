@@ -670,6 +670,11 @@ class Strategy(models.Model):
                                      default=Qualification.UNPROVEN)
     qualification_reason = models.CharField(max_length=300, blank=True)
     qualification_updated_at = models.DateTimeField(null=True, blank=True)
+    # Live evidence only counts from here. A promotion installs new parameters and
+    # a lane change installs a new timeframe; trades made under the OLD
+    # configuration cannot judge the new one, and without this boundary a
+    # quarantine earned by a since-replaced configuration was permanent.
+    evidence_since = models.DateTimeField(null=True, blank=True)
     version = models.PositiveIntegerField(default=1)
     history = models.JSONField(default=list, blank=True)  # promotions: {at, version, params, source}
     notes = models.TextField(blank=True)

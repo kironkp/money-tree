@@ -3,18 +3,18 @@
 {% block title %}Journal · MoneyTree{% endblock %}
 {% block content %}
 <div class="page-head"><h1>Journal <small class="muted">{{ account.label }}</small></h1>
-  <div class="tabs"><a href="?{{ account.query }}" class="{% if not kind %}active{% endif %}">all</a><a href="?{{ account.query }}&kind=auto_eod" class="{% if kind == 'auto_eod' %}active{% endif %}">end of day</a><a href="?{{ account.query }}&kind=coach" class="{% if kind == 'coach' %}active{% endif %}">coach</a><a href="?{{ account.query }}&kind=manual" class="{% if kind == 'manual' %}active{% endif %}">notes</a></div>
+  <div class="tabs"><a href="?{{ account.query }}" class="{% if not kind %}active{% endif %}">all</a><a href="?{{ account.query }}&kind=report" class="{% if kind == 'report' %}active{% endif %}">daily report</a><a href="?{{ account.query }}&kind=auto_eod" class="{% if kind == 'auto_eod' %}active{% endif %}">end of day</a><a href="?{{ account.query }}&kind=coach" class="{% if kind == 'coach' %}active{% endif %}">coach</a><a href="?{{ account.query }}&kind=manual" class="{% if kind == 'manual' %}active{% endif %}">notes</a></div>
   <div class="actions">
     <form method="post" action="{% url 'journal-eod' %}" class="inline">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn small">Write today's EOD ({{ account.mode }})</button></form>
     <form method="post" action="{% url 'journal-coach' %}" class="inline" data-confirm="Ask the coach ({{ coach_model }}) to review recent sessions? Costs a few cents.">{% csrf_token %}<input type="hidden" name="account" value="{{ account.mode }}"><input type="hidden" name="market" value="{{ account.market }}"><button class="btn small primary" {% if not coach_enabled %}disabled title="set ANTHROPIC_API_KEY"{% endif %}>Ask the coach</button></form>
   </div>
 </div>
-<p class="small muted">Coach: {% if coach_enabled %}{{ coach_model }} · {{ coach_calls }} calls · ${{ coach_cost|floatformat:3 }} so far{% else %}dormant — add ANTHROPIC_API_KEY to .env{% endif %}. End-of-day entries are written automatically by the agent; drift versus the backtest baseline auto-disables a strategy.</p>
+<p class="small muted">Coach: {% if coach_enabled %}{{ coach_model }} · {{ coach_calls }} calls · ${{ coach_cost|floatformat:3 }} so far{% else %}dormant — add ANTHROPIC_API_KEY to .env{% endif %}. The daily report lands at 17:30 with what each lane learned; end-of-day entries are written by the agent; drift versus the backtest baseline auto-disables a strategy.</p>
 <div class="grid cols-2">
   <div class="card span-2">
     {% for e in page.object_list %}
       <article style="padding: var(--s-3) 0; border-bottom: 1px solid var(--border)">
-        <h2 style="font-size:15px">{{ e.date }} <span class="badge {% if e.kind == 'coach' %}sapling{% elif e.kind == 'auto_eod' %}sprout{% endif %}">{{ e.kind }}</span> {{ e.title }}
+        <h2 style="font-size:15px">{{ e.date }} <span class="badge {% if e.kind == 'coach' %}sapling{% elif e.kind == 'auto_eod' %}sprout{% elif e.kind == 'report' %}tree{% endif %}">{{ e.kind }}</span> {{ e.title }}
           <span class="more"><form method="post" action="{% url 'journal-delete' e.pk %}" class="inline" data-confirm="Delete this entry?">{% csrf_token %}<button class="linklike small">✕</button></form></span></h2>
         <div class="md">{{ e.body|md }}</div>
         {% if e.proposals %}

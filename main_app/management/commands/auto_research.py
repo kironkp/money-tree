@@ -9,8 +9,10 @@ made parking a one-way door: a disabled strategy generated no evidence, and no
 evidence meant it could never be re-enabled. A parked strategy that produces a
 promotion-grade held-out result is un-parked here, back at Sprout, which is the
 only way a lane earns its way back."""
+import fcntl
 from datetime import date, timedelta
 
+from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
@@ -82,6 +84,15 @@ class Command(BaseCommand):
         parser.add_argument('--dry-run', action='store_true')
 
     def handle(self, *args, **o):
+        # One research run at a time: two walk-forwards on a two-core machine
+        # starve each other and the trading agents.
+        settings.RUN_DIR.mkdir(exist_ok=True)
+        lock = open(settings.RUN_DIR / 'auto_research.lock', 'w')
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            self.stderr.write('another auto_research is already running — skipping this run')
+            return
         cfg = AgentConfig.get()
         rows = Strategy.objects.filter(enabled=True) if o['enabled_only'] else Strategy.objects.all()
         if o['market']:

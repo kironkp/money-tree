@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Read the news every hour: pull headlines that touch something we trade,
+       classify the novel ones with a small model (~$0.001 each, capped at 40 a
+       run), and score older stories against what price actually did. Runs
+       around the clock because crypto does. -->
+  <key>Label</key><string>com.kiron.moneytree.news</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/nice</string><string>-n</string><string>5</string>
+    <string>/Users/kironkp/.local/bin/pipenv</string>
+    <string>run</string><string>python</string><string>manage.py</string><string>read_news</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
+  <key>StartInterval</key><integer>3600</integer>
+  <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/news.log</string>
+  <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/news.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/kironkp/.local/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>

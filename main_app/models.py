@@ -178,6 +178,8 @@ class AgentConfig(models.Model):
     forex_min_reward_to_cost = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('2'))
     forex_slippage_bps = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.3'))
     fee_bps_forex = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('0.5'))
+    # Read the news hourly, and stand aside during a confirmed repricing.
+    news_enabled = models.BooleanField(default=True)
     # Live pulse: seconds between price checks while waiting for the next bar (0 = off).
     pulse_seconds = models.PositiveIntegerField(default=10)
     starting_cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))
@@ -821,6 +823,68 @@ class ApiUsage(models.Model):
 
     def __str__(self):
         return f'{self.project}/{self.provider} {self.model} ${self.cost_usd}'
+
+
+class NewsItem(models.Model):
+    """One headline, and what a cheap model made of it.
+
+    The bots read the news hourly. This table is the memory of that reading:
+    the raw headline, the structured event extracted from it, and — filled in
+    later — what the price actually did next. The last part is the point. An
+    event type only earns the right to drive a trade once its logged outcomes
+    say it has edge, so every row is evidence, not a signal.
+    """
+    KINDS = ('listing', 'earnings', 'guidance', 'mna', 'regulatory', 'macro', 'product',
+             'partnership', 'legal', 'security', 'personnel', 'analyst', 'rumour', 'other')
+    DIRECTIONS = ('bullish', 'bearish', 'neutral')
+
+    # --- the headline as published ---
+    external_id = models.CharField(max_length=64, unique=True)   # provider id: dedupes re-polls
+    source = models.CharField(max_length=40, default='alpaca')
+    published_at = models.DateTimeField()
+    headline = models.CharField(max_length=500)
+    summary = models.TextField(blank=True)
+    url = models.URLField(max_length=500, blank=True)
+    symbols = models.JSONField(default=list, blank=True)
+    market = models.CharField(max_length=8, choices=Market.choices, blank=True)
+
+    # --- what the classifier made of it ---
+    classified_at = models.DateTimeField(null=True, blank=True)
+    kind = models.CharField(max_length=16, blank=True)
+    direction = models.CharField(max_length=8, blank=True)
+    magnitude = models.PositiveSmallIntegerField(default=0)   # 1 routine … 5 market-moving
+    confidence = models.PositiveSmallIntegerField(default=0)  # 1 rumour … 5 confirmed by the subject
+    horizon = models.CharField(max_length=12, blank=True)     # minutes, hours, days, weeks
+    novel = models.BooleanField(default=True)                 # false = same story, different outlet
+    duplicate_of = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL,
+                                     related_name='duplicates')
+    rationale = models.CharField(max_length=400, blank=True)
+    tradable = models.BooleanField(default=False)             # is any tagged symbol one we can trade
+    model = models.CharField(max_length=60, blank=True)
+
+    # --- what happened next, so the claim can be scored ---
+    price_at_news = models.JSONField(default=dict, blank=True)   # symbol -> price when read
+    outcome = models.JSONField(default=dict, blank=True)         # symbol -> {'60m': pct, '1d': pct}
+    outcome_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-published_at']
+        indexes = [
+            models.Index(fields=['-published_at']),
+            models.Index(fields=['market', '-published_at']),
+            models.Index(fields=['kind', 'direction']),
+        ]
+
+    def __str__(self):
+        return f'{self.published_at:%m-%d %H:%M} {self.headline[:60]}'
+
+    @property
+    def is_significant(self) -> bool:
+        """Worth a human's attention: a confirmed, sizeable, directional event."""
+        return (self.magnitude >= 4 and self.confidence >= 4
+                and self.direction in ('bullish', 'bearish') and self.novel)
 
 
 class FeedEvent(models.Model):

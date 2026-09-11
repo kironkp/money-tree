@@ -21,12 +21,15 @@ from main_app.models import (Account, AgentConfig, AgentRun, Experiment, Journal
                              Signal, Strategy, SymbolState, Trade)
 
 from .data import calendar as cal
+from .news import digest as news_digest
 from .promotion import baseline_metrics, live_stats, qualification_assessment
 from .spend import day_spend, projected_monthly, range_spend
 from .journal import DRIFT_MIN_TRADES as DRIFT_TRADES
 from .risk import RiskConfig
 
-LANES = (Market.STOCKS, Market.CRYPTO, Market.DEGEN, Market.FOREX)
+# Order the owner reads them in. Forex leads because it was the section he had to
+# scroll past everything else to reach.
+LANES = (Market.FOREX, Market.DEGEN, Market.CRYPTO, Market.STOCKS)
 LANE_TITLE = {Market.STOCKS: 'Stocks', Market.CRYPTO: 'Crypto', Market.DEGEN: 'Degen', Market.FOREX: 'Forex'}
 
 
@@ -150,6 +153,23 @@ def lane_learned(account: Account, d: date, cfg: AgentConfig) -> list[dict]:
                         'detail': 'Strategies: ' + ', '.join(f'{r.key} ({r.qualification})' for r in rows)})
         else:
             out.append({'source': 'setup', 'text': 'no signals were generated', 'detail': ''})
+
+    # 4b. The news the lane read today.
+    try:
+        d = news_digest(account.market, hours=24)
+    except Exception:
+        d = None
+    if d and d.total:
+        mix = ', '.join(f'{k} {v}' for k, v in sorted(d.counts.items(), key=lambda kv: -kv[1]))
+        out.append({'source': 'news', 'text': f'read {d.total} headline(s) about this lane ({mix})',
+                    'detail': 'Headlines are classified hourly and scored against price a day later, so an '
+                              'event type has to prove itself before it is allowed to influence anything.'})
+        for item in d.significant:
+            out.append({'source': 'news',
+                        'text': f'{item.kind} · {item.direction} · {", ".join(item.symbols)}: {item.headline[:130]}',
+                        'detail': item.rationale[:240]})
+    elif d is not None and account.market in (Market.STOCKS, Market.CRYPTO):
+        out.append({'source': 'news', 'text': 'no headlines touching this lane in the last 24 h', 'detail': ''})
 
     # 5. Evidence: live results versus the backtest that justified the parameters.
     for row in enabled:
@@ -286,6 +306,13 @@ def lane_improve(account: Account, d: date, cfg: AgentConfig, learned: list[dict
             out.append(f'{row.key} is quarantined ({qa.get("reason", "")[:120]}) and will not trade until new '
                        f'out-of-sample evidence clears the gate.')
 
+    news_items = [i for i in learned if i['source'] == 'news']
+    if any('· bullish ·' in i['text'] or '· bearish ·' in i['text'] for i in news_items):
+        out.append('A confirmed, market-moving story ran on a symbol in this lane today. The agent does not '
+                   'trade on headlines: the outcome of every classified story is scored against price 24 hours '
+                   'later, and an event type only earns influence once that record shows it predicts anything. '
+                   'Run `manage.py read_news --scoreboard` to see whether any type has yet.')
+
     if not out:
         out.append('Nothing changed today that warrants a parameter change; the lane keeps its current version and '
                    'the nightly walk-forward re-tests it against the newest bars.')
@@ -328,6 +355,12 @@ def render_text(rep: dict) -> str:
     L.append(f"Today across all four lanes: {t['net']:+,.2f} on {t['trades']} trades")
     L.append(f"Equity {t['equity']:,.2f} of {t['starting_cash']:,.2f} seeded ({t['total_pnl']:+,.2f} lifetime)")
     L.append('')
+    L.append('  ' + '  '.join(f"{lane['title'].upper():<9}" for lane in rep['lanes']))
+    L.append('  ' + '  '.join(f"{lane['pnl']['net']:>+9,.2f}" for lane in rep['lanes']))
+    L.append('  ' + '  '.join(
+        f"{str(lane['pnl']['trades']) + (' trade' if lane['pnl']['trades'] == 1 else ' trades'):<9}"
+        for lane in rep['lanes']))
+    L.append('')
     for lane in rep['lanes']:
         p = lane['pnl']
         L.append(f"── {lane['title'].upper()} " + '─' * (56 - len(lane['title'])))
@@ -366,50 +399,110 @@ def render_text(rep: dict) -> str:
 
 
 def render_html(rep: dict) -> str:
+    """Email HTML.
+
+    Tables and inline styles, not flexbox and a stylesheet: Gmail strips most
+    embedded CSS and does not lay out with flex, so a grid built the modern way
+    collapses into one column per lane and the scoreboard stops being a
+    scoreboard. The point of the top block is that all four lanes are readable
+    before any scrolling.
+    """
     t = rep['total']
+    INK, DIM, FAINT = '#e7eae8', '#9aa8a0', '#6f7d75'
+    BG, CARD, EDGE = '#0f1211', '#151b18', '#242d28'
+    UP, DOWN, FLAT = '#4ade80', '#f87171', '#9ca3af'
 
-    def money(v):
-        cls = 'up' if v > 0 else ('down' if v < 0 else 'flat')
-        return f'<span class="{cls}">{v:+,.2f}</span>'
+    def tone(v):
+        return UP if v > 0 else (DOWN if v < 0 else FLAT)
 
-    P = ['<div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;max-width:720px;margin:0 auto;'
-         'background:#0f1211;color:#e7eae8;padding:24px">',
-         '<style>.up{color:#4ade80}.down{color:#f87171}.flat{color:#9ca3af}'
-         'h2{border-bottom:1px solid #2a2f2c;padding-bottom:6px;margin-top:28px}'
-         'li{margin:4px 0;line-height:1.45}.src{color:#7dd3a0;font-size:12px;text-transform:uppercase;letter-spacing:.4px}'
-         '.det{color:#9ca3af;font-size:13px;margin-left:4px}</style>',
-         f'<h1 style="margin:0">🌳 MoneyTree · {rep["date"]:%A %B %-d}</h1>',
-         f'<p style="font-size:20px;margin:8px 0">Today: {money(t["net"])} on {t["trades"]} trades</p>',
-         f'<p class="det">Equity {t["equity"]:,.2f} of {t["starting_cash"]:,.2f} seeded · lifetime {money(t["total_pnl"])}</p>']
-    for lane in rep['lanes']:
-        p = lane['pnl']
-        P.append(f'<h2>{lane["title"]} &nbsp; {money(p["net"])} <span class="det">on {p["trades"]} trades · '
-                 f'equity {p["equity"]:,.2f} · lifetime {money(p["total_pnl"])}</span></h2>')
-        if p['trades']:
-            P.append(f'<p class="det">{p["win_rate"]:.0f}% won · fees {p["fees"]:,.2f} · '
-                     f'expectancy {p["expectancy"]:+.2f}/trade · exits: '
-                     + ', '.join(f'{k} {v}' for k, v in p['exit_reasons'].most_common()) + '</p>')
-        P.append('<p><strong>What it learned</strong></p><ul>')
+    def money(v, size=13, weight=600):
+        return (f'<span style="color:{tone(v)};font-size:{size}px;font-weight:{weight};'
+                f'font-variant-numeric:tabular-nums">{v:+,.2f}</span>')
+
+    P = [f'<div style="margin:0;padding:20px 12px;background:{BG};'
+         f'font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Helvetica,Arial,sans-serif;color:{INK}">',
+         f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+         f'style="max-width:640px;margin:0 auto">',
+         '<tr><td>',
+         f'<div style="font-size:19px;font-weight:700">🌳 MoneyTree</div>',
+         f'<div style="color:{DIM};font-size:13px;margin-top:2px">{rep["date"]:%A %B %-d, %Y}</div>',
+         f'<div style="margin:14px 0 4px;font-size:28px;font-weight:700;color:{tone(t["net"])};'
+         f'font-variant-numeric:tabular-nums">{t["net"]:+,.2f}</div>',
+         f'<div style="color:{DIM};font-size:12px">across all four lanes on {t["trades"]} trade'
+         f'{"" if t["trades"] == 1 else "s"} · equity {t["equity"]:,.2f} of {t["starting_cash"]:,.0f} seeded '
+         f'· lifetime {t["total_pnl"]:+,.2f}</div>',
+         '</td></tr>']
+
+    # The scoreboard: two rows of two, so four lanes fit a phone without scrolling.
+    P.append('<tr><td style="padding-top:16px">'
+             '<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">')
+    lanes = rep['lanes']
+    for i in range(0, len(lanes), 2):
+        P.append('<tr>')
+        for lane in lanes[i:i + 2]:
+            pn = lane['pnl']
+            note = (f'{pn["trades"]} trade{"" if pn["trades"] == 1 else "s"}'
+                    if pn['trades'] else ('parked' if not lane['strategies'] or
+                                          not any(r.enabled for r in lane['strategies']) else 'no trades'))
+            P.append(
+                f'<td width="50%" valign="top" style="padding:0 5px 10px 0">'
+                f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+                f'style="background:{CARD};border:1px solid {EDGE};border-radius:10px">'
+                f'<tr><td style="padding:12px 14px">'
+                f'<div style="color:{DIM};font-size:11px;letter-spacing:.06em;text-transform:uppercase">'
+                f'{lane["title"]}</div>'
+                f'<div style="margin-top:5px;font-size:22px;font-weight:700;color:{tone(pn["net"])};'
+                f'font-variant-numeric:tabular-nums">{pn["net"]:+,.2f}</div>'
+                f'<div style="color:{FAINT};font-size:11px;margin-top:3px;font-variant-numeric:tabular-nums">'
+                f'{note} · equity {pn["equity"]:,.0f}</div>'
+                f'</td></tr></table></td>')
+        P.append('</tr>')
+    P.append('</table></td></tr>')
+
+    # Then the detail, in the same order as the scoreboard.
+    for lane in lanes:
+        pn = lane['pnl']
+        P.append(f'<tr><td style="padding-top:22px">'
+                 f'<div style="border-top:1px solid {EDGE};padding-top:14px">'
+                 f'<span style="font-size:16px;font-weight:700">{lane["title"]}</span>'
+                 f'<span style="margin-left:8px">{money(pn["net"], 15)}</span>'
+                 f'<span style="color:{FAINT};font-size:11px;margin-left:8px">'
+                 f'lifetime {pn["total_pnl"]:+,.2f}</span></div>')
+        if pn['trades']:
+            P.append(f'<div style="color:{DIM};font-size:12px;margin-top:6px">'
+                     f'{pn["win_rate"]:.0f}% won · fees {pn["fees"]:,.2f} · '
+                     f'expectancy {pn["expectancy"]:+.2f}/trade · exits: '
+                     + ', '.join(f'{k} {v}' for k, v in pn['exit_reasons'].most_common()) + '</div>')
+        if pn['open_positions']:
+            P.append(f'<div style="color:{FAINT};font-size:12px;margin-top:4px">'
+                     f'{pn["open_positions"]} still open · {pn["unrealized"]:+,.2f} unrealised</div>')
+
+        P.append(f'<div style="color:{DIM};font-size:11px;letter-spacing:.06em;text-transform:uppercase;'
+                 f'margin:14px 0 6px">What it learned</div><ul style="margin:0;padding-left:18px">')
         for item in lane['learned']:
-            det = f'<div class="det">{item["detail"][:300]}</div>' if item.get('detail') else ''
-            P.append(f'<li><span class="src">{item["source"]}</span> {item["text"]}{det}</li>')
-        P.append('</ul><p><strong>How it gets better</strong></p><ul>')
-        for line in lane['improve']:
-            P.append(f'<li>{line}</li>')
+            det = (f'<div style="color:{FAINT};font-size:12px;margin-top:2px">{item["detail"][:300]}</div>'
+                   if item.get('detail') else '')
+            P.append(f'<li style="margin:0 0 7px;font-size:13px;line-height:1.45">'
+                     f'<span style="color:{UP};font-size:10px;letter-spacing:.06em;text-transform:uppercase">'
+                     f'{item["source"]}</span> {item["text"]}{det}</li>')
         P.append('</ul>')
+        P.append(f'<div style="color:{DIM};font-size:11px;letter-spacing:.06em;text-transform:uppercase;'
+                 f'margin:14px 0 6px">How it gets better</div><ul style="margin:0;padding-left:18px">')
+        for line in lane['improve']:
+            P.append(f'<li style="margin:0 0 7px;font-size:13px;line-height:1.45">{line}</li>')
+        P.append('</ul></td></tr>')
+
     sp = rep.get('spend') or {}
     mtd = sp.get('month_to_date') or {}
-    P.append(f'<h2>API spend <span class="det">today ${sp.get("total", 0):.2f} · 30 days ${mtd.get("total", 0):.2f} · '
-             f'at this rate ${sp.get("projected_monthly", 0):.2f}/month</span></h2>')
-    rows = mtd.get('by_project') or {}
-    if rows:
-        P.append('<ul>' + ''.join(
-            f'<li>{k} <span class="det">${v["cost"]:.2f} over {v["calls"]} calls</span></li>'
-            for k, v in list(rows.items())[:8]) + '</ul>')
-    else:
-        P.append('<p class="det">Nothing recorded yet — only calls that write to the ledger appear here.</p>')
-    P.append(f'<p class="det" style="margin-top:32px">Generated {rep["generated_at"].astimezone(cal.ET):%Y-%m-%d %H:%M ET}. '
-             'Fake money until it earns its stripes.</p></div>')
+    P.append(f'<tr><td style="padding-top:22px"><div style="border-top:1px solid {EDGE};padding-top:14px">'
+             f'<span style="font-size:16px;font-weight:700">API spend</span>'
+             f'<span style="color:{DIM};font-size:12px;margin-left:8px">today ${sp.get("total", 0):.2f} · '
+             f'30 days ${mtd.get("total", 0):.2f} · at this rate ${sp.get("projected_monthly", 0):.2f}/month</span>'
+             f'</div></td></tr>')
+    P.append(f'<tr><td style="padding-top:20px;color:{FAINT};font-size:11px;line-height:1.5">'
+             f'Generated {rep["generated_at"].astimezone(cal.ET):%Y-%m-%d %H:%M ET}. '
+             f'Fake money until it earns its stripes.</td></tr>')
+    P.append('</table></div>')
     return '\n'.join(P)
 
 

@@ -26,7 +26,7 @@ class AgentConfigForm(forms.ModelForm):
     class Meta:
         model = AgentConfig
         fields = [
-            'trading_enabled', 'timeframe', 'crypto_timeframe', 'degen_timeframe', 'pulse_seconds', 'starting_cash', 'risk_per_trade_pct', 'max_position_pct',
+            'trading_enabled', 'news_enabled', 'timeframe', 'crypto_timeframe', 'degen_timeframe', 'pulse_seconds', 'starting_cash', 'risk_per_trade_pct', 'max_position_pct',
             'max_open_positions', 'max_daily_loss_pct', 'max_trades_per_day', 'no_entries_before_close_min',
             'flat_before_close_min', 'max_hold_minutes', 'slippage_bps', 'fee_bps_stock',
             'fee_bps_crypto', 'liquidity_cap_pct', 'min_reward_to_cost', 'live_confirm_orders', 'live_confirm_minutes',

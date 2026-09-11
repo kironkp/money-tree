@@ -132,7 +132,7 @@ class PagesRenderWithData(TestCase):
 
     def test_settings_saves_and_live_mode_needs_the_phrase(self):
         r = self.client.post(reverse('settings'), {
-            'trading_enabled': 'on', 'timeframe': '5Min', 'crypto_timeframe': '1Hour', 'starting_cash': '10000', 'risk_per_trade_pct': '0.75',
+            'trading_enabled': 'on', 'news_enabled': 'on', 'timeframe': '5Min', 'crypto_timeframe': '1Hour', 'starting_cash': '10000', 'risk_per_trade_pct': '0.75',
             'max_position_pct': '20', 'max_open_positions': '3', 'max_daily_loss_pct': '2', 'max_trades_per_day': '10',
             'no_entries_before_close_min': '30', 'flat_before_close_min': '5', 'max_hold_minutes': '240',
             'slippage_bps': '3', 'fee_bps_stock': '0.5', 'fee_bps_crypto': '25', 'liquidity_cap_pct': '1', 'min_reward_to_cost': '3',

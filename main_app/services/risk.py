@@ -99,8 +99,11 @@ class DayState:
 
 
 class RiskManager:
-    def __init__(self, cfg: RiskConfig, qty_increments: dict | None = None):
+    def __init__(self, cfg: RiskConfig, qty_increments: dict | None = None, news_aware: bool = False):
         self.cfg = cfg
+        # Live lanes consult the news; backtests and replays must not, or the
+        # past would be judged with information the past did not have.
+        self.news_aware = news_aware
         self.qty_increments = qty_increments or {}
         self.day = DayState()
         self.kill_switch = False
@@ -160,6 +163,16 @@ class RiskManager:
             return Decision(False, reason='crypto cannot be shorted')
         if sig.symbol in positions and positions[sig.symbol].qty != 0:
             return Decision(False, reason='already in a position')
+        if self.news_aware:
+            # Confirmed, market-moving story on this symbol in the last 45 min:
+            # stand aside rather than pay spread into a repricing.
+            try:
+                from .news import entry_block
+                why = entry_block(sig.symbol)
+            except Exception:
+                why = ''
+            if why:
+                return Decision(False, reason=why)
         if sig.symbol in (pending_symbols or set()):
             return Decision(False, reason='an entry is already pending for this symbol')
         live = [p for p in positions.values() if p.qty != 0]

@@ -142,7 +142,8 @@ class Agent:
             allocations[row.key] = float(row.allocation_pct)
         self.strategy_snapshot = self._strategy_snapshot()
         risk_cfg = RiskConfig.from_model(self.cfg, self.market)
-        self.risk = RiskManager(risk_cfg, self.qty_increments)
+        self.risk = RiskManager(risk_cfg, self.qty_increments,
+                                news_aware=(self.mode != Mode.REPLAY and self.cfg.news_enabled))
         self.risk.kill_switch = self.cfg.kill_switch
         self.risk.trading_enabled = self.cfg.trading_enabled
         if self.mode != Mode.REPLAY:

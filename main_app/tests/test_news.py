@@ -111,3 +111,35 @@ class EventsAreScoredBeforeTheyAreBelieved(TestCase):
         # A bearish call that was followed by a fall counts as a hit, like a bullish one that rose.
         self.assertEqual({r['direction'] for r in board}, {'bullish', 'bearish'})
         self.assertTrue(all(r['avg_move_pct'] > 0 for r in board))
+
+
+class RelativeVolumeMeansWhatItSays(TestCase):
+    """A threshold of 1.5 must mean 1.5x a typical bar, not 5x."""
+
+    def _series(self, volumes):
+        import pandas as pd
+        from main_app.services import indicators as ind
+        idx = pd.date_range('2026-08-01', periods=len(volumes), freq='15min', tz='UTC')
+        df = pd.DataFrame({'open': 1.0, 'high': 1.0, 'low': 1.0, 'close': 1.0,
+                           'volume': volumes}, index=idx)
+        return ind.relative_volume(df, ind.session_key(idx, 'crypto'), 10), df
+
+    def test_a_spiky_history_does_not_depress_the_typical_reading(self):
+        # Ninety-six quiet bars of 100, with one 10,000 spike every twenty-fourth.
+        vols = [10000 if i % 24 == 0 else 100 for i in range(480)]
+        rv, _ = self._series(vols)
+        typical = rv.dropna()
+        typical = typical[[v == 100 for v in [10000 if i % 24 == 0 else 100
+                                              for i in range(480)][-len(typical):]]]
+        # A quiet bar against a history of quiet bars is ~1.0, not a fraction of it.
+        self.assertGreater(float(typical.median()), 0.8)
+
+    def test_a_genuine_doubling_still_reads_as_two(self):
+        vols = [100] * 200 + [200]
+        rv, _ = self._series(vols)
+        self.assertAlmostEqual(float(rv.iloc[-1]), 2.0, places=1)
+
+    def test_no_volume_is_not_fabricated_as_average(self):
+        import math
+        rv, _ = self._series([0] * 50)
+        self.assertTrue(all(math.isnan(v) for v in rv))

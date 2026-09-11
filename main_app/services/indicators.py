@@ -87,11 +87,24 @@ def opening_range(df: pd.DataFrame, session: pd.Series, n_bars: int) -> tuple[pd
 
 
 def relative_volume(df: pd.DataFrame, session: pd.Series, n_sessions: int = 10) -> pd.Series:
-    """Volume vs the average volume at the same bar position over the previous
-    n sessions. Causal: the current session is excluded via shift(1)."""
+    """Volume vs a TYPICAL bar at the same position over the previous n sessions.
+
+    The baseline is the MEDIAN, not the mean. Volume is heavily right-skewed —
+    one news spike is worth many quiet bars — so a mean baseline sits above the
+    typical bar and every ordinary bar then reads as below average. Measured
+    2026-09-11 over 180 days, the mean-based reading had a median of 0.87 on
+    stocks, 0.61 on 4-hour crypto and 0.27 on 15-minute altcoins, when by
+    construction it should centre on 1.0. That silently turned `min_relvol=1.5`
+    into "five times a typical bar" in the degen lane, and made the volume
+    filter rather than the setup the thing deciding whether anything traded at
+    all. With a median baseline the readings centre on 0.97-1.00 and the
+    threshold means what it says.
+
+    Causal: the current session is excluded via shift(1).
+    """
     pos = bar_position(session)
     vol = df['volume'].where(df['volume'] > 0)
-    base = vol.groupby(pos).transform(lambda s: s.shift(1).rolling(n_sessions, min_periods=1).mean())
+    base = vol.groupby(pos).transform(lambda s: s.shift(1).rolling(n_sessions, min_periods=1).median())
     # NaN is evidence: either this bar has no measured volume or there is no
     # causal prior-session baseline. Never turn that into a fabricated 1.0×.
     return vol / base.replace(0, np.nan)

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- One web-searching prompt per lane, hourly: "what is going on out there?"
+       Measured at about $0.011 a lane including the search fee, so four lanes
+       an hour is roughly $1 a day. Change StartInterval to 14400 for every four
+       hours (~$8/month) if that is too rich. -->
+  <key>Label</key><string>com.kiron.moneytree.brief</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/nice</string><string>-n</string><string>5</string>
+    <string>/Users/kironkp/.local/bin/pipenv</string>
+    <string>run</string><string>python</string><string>manage.py</string><string>brief</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
+  <key>StartInterval</key><integer>3600</integer>
+  <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/brief.log</string>
+  <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/brief.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/kironkp/.local/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>

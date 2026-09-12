@@ -22,6 +22,7 @@ yfinance = "*"
 anthropic = "*"
 django-allauth = {extras = ["socialaccount", "mfa"], version = ">=65.19.0"}
 cryptography = "==43.0.3"
+openai = "*"
 
 [dev-packages]
 

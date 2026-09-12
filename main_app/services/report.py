@@ -21,6 +21,7 @@ from main_app.models import (Account, AgentConfig, AgentRun, Experiment, Journal
                              Signal, Strategy, SymbolState, Trade)
 
 from .data import calendar as cal
+from .briefing import latest as latest_briefing
 from .news import digest as news_digest
 from .promotion import baseline_metrics, live_stats, qualification_assessment
 from .spend import day_spend, projected_monthly, range_spend
@@ -170,6 +171,16 @@ def lane_learned(account: Account, d: date, cfg: AgentConfig) -> list[dict]:
                         'detail': item.rationale[:240]})
     elif d is not None and account.market in (Market.STOCKS, Market.CRYPTO):
         out.append({'source': 'news', 'text': 'no headlines touching this lane in the last 24 h', 'detail': ''})
+
+    # 4c. The wide view: what the searching briefing found happening in this lane.
+    try:
+        brief = latest_briefing(account.market, within_hours=14)
+    except Exception:
+        brief = None
+    if brief is not None:
+        out.append({'source': 'world',
+                    'text': (brief.headline or 'nothing significant') + ('' if not brief.quiet else ' (quiet)'),
+                    'detail': ' · '.join(i['text'][:150] for i in (brief.items or [])[:3])})
 
     # 5. Evidence: live results versus the backtest that justified the parameters.
     for row in enabled:

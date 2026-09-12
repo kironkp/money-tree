@@ -143,3 +143,45 @@ class RelativeVolumeMeansWhatItSays(TestCase):
         import math
         rv, _ = self._series([0] * 50)
         self.assertTrue(all(math.isnan(v) for v in rv))
+
+
+class BriefingsAreParsedAndCapped(TestCase):
+    """The lane briefing: parse what the model returns, never lose a paid call."""
+
+    def test_json_survives_fences_and_surrounding_prose(self):
+        from main_app.services.briefing import _json_from
+        payload = '{"headline": "x", "quiet": false, "items": []}'
+        for wrapped in (payload,
+                        f'```json\n{payload}\n```',
+                        f'Here is the answer:\n{payload}\nHope that helps.'):
+            self.assertEqual(_json_from(wrapped)['headline'], 'x')
+
+    def test_unparseable_output_raises_rather_than_guessing(self):
+        from main_app.services.briefing import _json_from
+        with self.assertRaises(ValueError):
+            _json_from('no object here at all')
+
+    def test_a_lane_with_no_watchlist_is_not_briefed(self):
+        from main_app.services.briefing import brief_all
+        # No instruments seeded, so nothing is worth paying to research.
+        self.assertEqual(brief_all(), [])
+
+    def test_the_daily_ceiling_stops_a_runaway(self):
+        from main_app.models import Briefing
+        from main_app.services.briefing import MAX_PER_DAY, brief_all
+        Briefing.objects.bulk_create([Briefing(market='stocks', headline=f'x{i}')
+                                      for i in range(MAX_PER_DAY)])
+        self.assertEqual(brief_all(['stocks']), [])
+
+    def test_latest_ignores_failed_and_stale_briefings(self):
+        from datetime import timedelta
+        from django.utils import timezone
+        from main_app.models import Briefing
+        from main_app.services.briefing import latest
+        Briefing.objects.create(market='crypto', error='boom', headline='should be ignored')
+        self.assertIsNone(latest('crypto'))
+        old = Briefing.objects.create(market='crypto', headline='stale')
+        Briefing.objects.filter(pk=old.pk).update(ts=timezone.now() - timedelta(hours=48))
+        self.assertIsNone(latest('crypto', within_hours=12))
+        Briefing.objects.create(market='crypto', headline='fresh')
+        self.assertEqual(latest('crypto').headline, 'fresh')

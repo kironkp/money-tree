@@ -887,6 +887,32 @@ class NewsItem(models.Model):
                 and self.direction in ('bullish', 'bearish') and self.novel)
 
 
+class Briefing(models.Model):
+    """One lane's answer to 'what is going on out there right now'.
+
+    A single web-searching prompt per lane, on a schedule. This is the wide
+    view — macro, regulation, the story everyone is talking about — which a
+    symbol-tagged headline feed structurally cannot give you, because the
+    stories that move a whole lane are often tagged to no ticker at all.
+    """
+    market = models.CharField(max_length=8, choices=Market.choices)
+    ts = models.DateTimeField(default=timezone.now)
+    headline = models.CharField(max_length=300, blank=True)   # the one-line read
+    body = models.TextField(blank=True)                       # the bullets, as written
+    items = models.JSONField(default=list, blank=True)        # [{text, url}]
+    quiet = models.BooleanField(default=False)                # nothing significant happened
+    model = models.CharField(max_length=60, blank=True)
+    cost_usd = models.DecimalField(max_digits=10, decimal_places=5, default=D0)
+    error = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ['-ts']
+        indexes = [models.Index(fields=['market', '-ts'])]
+
+    def __str__(self):
+        return f'{self.market} {self.ts:%m-%d %H:%M} {self.headline[:60]}'
+
+
 class FeedEvent(models.Model):
     """The running commentary: what the agent sees, decides and does. One row
     per line; the dashboard streams them. Pruned after two weeks."""

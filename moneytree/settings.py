@@ -252,6 +252,9 @@ ALPACA_SECRET_KEY = os.getenv('ALPACA_SECRET_KEY', '')
 ALPACA_LIVE_API_KEY = os.getenv('ALPACA_LIVE_API_KEY', '')
 ALPACA_LIVE_SECRET_KEY = os.getenv('ALPACA_LIVE_SECRET_KEY', '')
 ALPACA_ENABLED = bool(ALPACA_API_KEY and ALPACA_SECRET_KEY)
+
+# Web-search lane briefings (services/briefing.py).
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 # Interlocks for real money. Both must be true, plus AgentConfig.mode == live.
 LIVE_TRADING_ARMED = os.getenv('LIVE_TRADING_ARMED', '0') == '1'
 LIVE_FLATTEN_ON_EXIT = os.getenv('LIVE_FLATTEN_ON_EXIT', '0') == '1'

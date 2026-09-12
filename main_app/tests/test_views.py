@@ -336,3 +336,37 @@ class PortfolioBacktestRunsAllEnabledStrategies(TestCase):
         run = BacktestRun.objects.get(strategy_key='portfolio')
         self.assertEqual(run.status, 'done')
         self.assertGreaterEqual(len(run.metrics['per_strategy']), 1)
+
+
+class TailnetOriginsAreTrustedWithTheirPort(TestCase):
+    """A wildcard origin is matched against the netloc INCLUDING the port.
+
+    'https://*.ts.net' does not cover 'https://host.ts.net:8446', which is the
+    address the phone actually uses through the TLS proxy — every POST from the
+    phone failed CSRF until the ported form was trusted too.
+    """
+
+    def test_wildcard_without_a_port_does_not_cover_a_ported_origin(self):
+        from django.utils.http import is_same_domain
+        netloc = 'kironkps-macbook-pro-2.taildfcf4.ts.net:8446'
+        self.assertFalse(is_same_domain(netloc, '.ts.net'))
+        self.assertTrue(is_same_domain(netloc, '.ts.net:8446'))
+
+    def test_the_settings_trust_both_forms(self):
+        from django.conf import settings
+        origins = settings.CSRF_TRUSTED_ORIGINS
+        self.assertIn('https://*.ts.net', origins)
+        self.assertTrue(any(o.startswith('https://*.ts.net:') for o in origins),
+                        'the ported tailnet origin must be trusted or the phone cannot POST')
+
+    def test_a_post_from_the_tailnet_origin_is_accepted(self):
+        from django.test import Client
+        host = 'kironkps-macbook-pro-2.taildfcf4.ts.net:8446'
+        c = Client(enforce_csrf_checks=True, HTTP_HOST=host)
+        page = c.get('/accounts/login/')
+        self.assertEqual(page.status_code, 200)
+        token = page.cookies['csrftoken'].value
+        r = c.post('/accounts/login/', {'csrfmiddlewaretoken': token, 'login': 'x@example.com',
+                                        'password': 'wrong'},
+                   HTTP_ORIGIN=f'https://{host}', HTTP_REFERER=f'https://{host}/accounts/login/')
+        self.assertNotEqual(r.status_code, 403, 'CSRF rejected a POST from the tailnet origin')

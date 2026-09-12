@@ -52,7 +52,17 @@ if 'ON_HEROKU' in os.environ:
     CSRF_TRUSTED_ORIGINS = ['https://*.herokuapp.com']
 elif DEBUG:
     # Phone testing through the Tailscale TLS proxy or a cloudflared quick tunnel.
-    CSRF_TRUSTED_ORIGINS = ['https://*.ts.net', 'https://*.trycloudflare.com']
+    #
+    # The :8446 entry is not redundant. Django matches a wildcard origin against
+    # the whole netloc INCLUDING the port, so 'https://*.ts.net' matches
+    # https://host.ts.net but never https://host.ts.net:8446, and every POST
+    # from the phone failed CSRF with "Origin checking failed". The TLS proxy is
+    # a raw TCP pump and cannot add X-Forwarded-Proto, so Django also cannot
+    # infer the request was secure — the origin has to be trusted explicitly.
+    CSRF_TRUSTED_ORIGINS = [
+        'https://*.ts.net', f'https://*.ts.net:{os.getenv("TLS_PROXY_PORT", "8446")}',
+        'https://*.trycloudflare.com',
+    ]
 else:
     CSRF_TRUSTED_ORIGINS = []
 

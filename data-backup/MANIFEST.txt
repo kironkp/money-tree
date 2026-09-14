@@ -1,7 +1,7 @@
 MoneyTree data backup
-taken       2026-09-13 02:00:07 PDT
-database    325103616 bytes
-ledger.sql  3964592 bytes
+taken       2026-09-14 02:00:04 PDT
+database    325873664 bytes
+ledger.sql  4385339 bytes
 
 accounts (mode · market · equity · trades)
   paper · crypto · 10000.00 · 0
@@ -9,10 +9,10 @@ accounts (mode · market · equity · trades)
   sim · crypto · 9998.22 · 2
   paper · degen · 10000.00 · 0
   replay · degen · 10000.00 · 0
-  sim · degen · 6825.49 · 231
+  sim · degen · 6711.73 · 248
   paper · forex · 10000.00 · 0
   replay · forex · 10000.00 · 0
-  sim · forex · 9945.79 · 54
+  sim · forex · 9741.91 · 60
   paper · stocks · 10000.00 · 0
   replay · stocks · 10000.00 · 0
   sim · stocks · 9897.89 · 57
@@ -20,26 +20,26 @@ accounts (mode · market · equity · trades)
 rows backed up
   main_app_account             12
   main_app_agentconfig         1
-  main_app_agentrun            61
-  main_app_apiusage            71
-  main_app_experiment          75
-  main_app_fill                688
+  main_app_agentrun            66
+  main_app_apiusage            95
+  main_app_experiment          84
+  main_app_fill                734
   main_app_instrument          27
-  main_app_journalentry        98
+  main_app_journalentry        111
   main_app_marketsession       0
-  main_app_order               688
+  main_app_order               734
   main_app_position            0
-  main_app_riskevent           60
-  main_app_signal              724
+  main_app_riskevent           68
+  main_app_signal              833
   main_app_signupinvite        0
   main_app_strategy            9
-  main_app_trade               344
-  main_app_tradecard           344
-  main_app_equitysnapshot      3138
+  main_app_trade               367
+  main_app_tradecard           367
+  main_app_equitysnapshot      3287
 
 not in this dump (regenerable)
-  main_app_bar                 916709
-  main_app_feedevent           151527
+  main_app_bar                 918039
+  main_app_feedevent           141918
   main_app_symbolstate         36
-  main_app_backtestrun         570
+  main_app_backtestrun         626
   main_app_backtesttrade       4707

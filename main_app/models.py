@@ -145,16 +145,20 @@ class AgentConfig(models.Model):
     # trip: the fee is larger than the move the trade is trying to capture, so no
     # parameter set can win. At 15Min the same measurement is 1.4-2.3x.
     degen_timeframe = models.CharField(max_length=8, default='15Min')
-    degen_risk_per_trade_pct = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal('3'))
-    degen_max_position_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('25'))
+    # These were once deliberately loose — a sandbox to watch. That produced the
+    # loosest settings in the app, on the most expensive venue it trades, applied
+    # to the lane that went on to lose a third of its capital at a 14% win rate.
+    # Now at parity with every other lane; the looseness was never the edge.
+    degen_risk_per_trade_pct = models.DecimalField(max_digits=6, decimal_places=3, default=Decimal('0.5'))
+    degen_max_position_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('20'))
     degen_max_open_positions = models.PositiveIntegerField(default=4)
-    degen_max_daily_loss_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('10'))
-    degen_max_trades_per_day = models.PositiveIntegerField(default=60)
+    degen_max_daily_loss_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('2'))
+    degen_max_trades_per_day = models.PositiveIntegerField(default=12)
     degen_max_hold_minutes = models.PositiveIntegerField(default=180)
     # Altcoins move together: 121 of the first 165 degen trades were stacked 3+
     # deep in the SAME direction and carried $1,625 of the lane's $2,210 loss.
     degen_max_directional_exposure_pct = models.DecimalField(max_digits=7, decimal_places=2, default=Decimal('50'))
-    degen_min_reward_to_cost = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('1.5'))
+    degen_min_reward_to_cost = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('3'))
     # The forex lane: USD-quoted majors on 5-minute bars, 24/5. Forex is traded
     # on margin, so a position may exceed the account (leverage) and the cost
     # model is a spread, not a commission: fees in bps of notional, slippage in

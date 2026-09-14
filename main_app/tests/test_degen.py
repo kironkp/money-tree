@@ -28,15 +28,22 @@ class BurstStrategyFiresOnSharpMoves(SimpleTestCase):
 
 
 class DegenRiskOverrides(TestCase):
-    def test_degen_lane_uses_its_own_limits(self):
+    def test_degen_lane_is_no_looser_than_the_others(self):
+        """Degen was once the deliberately loose sandbox. It then lost a third of
+        its capital at a 14% win rate, so the loosest settings in the app sat on
+        the worst lane and on the most expensive venue. Risk is now at parity,
+        and the cost gate is at least as strict, because altcoin fees are the
+        highest we pay."""
         from main_app.models import AgentConfig
         cfg = AgentConfig.get()
         base = RiskConfig.from_model(cfg, 'stocks')
         degen = RiskConfig.from_model(cfg, 'degen')
-        self.assertEqual(base.risk_per_trade_pct, 0.5)
-        self.assertEqual(degen.risk_per_trade_pct, 3.0)
-        self.assertEqual(degen.max_daily_loss_pct, 10.0)
-        self.assertLess(degen.min_reward_to_cost, base.min_reward_to_cost)
+        self.assertEqual(degen.risk_per_trade_pct, base.risk_per_trade_pct)
+        self.assertEqual(degen.max_daily_loss_pct, base.max_daily_loss_pct)
+        self.assertLessEqual(degen.max_trades_per_day, base.max_trades_per_day)
+        self.assertGreaterEqual(degen.min_reward_to_cost, base.min_reward_to_cost)
+        # It still has its own knobs — parity is a choice, not a merge.
+        self.assertEqual(degen.max_hold_minutes, int(cfg.degen_max_hold_minutes))
 
     def test_sub_cent_prices_survive_the_ledger(self):
         from main_app.models import Account, Instrument, Position

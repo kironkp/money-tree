@@ -7,3 +7,4 @@ from .journal import *  # noqa: F401,F403
 from .settings_views import *  # noqa: F401,F403
 from .feed import *  # noqa: F401,F403
 from .spend_views import *  # noqa: F401,F403
+from .news_agent_views import *  # noqa: F401,F403

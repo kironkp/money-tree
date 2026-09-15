@@ -42,6 +42,7 @@
           <li><a href="{% url 'feed' %}" {% if request.resolver_match.url_name == 'feed' %}class="active"{% endif %}>Feed</a></li>
           <li><a href="{% url 'replay' %}" {% if request.resolver_match.url_name == 'replay' %}class="active"{% endif %}>Replay</a></li>
           <li><a href="{% url 'data-index' %}" {% if 'data' in request.resolver_match.url_name or 'instrument' in request.resolver_match.url_name %}class="active"{% endif %}>Data</a></li>
+          <li><a href="{% url 'news-agent' %}" {% if 'news-agent' in request.resolver_match.url_name %}class="active"{% endif %}>News Agent</a></li>
           <li><a href="{% url 'journal-list' %}" {% if 'journal' in request.resolver_match.url_name %}class="active"{% endif %}>Journal</a></li>
           <li><a href="{% url 'settings' %}" {% if request.resolver_match.url_name == 'settings' %}class="active"{% endif %}>Settings</a></li>
         </ul>
@@ -75,6 +76,7 @@
         <li><a href="{% url 'feed' %}">Feed</a></li>
         <li><a href="{% url 'replay' %}">Replay</a></li>
         <li><a href="{% url 'data-index' %}">Data</a></li>
+        <li><a href="{% url 'news-agent' %}">News Agent</a></li>
         <li><a href="{% url 'journal-list' %}">Journal</a></li>
         <li><a href="{% url 'settings' %}">Settings</a></li>
       </ul>

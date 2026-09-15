@@ -24,8 +24,14 @@ class BacktestsAreIntradayAndBalanced(SimpleTestCase):
                             asset_classes=self.ac)
         return run_backtest(spec, self.frames)
 
+    # news_catalyst acts on verdicts written in the present, so it is LIVE ONLY and
+    # must produce nothing on history — see test_a_live_only_strategy_is_silent below.
+    LIVE_ONLY = {'news_catalyst'}
+
     def test_every_strategy_runs_and_keeps_the_equity_identity(self):
         for key in STRATEGIES:
+            if key in self.LIVE_ONLY:
+                continue
             r = self._run(key, {'min_relvol': 0.0} if key != 'vwap_reversion' else {})
             self.assertGreater(r.metrics['trades'], 0, key)
             self.assertAlmostEqual(r.equity[-1][3], 10000 + sum(t.pnl for t in r.trades), places=2, msg=key)
@@ -33,6 +39,15 @@ class BacktestsAreIntradayAndBalanced(SimpleTestCase):
                 self.assertGreaterEqual(t.exit_ts, t.entry_ts)
                 if self.ac[t.symbol] != 'crypto':
                     self.assertEqual(t.entry_ts.astimezone(ET).date(), t.exit_ts.astimezone(ET).date(), key)
+
+    def test_a_live_only_strategy_is_silent_on_history(self):
+        """A backtest that could read today's news verdicts would be reading answers
+        written after the bar. news_catalyst must therefore trade nothing at all
+        here, and its equity must be untouched."""
+        for key in self.LIVE_ONLY:
+            r = self._run(key)
+            self.assertEqual(r.metrics['trades'], 0, key)
+            self.assertAlmostEqual(r.equity[-1][3], 10000.0, places=2, msg=key)
 
     def test_strategies_short_stocks_but_never_crypto(self):
         for key, params in (('orb', {'min_relvol': 0.0}), ('ema_momentum', {'min_relvol': 0.0}), ('vwap_reversion', {})):

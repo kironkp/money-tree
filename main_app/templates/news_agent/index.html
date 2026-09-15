@@ -1,0 +1,101 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% load asset_tags %}
+{% block title %}News Agent · MoneyTree{% endblock %}
+{% block content %}
+
+<section class="na-hero">
+  <div class="na-orb na-{{ pulse.state }}" aria-hidden="true"><span></span><span></span><span></span></div>
+  <div class="na-hero-text">
+    <h1>News Agent</h1>
+    <p class="na-state">
+      {% if pulse.state == 'thinking' %}Reading now…
+      {% elif pulse.state == 'acting' %}Acting on the news
+      {% elif pulse.state == 'watching' %}Watching — nothing worth trading
+      {% elif pulse.state == 'stale' %}Idle — last sitting was {{ pulse.age_h|floatformat:0 }} h ago
+      {% elif pulse.state == 'error' %}Last sitting failed
+      {% else %}Not yet run{% endif %}
+    </p>
+    <p class="na-sub">
+      Every 4 hours it reads what happened, scores each story out of 10 for the chance that acting on
+      it makes money today, and anything <strong>{{ threshold }} or higher becomes a real order</strong>.
+      Running on <code>{{ model }}</code>.
+    </p>
+  </div>
+</section>
+
+<div class="na-stats">
+  <div class="na-stat"><div class="na-stat-n">{{ stats.sessions_7d }}</div><div class="na-stat-l">sittings this week</div></div>
+  <div class="na-stat"><div class="na-stat-n">{{ stats.read_7d }}</div><div class="na-stat-l">stories read</div></div>
+  <div class="na-stat"><div class="na-stat-n">{{ stats.calls_7d }}</div><div class="na-stat-l">calls made</div></div>
+  <div class="na-stat"><div class="na-stat-n">{{ stats.traded_7d }}</div><div class="na-stat-l">became trades</div></div>
+  <div class="na-stat"><div class="na-stat-n">{% if stats.hit_rate != None %}{{ stats.hit_rate|floatformat:0 }}%{% else %}—{% endif %}</div>
+    <div class="na-stat-l">right so far{% if stats.graded %} ({{ stats.graded }} graded){% endif %}</div></div>
+  <div class="na-stat"><div class="na-stat-n">${{ stats.cost_7d|floatformat:2 }}</div><div class="na-stat-l">cost this week</div></div>
+</div>
+
+{% if top_calls %}
+<section class="card na-calls">
+  <h3>Latest calls</h3>
+  <ul class="na-call-list">
+    {% for v in top_calls %}
+    <li>
+      <span class="na-score na-s{{ v.score }}">{{ v.score }}<small>/10</small></span>
+      <span class="na-call na-{{ v.direction }}">{{ v.call_text }}</span>
+      <span class="na-call-head">{{ v.headline|truncatechars:90 }}</span>
+      <span class="na-call-meta">
+        {% if v.outcome_pct != None %}
+          <span class="{% if v.was_right %}up{% else %}down{% endif %}">{{ v.outcome_pct|floatformat:2 }}% for the call</span>
+        {% elif v.acted %}acted{% else %}pending{% endif %}
+        · <a href="{% url 'news-agent-session' v.session_id %}">session</a>
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+<section class="card">
+  <h3>Does a high score actually mean anything?</h3>
+  {% if board %}
+    <p class="small muted">Every call is checked against the price 24 hours later, signed for the direction it called.
+      If the agent is any good, the top rows beat the bottom ones.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Score</th><th class="num">Calls</th><th class="num">Right</th><th class="num">Avg move for the call</th></tr></thead>
+      <tbody>
+      {% for r in board %}
+        <tr><td><span class="na-score na-s{{ r.score }}">{{ r.score }}<small>/10</small></span></td>
+          <td class="num">{{ r.n }}</td>
+          <td class="num">{{ r.hit_rate|floatformat:0 }}%</td>
+          <td class="num {% if r.avg_move_pct > 0 %}up{% elif r.avg_move_pct < 0 %}down{% endif %}">{{ r.avg_move_pct|floatformat:2 }}%</td></tr>
+      {% endfor %}
+      </tbody>
+    </table></div>
+  {% else %}
+    <p class="muted">No calls have been graded yet. Each one is scored against price 24 hours after it was made,
+      so this table fills in from tomorrow. Until it does, treat every rating as an opinion rather than a track record.</p>
+  {% endif %}
+</section>
+
+<section class="na-sessions">
+  <h3>Sittings</h3>
+  <p class="small muted">One every four hours. Open any to read every thought it had, including the stories it chose to ignore.</p>
+  <ol class="na-session-list">
+    {% for s in sessions %}
+    <li class="{% if s.error %}na-failed{% endif %}">
+      <a href="{% url 'news-agent-session' s.pk %}">
+        <span class="na-when">{{ s.label }}</span>
+        <span class="na-headline">{% if s.error %}Failed: {{ s.error|truncatechars:70 }}{% else %}{{ s.narrative|truncatechars:150|default:'—' }}{% endif %}</span>
+        <span class="na-counts">
+          <span title="stories read">{{ s.considered }} read</span>
+          {% if s.actionable %}<span class="na-pill" title="scored at or above the threshold">{{ s.actionable }} call{{ s.actionable|pluralize }}</span>{% endif %}
+          <span class="muted">${{ s.cost_usd|floatformat:3 }}</span>
+        </span>
+      </a>
+    </li>
+    {% empty %}
+    <li class="muted">No sittings yet.</li>
+    {% endfor %}
+  </ol>
+</section>
+{% endblock %}

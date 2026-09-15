@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The News Agent sits every four hours: reads every story that arrived,
+       scores each out of 10 for the chance that acting on it pays today, and
+       anything 5 or above becomes a real instruction for the trading lanes.
+       Measured at about $0.04 a sitting on gpt-5.6-sol, so roughly $7 a month. -->
+  <key>Label</key><string>com.kiron.moneytree.newsagent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/nice</string><string>-n</string><string>5</string>
+    <string>/Users/kironkp/.local/bin/pipenv</string>
+    <string>run</string><string>python</string><string>manage.py</string><string>news_agent</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
+  <key>StartInterval</key><integer>14400</integer>
+  <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/news-agent.log</string>
+  <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/news-agent.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/kironkp/.local/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>

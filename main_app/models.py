@@ -917,6 +917,100 @@ class Briefing(models.Model):
         return f'{self.market} {self.ts:%m-%d %H:%M} {self.headline[:60]}'
 
 
+class NewsSession(models.Model):
+    """One sitting of the News Agent: every four hours it reads everything new
+    and scores each story for whether it can be traded today.
+
+    A session is the unit a human opens and reads. It holds the agent's overall
+    read of the moment plus one verdict per story, including the ones it decided
+    to do nothing about — a rejection is as much of a thought as a trade.
+    """
+    started_at = models.DateTimeField(default=timezone.now)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    model = models.CharField(max_length=60, blank=True)
+    narrative = models.TextField(blank=True)      # the agent's read of the whole moment
+    considered = models.PositiveIntegerField(default=0)
+    actionable = models.PositiveIntegerField(default=0)   # scored above the threshold
+    traded = models.PositiveIntegerField(default=0)
+    cost_usd = models.DecimalField(max_digits=10, decimal_places=5, default=D0)
+    duration_s = models.FloatField(default=0)
+    error = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ['-started_at']
+
+    def __str__(self):
+        return f'session {self.started_at:%m-%d %H:%M} — {self.considered} stories, {self.traded} trades'
+
+    @property
+    def label(self) -> str:
+        return f'{self.started_at.astimezone(timezone.get_current_timezone()):%a %b %-d, %-I:%M %p}'
+
+
+class NewsVerdict(models.Model):
+    """What the agent thought about one story, and what it did about it.
+
+    `score` is the agent's own answer to "out of 10, what is the chance acting
+    on this is profitable today". Everything at or above ACT_THRESHOLD is handed
+    to the trading lane; everything below is kept anyway, because the record of
+    what it declined is what makes the record of what it took meaningful.
+    """
+    ACT_THRESHOLD = 5          # "if it's over 4"
+    DIRECTIONS = (('buy', 'Buy'), ('short', 'Short'), ('none', 'No action'))
+
+    session = models.ForeignKey(NewsSession, on_delete=models.CASCADE, related_name='verdicts')
+    news = models.ForeignKey('NewsItem', on_delete=models.SET_NULL, null=True, blank=True,
+                             related_name='verdicts')
+    headline = models.CharField(max_length=500)      # copied, so a verdict survives pruning
+    url = models.URLField(max_length=500, blank=True)
+
+    symbol = models.CharField(max_length=16, blank=True)
+    market = models.CharField(max_length=8, choices=Market.choices, blank=True)
+    score = models.PositiveSmallIntegerField(default=0)        # 1-10
+    direction = models.CharField(max_length=6, choices=DIRECTIONS, default='none')
+    thesis = models.TextField(blank=True)                      # why, in plain English
+    horizon = models.CharField(max_length=12, blank=True)
+    tradable = models.BooleanField(default=False)              # is the symbol one we can trade
+
+    # What happened to the instruction.
+    acted = models.BooleanField(default=False)
+    acted_at = models.DateTimeField(null=True, blank=True)
+    blocked_reason = models.CharField(max_length=200, blank=True)
+    trade = models.ForeignKey('Trade', on_delete=models.SET_NULL, null=True, blank=True,
+                              related_name='news_verdicts')
+
+    # Was it right? Filled in later, which is the only way this earns trust.
+    price_at_verdict = models.FloatField(null=True, blank=True)
+    outcome_pct = models.FloatField(null=True, blank=True)      # signed FOR the call
+    outcome_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-score', '-created_at']
+        indexes = [models.Index(fields=['session', '-score']), models.Index(fields=['symbol', '-created_at'])]
+
+    def __str__(self):
+        return f'{self.score}/10 {self.direction} {self.symbol}'
+
+    @property
+    def actionable(self) -> bool:
+        return self.score >= self.ACT_THRESHOLD and self.direction in ('buy', 'short')
+
+    @property
+    def call_text(self) -> str:
+        """The instruction as a human would say it: 'BUY AAPL', 'SHORT NZD/USD'."""
+        if not self.actionable:
+            return 'NO ACTION'
+        return f'{self.direction.upper()} {self.symbol}'
+
+    @property
+    def was_right(self) -> bool | None:
+        if self.outcome_pct is None:
+            return None
+        return self.outcome_pct > 0
+
+
 class FeedEvent(models.Model):
     """The running commentary: what the agent sees, decides and does. One row
     per line; the dashboard streams them. Pruned after two weeks."""

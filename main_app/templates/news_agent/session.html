@@ -1,0 +1,74 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}{{ session.label }} · News Agent{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <p class="small muted"><a href="{% url 'news-agent' %}">← News Agent</a></p>
+    <h1>{{ session.label }}</h1>
+  </div>
+  <div class="actions">
+    {% if prev %}<a class="btn small" href="{% url 'news-agent-session' prev.pk %}">‹ earlier</a>{% endif %}
+    {% if next %}<a class="btn small" href="{% url 'news-agent-session' next.pk %}">later ›</a>{% endif %}
+  </div>
+</div>
+
+{% if session.error %}
+  <p class="message error">This sitting failed: {{ session.error }}</p>
+{% else %}
+
+<section class="card na-narrative">
+  <h3>What it made of the moment</h3>
+  <p>{{ session.narrative|default:'—' }}</p>
+  <p class="small muted">Read {{ session.considered }} stor{{ session.considered|pluralize:"y,ies" }} ·
+    {{ acted|length }} worth acting on · {{ session.duration_s|floatformat:0 }}s ·
+    ${{ session.cost_usd|floatformat:4 }} · {{ session.model }}</p>
+</section>
+
+{% if acted %}
+<section class="na-block">
+  <h3>It acted on these</h3>
+  <p class="small muted">Scored {{ threshold }} or higher, so each became an instruction to the trading lane.</p>
+  {% for v in acted %}
+  <article class="card na-verdict na-acted">
+    <header>
+      <span class="na-score na-s{{ v.score }}">{{ v.score }}<small>/10</small></span>
+      <span class="na-call na-{{ v.direction }}">{{ v.call_text }}</span>
+      <span class="na-horizon">{{ v.horizon }}</span>
+      {% if v.outcome_pct != None %}
+        <span class="na-outcome {% if v.was_right %}up{% else %}down{% endif %}">
+          {{ v.outcome_pct|floatformat:2 }}% for the call after 24 h</span>
+      {% elif v.trade %}<span class="na-outcome">traded</span>
+      {% elif v.blocked_reason %}<span class="na-outcome muted">{{ v.blocked_reason|truncatechars:60 }}</span>
+      {% elif v.acted %}<span class="na-outcome muted">order issued</span>
+      {% else %}<span class="na-outcome muted">waiting for the next bar</span>{% endif %}
+    </header>
+    <p class="na-story">{% if v.url %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.headline }}</a>{% else %}{{ v.headline }}{% endif %}</p>
+    <p class="na-thesis">{{ v.thesis }}</p>
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section class="na-block">
+  <h3>It read these and did nothing</h3>
+  <p class="small muted">Kept on purpose. What it turned down is what makes what it took mean something.</p>
+  <div class="table-wrap"><table class="na-passed">
+    <thead><tr><th>Score</th><th>Story</th><th>Why not</th></tr></thead>
+    <tbody>
+    {% for v in passed %}
+      <tr>
+        <td><span class="na-score na-s{{ v.score }} na-small">{{ v.score }}</span></td>
+        <td>{% if v.url %}<a href="{{ v.url }}" target="_blank" rel="noopener">{{ v.headline|truncatechars:95 }}</a>{% else %}{{ v.headline|truncatechars:95 }}{% endif %}
+          {% if v.symbol %}<span class="na-sym">{{ v.symbol }}</span>{% endif %}</td>
+        <td class="small">{{ v.thesis|truncatechars:190 }}{% if v.blocked_reason %} <em class="warn">{{ v.blocked_reason }}</em>{% endif %}</td>
+      </tr>
+    {% empty %}
+      <tr><td colspan="3" class="muted">Nothing.</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+{% endblock %}

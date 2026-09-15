@@ -136,6 +136,9 @@ class Agent:
         for row in rows:
             strat = make_strategy(row.key, row.params)
             strat.name = row.name
+            # Only a live loop may read the News Agent's verdicts. A backtest that
+            # could see them would be reading answers written after the bar.
+            strat.live = self.mode != Mode.REPLAY
             self.strategies.append(strat)
             syms = set(row.symbols or self.instruments)
             self.strategy_symbols[row.key] = {s for s in syms if s in self.instruments and strat.supports(self.asset_classes[s])}

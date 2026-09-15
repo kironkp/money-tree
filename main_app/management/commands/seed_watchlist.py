@@ -56,7 +56,8 @@ class Command(BaseCommand):
                 Account.for_mode(mode, market)
         by_market = {m: [s for s, _, _, mk in DEFAULTS if mk == m] for m in markets}
         wanted = {'orb': [Market.STOCKS], 'vwap_reversion': [Market.STOCKS, Market.CRYPTO, Market.FOREX],
-                  'ema_momentum': [Market.STOCKS, Market.CRYPTO, Market.DEGEN, Market.FOREX], 'burst': [Market.DEGEN]}
+                  'ema_momentum': [Market.STOCKS, Market.CRYPTO, Market.DEGEN, Market.FOREX], 'burst': [Market.DEGEN],
+                  'news_catalyst': [Market.STOCKS, Market.CRYPTO, Market.DEGEN, Market.FOREX]}
         for cls in all_strategies():
             for market in wanted.get(cls.key, [Market.STOCKS]):
                 row, created = Strategy.objects.get_or_create(key=cls.key, market=market, defaults={

@@ -41,7 +41,13 @@ log = logging.getLogger('moneytree.news')
 # Caps. The point of a cap is that a bad day costs a known amount.
 MAX_INGEST_PER_RUN = 200       # headlines pulled per hourly run
 MAX_CLASSIFY_PER_RUN = 40      # model calls per hourly run
-CLASSIFY_MODEL = 'claude-haiku-4-5-20251001'   # ~$0.0005 a headline
+# Two providers, and the cheaper one is preferred rather than merely tolerated:
+# gpt-4o-mini is $0.15/M input against Haiku's $0.80/M for identical work. The
+# fallback also stopped being theoretical on 2026-09-12, when the Anthropic key
+# hit a spend cap and three days of headlines went in unclassified while a
+# perfectly good OpenAI key sat unused.
+CLASSIFY_MODEL_OPENAI = 'gpt-4o-mini'
+CLASSIFY_MODEL_ANTHROPIC = 'claude-haiku-4-5-20251001'
 LOOKBACK_HOURS = 3             # overlap the hourly cadence so nothing slips between runs
 
 STOPWORDS = {'the', 'a', 'an', 'of', 'to', 'in', 'on', 'for', 'and', 'as', 'at', 'is', 'its',
@@ -197,52 +203,96 @@ SCHEMA = {
 }
 
 
-def classify(limit: int = MAX_CLASSIFY_PER_RUN) -> dict:
-    """One model call per novel unclassified headline, newest first."""
-    from anthropic import Anthropic
+def _classify_openai(item) -> tuple[dict, object, str]:
+    from openai import OpenAI
+    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+    resp = client.chat.completions.create(
+        model=CLASSIFY_MODEL_OPENAI, max_tokens=400,
+        messages=[{'role': 'system', 'content': SYSTEM}, {'role': 'user', 'content': _user_text(item)}],
+        response_format={'type': 'json_schema',
+                         'json_schema': {'name': 'event', 'strict': True, 'schema': SCHEMA}},
+    )
+    return json.loads(resp.choices[0].message.content), resp.usage, CLASSIFY_MODEL_OPENAI
 
-    from .spend import record_anthropic
+
+def _classify_anthropic(item) -> tuple[dict, object, str]:
+    from anthropic import Anthropic
+    client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+    resp = client.messages.create(
+        model=CLASSIFY_MODEL_ANTHROPIC, max_tokens=400, system=SYSTEM,
+        messages=[{'role': 'user', 'content': _user_text(item)}],
+        output_config={'format': {'type': 'json_schema', 'schema': SCHEMA}},
+    )
+    text = ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text')
+    return json.loads(text), resp.usage, CLASSIFY_MODEL_ANTHROPIC
+
+
+def _user_text(item) -> str:
+    return (f'Headline: {item.headline}\n'
+            f'Summary: {(item.summary or "")[:600]}\n'
+            f'Tagged symbols: {", ".join(item.symbols)}')
+
+
+def classify(limit: int = MAX_CLASSIFY_PER_RUN) -> dict:
+    """One model call per novel unclassified headline, newest first.
+
+    Whichever provider is configured and working does the job; a provider that
+    starts refusing is abandoned for the rest of the run rather than retried
+    forty times, which is what turned one spend cap into forty identical 400s
+    in a single hourly run.
+    """
+    from .spend import record_anthropic, record_openai
 
     pending = list(NewsItem.objects.filter(classified_at__isnull=True, novel=True)
                    .order_by('-published_at')[:limit])
     if not pending:
         return {'classified': 0, 'skipped': 0}
-    if not settings.ANTHROPIC_API_KEY:
-        log.info('news: no ANTHROPIC_API_KEY — headlines stored unclassified')
+
+    providers = []
+    if settings.OPENAI_API_KEY:
+        providers.append(('openai', _classify_openai, record_openai))
+    if settings.ANTHROPIC_API_KEY:
+        providers.append(('anthropic', _classify_anthropic, record_anthropic))
+    if not providers:
+        log.info('news: no model key configured — headlines stored unclassified')
         return {'classified': 0, 'skipped': len(pending), 'reason': 'no api key'}
 
-    client = Anthropic(api_key=settings.ANTHROPIC_API_KEY)
     done = failed = 0
+    used = ''
     for item in pending:
-        user = (f'Headline: {item.headline}\n'
-                f'Summary: {(item.summary or "")[:600]}\n'
-                f'Tagged symbols: {", ".join(item.symbols)}')
-        try:
-            resp = client.messages.create(
-                model=CLASSIFY_MODEL, max_tokens=400, system=SYSTEM,
-                messages=[{'role': 'user', 'content': user}],
-                output_config={'format': {'type': 'json_schema', 'schema': SCHEMA}},
-            )
-            record_anthropic(CLASSIFY_MODEL, resp.usage, purpose='news', project='moneytree')
-            text = ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text')
-            data = json.loads(text)
-        except Exception as exc:
-            log.warning('news: classify failed for %s: %r', item.pk, exc)
+        data = usage = model = None
+        for name, call, record in list(providers):
+            try:
+                data, usage, model = call(item)
+                used = name
+                break
+            except Exception as exc:
+                log.warning('news: %s classify failed for %s: %r', name, item.pk, exc)
+                # A refusal is about the account, not this headline: stop asking.
+                if any(w in str(exc).lower() for w in ('usage limit', 'quota', 'billing',
+                                                       'insufficient', 'rate limit')):
+                    providers = [p for p in providers if p[0] != name]
+                    log.warning('news: dropping %s for the rest of this run', name)
+        if data is None:
             failed += 1
+            if not providers:
+                break
             continue
+        recorder = record_openai if used == 'openai' else record_anthropic
+        recorder(model, usage, purpose='news', project='moneytree')
         item.kind = str(data.get('kind', 'other'))[:16]
         item.direction = str(data.get('direction', 'neutral'))[:8]
         item.magnitude = max(1, min(5, int(data.get('magnitude', 1))))
         item.confidence = max(1, min(5, int(data.get('confidence', 1))))
         item.horizon = str(data.get('horizon', 'days'))[:12]
         item.rationale = str(data.get('rationale', ''))[:400]
-        item.model = CLASSIFY_MODEL
+        item.model = model
         item.classified_at = timezone.now()
         item.price_at_news = _prices_for(item.symbols)
         item.save(update_fields=['kind', 'direction', 'magnitude', 'confidence', 'horizon',
                                  'rationale', 'model', 'classified_at', 'price_at_news'])
         done += 1
-    return {'classified': done, 'failed': failed}
+    return {'classified': done, 'failed': failed, 'provider': used}
 
 
 def _prices_for(symbols: list[str]) -> dict:

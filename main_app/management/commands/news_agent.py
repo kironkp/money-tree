@@ -4,7 +4,8 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from main_app.services.news_agent import MODEL, run_session, score_verdicts, scoreboard
+from main_app.services.news_agent import (MODEL, expire_leases, run_session, score_verdicts,
+                                          scoreboard)
 
 
 class Command(BaseCommand):
@@ -14,17 +15,35 @@ class Command(BaseCommand):
         parser.add_argument('--hours', type=int, default=0, help='look back this far (default: 5)')
         parser.add_argument('--model', default=MODEL)
         parser.add_argument('--scoreboard', action='store_true', help='is a high score actually better?')
+        parser.add_argument('--reconstructed', action='store_true',
+                            help='score the rebuilt history instead — never evidence, useful for debugging')
 
     def handle(self, *args, **o):
-        if o['scoreboard']:
-            rows = scoreboard()
+        if o['scoreboard'] or o['reconstructed']:
+            rows = scoreboard(provenance='reconstructed' if o['reconstructed'] else 'contemporaneous')
             if not rows:
                 self.stdout.write('No scored calls yet — outcomes are filled in 24h after a verdict.')
                 return
-            self.stdout.write(f"{'score':>6s}{'n':>6s}{'right %':>10s}{'avg move':>11s}")
+            self.stdout.write(f"{'score':>6s}{'n':>6s}{'target %':>10s}{'net ATR':>10s}"
+                              f"{'tgt/stop/out':>14s}")
             for r in rows:
-                self.stdout.write(f"{r['score']:>6d}{r['n']:>6d}{r['hit_rate']:>9.0f}%{r['avg_move_pct']:>+11.2f}")
+                self.stdout.write(f"{r['score']:>6d}{r['n']:>6d}{r['hit_rate']:>9.0f}%"
+                                  f"{r['avg_atr_net']:>+10.2f}"
+                                  f"{f"{r['targets']}/{r['stops']}/{r['timeouts']}":>14s}")
+            self.stdout.write('\nContemporaneous forecasts only. Outcomes rebuilt from bars are '
+                              'listed separately with --reconstructed.')
             return
+
+        # Grade and tidy FIRST. These cost nothing, they need no API, and putting
+        # them after the session meant an OpenAI outage cost a day of evidence as
+        # well as a sitting — the one thing an outage should never take.
+        freed = expire_leases()
+        if freed:
+            self.stdout.write(f'released {freed} abandoned lease(s)')
+        scored = score_verdicts()
+        if scored['scored']:
+            self.stdout.write(f"graded {scored['graded']} call(s) against price"
+                              f" ({scored['priced_only']} priced but not directional)")
 
         since = timezone.now() - timedelta(hours=o['hours']) if o['hours'] else None
         s = run_session(since=since, model=o['model'])
@@ -41,6 +60,4 @@ class Command(BaseCommand):
             self.stdout.write(f'  {v.score:2d}/10 {mark:22s} {v.headline[:70]}')
             if v.thesis:
                 self.stdout.write(f'        {v.thesis[:150]}')
-        scored = score_verdicts()
-        if scored['scored']:
-            self.stdout.write(f"\nscored {scored['scored']} older calls against price")
+

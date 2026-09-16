@@ -85,6 +85,12 @@ class Signal:
     target: float | None = None
     strength: float = 1.0
     reason: str = ''
+    # Conviction, as a multiplier on the risk budget. Bounded at 1.0 on purpose:
+    # research may shrink a position or refuse it, and may not enlarge one, until
+    # a preregistered gate says the combined arm beats the catalyst alone out of
+    # sample. `strength` was already here and was written to the database and read
+    # by nobody, which is a different thing from a decision.
+    size_multiplier: float = 1.0
 
 
 @dataclass
@@ -177,6 +183,27 @@ class Strategy:
 
     def on_bar(self, ctx: Context, bar, df: pd.DataFrame, i: int) -> list[Signal]:
         raise NotImplementedError
+
+    def preflight(self, sig: Signal, account, positions: dict) -> str:
+        """A reason this signal must not become an order, or ''.
+
+        Checked before the risk manager, which protects the account and knows
+        nothing about which strategy is asking. This is where a strategy enforces
+        limits that belong to itself — an experiment's own loss budget, an
+        exposure cap across names that move together.
+        """
+        return ''
+
+    def on_signal_blocked(self, sig: Signal, reason: str) -> None:
+        """The risk manager or the broker refused this signal.
+
+        Most strategies do not care — they will simply look again next bar. One
+        that holds a scarce, perishable instruction does: without this it spends
+        the instruction on an order that was never placed.
+        """
+
+    def on_signal_accepted(self, sig: Signal) -> None:
+        """The order reached the broker. Whatever this signal consumed is spent."""
 
     def on_session_end(self, symbol: str) -> None:
         self.state.pop(symbol, None)

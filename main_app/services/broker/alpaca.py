@@ -105,6 +105,33 @@ class AlpacaBroker(Broker):
         return [o for o in self._open_orders if symbol is None or o['symbol'] == symbol]
 
     # --- reconciliation ---------------------------------------------------
+    def can_short(self, symbol: str) -> tuple[bool, str]:
+        """Ask the venue, every time, immediately before the order.
+
+        Shortability and borrow availability are venue state that moves during
+        the day: a name can be shortable at the open and hard-to-borrow by
+        lunchtime. A cached yes is how an automated desk discovers it is short
+        something it cannot cover. Spot crypto has no borrow at all.
+
+        On any failure this returns False. An unanswered question about borrow is
+        a no, not a yes — failing closed here costs one missed trade, and failing
+        open costs a position nobody can close.
+        """
+        if self.asset_classes.get(symbol) == 'crypto':
+            return False, 'spot crypto cannot be sold short'
+        try:
+            asset = self.client.get_asset(symbol)
+        except Exception as exc:                       # noqa: BLE001
+            log.warning('shortability check failed for %s: %r', symbol, exc)
+            return False, f'could not confirm {symbol} is shortable ({exc.__class__.__name__})'
+        if not getattr(asset, 'tradable', True):
+            return False, f'{symbol} is not tradable at the venue right now'
+        if not getattr(asset, 'shortable', False):
+            return False, f'{symbol} is not shortable at the venue right now'
+        if not getattr(asset, 'easy_to_borrow', False):
+            return False, f'{symbol} is hard to borrow; the borrow fee is not modelled'
+        return True, ''
+
     def sync(self) -> dict:
         """Compare our books with the venue and adopt the venue's truth.
 

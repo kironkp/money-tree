@@ -7,10 +7,11 @@ regulation, an exchange going down, a war. One prompt, one lane, a few web
 searches, five lines back.
 
 Measured 2026-09-12 on a real call: 8,174 input and 528 output tokens, six
-seconds, $0.0015 of tokens. The search tool adds a per-call fee on top that the
-usage object does not report, so the recorded cost adds SEARCH_FEE_USD as an
-estimate and says so in the ledger note. At four lanes an hour that is roughly
-$1 a day; the cadence is a setting precisely because that number is a choice.
+seconds, $0.0015 of tokens. The search tool bills per SEARCH ACTION on top of
+tokens and the usage object never mentions it, so the searches are counted out
+of the response itself and priced into ApiUsage. That fee is most of what a
+briefing costs: for a long time it was written onto the Briefing row alone, and
+the ledger held 12% of the real number.
 
 Deliberately NOT a trading signal. It is the wide view for the owner and for the
 evening report. Nothing here reaches the risk manager — only the confirmed,
@@ -32,10 +33,12 @@ from main_app.models import Briefing, Instrument, Market
 log = logging.getLogger('moneytree.briefing')
 
 MODEL = 'gpt-4o-mini'
-# OpenAI bills the web-search tool per call on top of tokens; the usage object
-# does not report it, so it is added as a stated estimate rather than hidden.
-SEARCH_FEE_USD = 0.01
 MAX_PER_DAY = 120          # a hard ceiling, so a scheduling mistake cannot run away
+
+
+def _tier(resp) -> str:
+    """The tier the API says it served, which is the one that gets billed."""
+    return str(getattr(resp, 'service_tier', '') or '')
 
 LANE_PROMPT = {
     Market.STOCKS: (
@@ -86,7 +89,7 @@ def brief_lane(market: str) -> Briefing:
     """One searching call for one lane. Always returns a row, even on failure."""
     from openai import OpenAI
 
-    from .spend import record
+    from .spend import SEARCH_CALL_USD, cost_of, record, search_calls_in
 
     prompt = LANE_PROMPT.get(market)
     if prompt is None:
@@ -119,11 +122,15 @@ def brief_lane(market: str) -> Briefing:
         headline=str(data.get('headline', ''))[:300],
         body=text[:8000], items=items, quiet=bool(data.get('quiet')) or not items,
     )
-    entry = record(MODEL, provider='openai', project='moneytree', purpose='briefing',
-                   input_tokens=tokens_in, output_tokens=tokens_out,
-                   note=f'{market} lane briefing; +${SEARCH_FEE_USD:.2f} estimated web-search fee')
-    token_cost = float(entry.cost_usd) if entry else 0.0
-    row.cost_usd = round(token_cost + SEARCH_FEE_USD, 5)
+    # The search fee goes into ApiUsage, not just onto this row. It used to live
+    # only here, so the ledger held $0.16 of a real $1.33 across 117 briefings —
+    # 12% of the true cost — and every budget conversation was fiction.
+    searches = search_calls_in(resp)
+    cost = cost_of(MODEL, tokens_in, tokens_out, service_tier=_tier(resp), search_calls=searches)
+    record(MODEL, provider='openai', project='moneytree', purpose='briefing',
+           input_tokens=tokens_in, output_tokens=tokens_out, cost_usd=cost,
+           note=f'{market} lane briefing; {searches} web search(es) at ${SEARCH_CALL_USD:.2f}')
+    row.cost_usd = cost
     row.save(update_fields=['cost_usd'])
     return row
 

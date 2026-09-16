@@ -35,11 +35,16 @@ REMOTE_REPO=${MONEYTREE_GH_REPO:-kironkp/money-tree}
 RELEASE_TAG=db-snapshot
 
 # The irreplaceable rows, in a fixed order so the dump diffs cleanly.
+# The news tables are here because they are evidence, not cache: a verdict is a
+# forecast recorded before the fact, and once the day passes it cannot be
+# regenerated from anything. They were missing until 2026-09-17, so the only
+# copy of every judgement the News Agent had ever made lived on one laptop.
 TABLES='main_app_account main_app_agentconfig main_app_agentrun main_app_apiusage
-        main_app_experiment main_app_fill main_app_instrument main_app_journalentry
-        main_app_marketsession main_app_order main_app_position main_app_riskevent
-        main_app_signal main_app_signupinvite main_app_strategy main_app_trade
-        main_app_tradecard main_app_equitysnapshot'
+        main_app_briefing main_app_experiment main_app_fill main_app_instrument
+        main_app_journalentry main_app_marketsession main_app_newsitem
+        main_app_newssession main_app_newsverdict main_app_order main_app_position
+        main_app_riskevent main_app_signal main_app_signupinvite main_app_strategy
+        main_app_trade main_app_tradecard main_app_equitysnapshot'
 
 say() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "backup: $*" >> "$LOG"; }
 

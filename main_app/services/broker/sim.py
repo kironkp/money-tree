@@ -29,18 +29,30 @@ def round_qty(qty: float, increment: float) -> float:
     return round(steps * increment, 8)
 
 
+# The fees a sale pays and a purchase does not: SEC Section 31 plus FINRA's
+# Trading Activity Fee, in bps of notional, at 2026 rates.
+SELL_REGULATORY_BPS = 0.3
+# Annualised borrow for an easy-to-borrow large cap, in bps of notional.
+DEFAULT_BORROW_BPS = 40.0
+
+
 class SimBroker(Broker):
     name = 'sim'
 
     def __init__(self, cash: float, *, immediate_fills: bool = False, slippage_bps: float = 3.0,
                  fee_bps: dict | None = None, liquidity_cap_pct: float = 1.0,
-                 asset_classes: dict | None = None, qty_increments: dict | None = None, leverage: float = 1.0):
+                 asset_classes: dict | None = None, qty_increments: dict | None = None, leverage: float = 1.0,
+                 borrow_bps_per_year: dict | None = None):
         self._cash = float(cash)
         self.starting_cash = float(cash)
         self.immediate_fills = immediate_fills
         self.slippage_bps = float(slippage_bps)
         self.leverage = max(1.0, float(leverage))
         self.fee_bps = {'stock': 0.5, 'etf': 0.5, 'crypto': 25.0, 'forex': 0.5, **(fee_bps or {})}
+        # Annualised borrow, in bps of notional, per symbol. '*' is the default.
+        # Easy-to-borrow megacaps sit near 25-50 bps; the broker preflight refuses
+        # anything harder, so this table never has to model a special.
+        self.borrow_bps_per_year = {'*': DEFAULT_BORROW_BPS, **(borrow_bps_per_year or {})}
         self.liquidity_cap_pct = float(liquidity_cap_pct)
         self.asset_classes = asset_classes or {}
         self.qty_increments = qty_increments or {}
@@ -94,8 +106,33 @@ class SimBroker(Broker):
     def _increment(self, symbol: str) -> float:
         return float(self.qty_increments.get(symbol, 0.0001 if self.asset_class(symbol) == 'crypto' else 1.0))
 
-    def _fee(self, symbol: str, notional: float) -> float:
-        return abs(notional) * self.fee_bps.get(self.asset_class(symbol), 0.5) / 1e4
+    def _fee(self, symbol: str, notional: float, side: str = 'buy') -> float:
+        """Commission, plus the fees only a sale pays.
+
+        US equity sales carry a regulatory pair the buy side does not: the SEC
+        Section 31 fee and FINRA's Trading Activity Fee. They are small — about
+        0.3 bps together at current rates — and they are charged on every exit of
+        a long and every entry of a short, which is exactly where a short-heavy
+        news arm lives. Leaving them out flatters the short side specifically.
+        """
+        asset_class = self.asset_class(symbol)
+        fee = abs(notional) * self.fee_bps.get(asset_class, 0.5) / 1e4
+        if side == 'sell' and asset_class in ('stock', 'etf'):
+            fee += abs(notional) * SELL_REGULATORY_BPS / 1e4
+        return fee
+
+    def borrow_cost(self, symbol: str, notional: float, minutes_held: float) -> float:
+        """What it costs to be short for a while.
+
+        Charged pro rata by the minute rather than by the day. A 240-minute hold
+        is a small number, and that is the point: writing it down makes the short
+        side's economics visible instead of assuming them to be zero, which is
+        what the desk did until the news arm started shorting.
+        """
+        if self.asset_class(symbol) not in ('stock', 'etf') or minutes_held <= 0:
+            return 0.0
+        rate = self.borrow_bps_per_year.get(symbol, self.borrow_bps_per_year.get('*', DEFAULT_BORROW_BPS))
+        return abs(notional) * (rate / 1e4) * (minutes_held / (365 * 24 * 60))
 
     def _slip(self, price: float, side: str) -> float:
         adj = self.slippage_bps / 1e4
@@ -175,7 +212,7 @@ class SimBroker(Broker):
         if order.leg == 'exit':
             qty = order.qty - order.filled_qty
         notional = qty * price
-        fee = self._fee(order.symbol, notional)
+        fee = self._fee(order.symbol, notional, order.side)
         decision = order.decision_price
         slip = None
         if decision:

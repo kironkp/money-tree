@@ -35,6 +35,8 @@ import time
 from datetime import timedelta
 
 from django.conf import settings
+from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from main_app.models import Briefing, Instrument, Market, NewsItem, NewsSession, NewsVerdict
@@ -44,7 +46,9 @@ log = logging.getLogger('moneytree.news_agent')
 MODEL = 'gpt-5.6-sol'          # the account's flagship tier
 MAX_STORIES = 40               # per sitting, newest first
 LOOKBACK_HOURS = 5             # overlaps the 4-hour cadence so nothing is missed
-PRICE_PER_M = (1.25, 10.0)     # input, output USD per million — used only to log spend
+# Prices live in spend.PRICES and nowhere else. This module used to carry its own
+# PRICE_PER_M = (1.25, 10.0) for a model that bills $4/$20, so every sitting was
+# recorded at 46% of what it cost and the owner's mental budget was built on it.
 
 SYSTEM = """You are the news analyst for a small automated trading desk. Every four hours you read
 what has happened and decide, story by story, whether it can be traded TODAY.
@@ -157,7 +161,7 @@ def run_session(since=None, model: str = MODEL, act: bool = True) -> NewsSession
     """One sitting. Always returns a session row, even when it fails."""
     from openai import OpenAI
 
-    from .spend import record
+    from .spend import cost_of, record
 
     started = time.time()
     session = NewsSession.objects.create(model=model)
@@ -197,10 +201,11 @@ def run_session(since=None, model: str = MODEL, act: bool = True) -> NewsSession
         return session
 
     usage = resp.usage
-    cost = ((usage.prompt_tokens * PRICE_PER_M[0] + usage.completion_tokens * PRICE_PER_M[1]) / 1e6)
+    tier = str(getattr(resp, 'service_tier', '') or '')
+    cost = cost_of(model, usage.prompt_tokens, usage.completion_tokens, service_tier=tier)
     record(model, provider='openai', project='moneytree', purpose='news_agent',
            input_tokens=usage.prompt_tokens, output_tokens=usage.completion_tokens,
-           cost_usd=round(cost, 6), note=f'news agent session #{session.pk}, {len(stories)} stories')
+           cost_usd=cost, note=f'news agent session #{session.pk}, {len(stories)} stories')
 
     by_id = {s.pk: s for s in stories}
     verdicts = []
@@ -224,6 +229,11 @@ def run_session(since=None, model: str = MODEL, act: bool = True) -> NewsSession
             symbol=symbol if market else '', market=market, score=score, direction=direction,
             thesis=str(raw.get('thesis', ''))[:2000], horizon=str(raw.get('horizon', ''))[:12],
             tradable=bool(market), blocked_reason=blocked[:200],
+            # The unit of action is the EVENT, not the row. Twelve outlets rewrite
+            # one wire story and four sittings can each see it afresh; without this
+            # they became four separate QQQ shorts into a rising market.
+            event_key=event_key(symbol, story.headline),
+            provenance='contemporaneous', arm='headline',
         ))
     NewsVerdict.objects.bulk_create(verdicts)
 
@@ -234,23 +244,98 @@ def run_session(since=None, model: str = MODEL, act: bool = True) -> NewsSession
     session.duration_s = time.time() - started
     session.save()
 
-    for v in session.verdicts.all():
-        if v.actionable:
-            v.price_at_verdict = _price(v.symbol)
-            v.save(update_fields=['price_at_verdict'])
+    _stamp_prices(session.verdicts.all())
     return session
 
 
-def _price(symbol: str) -> float | None:
-    from .data.store import load_frame
+def _stamp_prices(verdicts) -> int:
+    """Record price and ATR on every verdict, whatever it scored.
+
+    This used to run only for the calls it acted on, which meant the scoreboard
+    had no control group and could never answer its own question: six of 266 rows
+    were ever priced. A 3/10 that would have lost money is the evidence that a
+    6/10 was worth taking, and it costs nothing but a lookup to keep it.
+    """
+    rows = [v for v in verdicts if v.symbol and v.price_at_verdict is None]
+    cache: dict[str, tuple] = {}
+    done = 0
+    for v in rows:
+        # Rebuilt rows are priced at their own moment; live rows at this one.
+        at = v.created_at if v.provenance == 'reconstructed' else None
+        key = (v.symbol, at)
+        if key not in cache:
+            cache[key] = _price_and_atr(v.symbol, at)
+        price, atr = cache[key]
+        if price is None:
+            continue
+        v.price_at_verdict, v.atr_at_verdict = price, atr
+        v.save(update_fields=['price_at_verdict', 'atr_at_verdict'])
+        done += 1
+    return done
+
+
+def event_key(symbol: str, headline: str) -> str:
+    """Identity of the underlying event, not of the row that reported it."""
+    from .news import story_key
+    return f'{symbol or "-"}:{story_key(headline)}'[:64]
+
+
+def _feed_frame(inst, timeframe: str, *, start=None, end=None, limit=None):
+    """Bars from a feed that actually covers the window being asked about.
+
+    `store.best_source` ranks feeds by overall quality, not by whether they hold
+    the days in question. SIP is ranked first and is the right answer for a
+    backtest — but the local SIP copy stops where the last history sync stopped,
+    while the live loop keeps writing IEX. On 2026-09-17 that gap was two weeks,
+    so every price this module stamped came from 1 September and every grading
+    window came back empty. Freshest covering feed wins, priority breaks ties.
+    """
+    from django.db.models import Max
+
+    from main_app.models import Bar
+
+    from .data.store import SOURCE_PRIORITY, empty_frame, load_frame
+    qs = Bar.objects.filter(instrument=inst, timeframe=timeframe)
+    if start is not None:
+        qs = qs.filter(ts__gte=start)
+    if end is not None:
+        qs = qs.filter(ts__lt=end)
+    # One aggregate to choose the feed, then one load. Loading every feed and
+    # throwing the losers away turned a 4-hourly job into a minutes-long one.
+    rows = list(qs.values('source').annotate(last=Max('ts')))
+    if not rows:
+        return empty_frame()
+
+    def rank(src):
+        return SOURCE_PRIORITY.index(src) if src in SOURCE_PRIORITY else len(SOURCE_PRIORITY)
+
+    best = max(rows, key=lambda r: (r['last'], -rank(r['source'])))
+    return load_frame(inst, timeframe, start=start, end=end, limit=limit, source=best['source'])
+
+
+def _price_and_atr(symbol: str, at=None) -> tuple[float | None, float | None]:
+    """Close and ATR — the geometry a call is really betting on.
+
+    `at` is what makes the rebuilt history honest: a verdict written on Monday
+    has to be priced at Monday's tape, not at today's. Live callers pass None
+    and get the latest bar, which is the same thing said at the right moment.
+    """
+    from .indicators import atr as atr_of
     inst = Instrument.objects.filter(symbol=symbol).first()
     if inst is None:
-        return None
+        return None, None
     for tf in ('5Min', '15Min', '1Hour', '4Hour'):
-        df = load_frame(inst, tf, limit=1)
+        df = _feed_frame(inst, tf, end=at, limit=60)
+        if len(df) >= 15:
+            a = float(atr_of(df, 14).iloc[-1])
+            return float(df['close'].iloc[-1]), (a if a == a and a > 0 else None)
         if len(df):
-            return float(df['close'].iloc[-1])
-    return None
+            return float(df['close'].iloc[-1]), None
+    return None, None
+
+
+def _price(symbol: str) -> float | None:
+    return _price_and_atr(symbol)[0]
 
 
 # --- what the trading lanes read ------------------------------------------
@@ -267,76 +352,285 @@ ORDER_WINDOW_MINUTES = {
     Market.DEGEN: 4 * 60,
 }
 DEFAULT_ORDER_WINDOW = 4 * 60
+# A claim that is neither released nor consumed is a crash, not a position. It
+# returns to the pool rather than locking the event out forever.
+LEASE_MINUTES = 10
+# One event may reach the book once per lane-hold. Without this the same story
+# seen by four sittings became four positions, opened at rising prices.
+COOLDOWN_MINUTES = {Market.STOCKS: 240, Market.CRYPTO: 240, Market.FOREX: 240, Market.DEGEN: 180}
+
+
+def _window_q(now):
+    """The freshness window, expressed in SQL rather than after the ordering.
+
+    It used to be applied in Python to the top five rows by score, so a stale 7
+    could sit in front of a live 6 and consume its slot.
+    """
+    q = Q()
+    for market, mins in ORDER_WINDOW_MINUTES.items():
+        q |= Q(market=market, created_at__gte=now - timedelta(minutes=mins))
+    q |= (~Q(market__in=list(ORDER_WINDOW_MINUTES))
+          & Q(created_at__gte=now - timedelta(minutes=DEFAULT_ORDER_WINDOW)))
+    return q
+
+
+def _cooling_off(symbol: str, now) -> bool:
+    """Did this symbol already send an instruction recently?"""
+    recent = (NewsVerdict.objects.filter(symbol=symbol, lease_state='consumed',
+                                         acted_at__isnull=False)
+              .order_by('-acted_at').first())
+    if recent is None:
+        return False
+    mins = COOLDOWN_MINUTES.get(recent.market, 240)
+    return recent.acted_at >= now - timedelta(minutes=mins)
 
 
 def pending_for(symbol: str, now=None) -> NewsVerdict | None:
     """The live instruction for this symbol, if there is one.
 
-    Read by the news_catalyst strategy on each bar. One verdict can only ever
-    produce one order: `acted` is set the moment the lane takes it.
+    Read by the news_catalyst strategy on each bar. Freshest first, not
+    highest-scoring first: a thesis is a perishable good, and the measured
+    failure was a 15.8-hour-old call being taken ahead of a fresh one.
     """
     now = now or timezone.now()
-    candidates = (NewsVerdict.objects
-                  .filter(symbol=symbol, acted=False, tradable=True,
-                          score__gte=NewsVerdict.ACT_THRESHOLD,
-                          direction__in=('buy', 'short'))
-                  .order_by('-score', '-created_at'))
-    for v in candidates[:5]:
-        window = ORDER_WINDOW_MINUTES.get(v.market, DEFAULT_ORDER_WINDOW)
-        if v.created_at >= now - timedelta(minutes=window):
-            return v
-    return None
+    if _cooling_off(symbol, now):
+        return None
+    return (NewsVerdict.objects
+            .filter(_window_q(now), symbol=symbol, tradable=True, lease_state='available',
+                    score__gte=NewsVerdict.ACT_THRESHOLD, direction__in=('buy', 'short'))
+            .order_by('-created_at', '-score')
+            .first())
+
+
+def claim(verdict: NewsVerdict, owner: str = '') -> bool:
+    """Take the lease. One event, one order, enforced by the database.
+
+    Returns False if someone else holds it — including another process that got
+    there a millisecond earlier, which a Python-side check could never catch.
+    """
+    expires = timezone.now() + timedelta(minutes=LEASE_MINUTES)
+    try:
+        with transaction.atomic():
+            taken = (NewsVerdict.objects
+                     .filter(pk=verdict.pk, lease_state='available')
+                     .update(lease_state='leased', lease_expires_at=expires,
+                             lease_owner=(owner or 'agent')[:64]))
+    except IntegrityError:
+        # The unique index on (event_key) where leased did its job: this exact
+        # event is already in flight somewhere else.
+        return False
+    if taken:
+        verdict.lease_state, verdict.lease_expires_at = 'leased', expires
+    return bool(taken)
+
+
+def release(verdict: NewsVerdict, reason: str = '') -> None:
+    """Risk said no. Give the instruction back rather than destroying it.
+
+    68% of signals are blocked, and this used to burn the verdict every time:
+    the agent forgot a thesis because the account happened to be at its position
+    limit that minute.
+    """
+    NewsVerdict.objects.filter(pk=verdict.pk, lease_state='leased').update(
+        lease_state='available', lease_expires_at=None, lease_owner='',
+        blocked_reason=(reason or verdict.blocked_reason)[:200])
+    verdict.lease_state = 'available'
+
+
+def consume(verdict: NewsVerdict, trade=None) -> None:
+    """The broker acknowledged it. Now, and only now, is the event spent."""
+    now = timezone.now()
+    NewsVerdict.objects.filter(pk=verdict.pk).update(
+        lease_state='consumed', acted=True, acted_at=now, trade=trade,
+        lease_expires_at=None)
+    verdict.lease_state, verdict.acted, verdict.acted_at = 'consumed', True, now
+    # Collapse the stack: every other live call on the same symbol and side is
+    # the same opinion wearing a different headline.
+    (NewsVerdict.objects
+     .filter(symbol=verdict.symbol, direction=verdict.direction, lease_state='available')
+     .exclude(pk=verdict.pk)
+     .update(lease_state='consumed', blocked_reason='superseded by a fresher call on the same side'))
 
 
 def mark_acted(verdict: NewsVerdict, blocked: str = '') -> None:
-    verdict.acted = True
-    verdict.acted_at = timezone.now()
+    """Back-compatible shim. Prefer claim/release/consume."""
     if blocked:
-        verdict.blocked_reason = blocked[:200]
-    verdict.save(update_fields=['acted', 'acted_at', 'blocked_reason'])
+        release(verdict, blocked)
+    else:
+        consume(verdict)
+
+
+def expire_leases(now=None) -> int:
+    """Return abandoned claims to the pool. A crash is not a position."""
+    now = now or timezone.now()
+    return (NewsVerdict.objects
+            .filter(lease_state='leased', lease_expires_at__lt=now)
+            .update(lease_state='available', lease_expires_at=None, lease_owner=''))
 
 
 # --- scoring the calls ------------------------------------------------------
+#
+# Grading replays the barrier race the trade would actually have run, on the
+# clock the desk actually trades. The old version marked every call at +24h to
+# +30h while the position it drove is force-closed after 240 minutes, so it was
+# measuring a different bet from the one that was placed.
+
+GRADE_STOP_ATR = 1.5      # mirrors news_catalyst's stop_atr_mult
+GRADE_RR = 2.0            # mirrors news_catalyst's rr → a 3-ATR target
+GRADE_SLACK_HOURS = 6     # how far past the hold we will look for bars
+ATR_WARMUP_DAYS = 4       # enough history before the verdict to warm a 14-period ATR
+
+
+def _hold_minutes(market: str) -> int:
+    from main_app.models import AgentConfig
+    cfg = AgentConfig.get()
+    return {Market.DEGEN: int(cfg.degen_max_hold_minutes),
+            Market.FOREX: int(cfg.forex_max_hold_minutes)}.get(market, int(cfg.max_hold_minutes))
+
+
+def _atr_at(df, ts) -> float | None:
+    """The ATR of the bar the trade would have entered on."""
+    from .indicators import atr as atr_of
+    try:
+        series = atr_of(df, 14)
+        a = float(series.loc[:ts].iloc[-1])
+    except Exception:
+        return None
+    return a if a == a and a > 0 else None
+
+
+def _cost_atr(v: NewsVerdict, entry_px: float, atr: float) -> float:
+    """The round trip, expressed in the ATRs the outcome is measured in."""
+    from main_app.models import AgentConfig
+    from .risk import RiskConfig
+    inst = Instrument.objects.filter(symbol=v.symbol).first()
+    asset_class = inst.asset_class if inst else 'stock'
+    rc = RiskConfig.from_model(AgentConfig.get(), v.market or Market.STOCKS)
+    pct = rc.round_trip_cost_pct(asset_class) / 100.0
+    return (pct * float(entry_px) / float(atr)) if atr else 0.0
+
+
+def _replay(v: NewsVerdict, df, entry: float, atr: float) -> dict:
+    """Walk the bars and see which barrier the price touched first."""
+    long = v.direction == 'buy'
+    stop = entry - GRADE_STOP_ATR * atr if long else entry + GRADE_STOP_ATR * atr
+    target = entry + GRADE_RR * GRADE_STOP_ATR * atr if long else entry - GRADE_RR * GRADE_STOP_ATR * atr
+    mfe = mae = 0.0
+    for bar in df.itertuples():
+        up, down = (float(bar.high) - entry) / atr, (float(bar.low) - entry) / atr
+        mfe = max(mfe, up if long else -down)
+        mae = min(mae, down if long else -up)
+        hit_stop = float(bar.low) <= stop if long else float(bar.high) >= stop
+        hit_target = float(bar.high) >= target if long else float(bar.low) <= target
+        # Both inside one bar: assume the adverse one came first. OHLC cannot say,
+        # and the flattering assumption is how a backtest lies to itself.
+        if hit_stop:
+            return {'kind': 'stop', 'gross_atr': -GRADE_STOP_ATR, 'mfe': mfe, 'mae': mae,
+                    'exit': stop}
+        if hit_target:
+            return {'kind': 'target', 'gross_atr': GRADE_RR * GRADE_STOP_ATR, 'mfe': mfe,
+                    'mae': mae, 'exit': target}
+    last = float(df['close'].iloc[-1])
+    gross = (last - entry) / atr
+    return {'kind': 'timeout', 'gross_atr': gross if long else -gross, 'mfe': mfe, 'mae': mae,
+            'exit': last}
+
 
 def score_verdicts(max_items: int = 100) -> dict:
-    """Was the call right? Signed for the direction it actually called."""
-    from .data.store import load_frame
+    """Was the call right? Replayed over the geometry it actually implied."""
     now = timezone.now()
-    due = list(NewsVerdict.objects.filter(outcome_at__isnull=True, price_at_verdict__isnull=False,
-                                          created_at__lte=now - timedelta(hours=24))
+    due = list(NewsVerdict.objects
+               .filter(outcome_at__isnull=True, price_at_verdict__isnull=False,
+                       created_at__lte=now - timedelta(minutes=min(COOLDOWN_MINUTES.values())))
                .exclude(symbol='')[:max_items])
-    done = 0
+    graded = priced_only = 0
     for v in due:
+        hold = _hold_minutes(v.market)
+        if v.created_at > now - timedelta(minutes=hold):
+            continue                       # the race it implied has not finished yet
         inst = Instrument.objects.filter(symbol=v.symbol).first()
         if inst is None:
             continue
-        after = None
+        # Look across the instruction's whole lifetime, not just the hold. A call
+        # written at 19:15 ET has its entire 240-minute hold while the exchange is
+        # shut; the trade it implies opens at the next bell. Anchoring the replay
+        # at `created_at` graded a race that was never run and silently dropped
+        # every evening call on stocks.
+        window = ORDER_WINDOW_MINUTES.get(v.market, DEFAULT_ORDER_WINDOW)
+        df = None
         for tf in ('5Min', '15Min', '1Hour', '4Hour'):
-            df = load_frame(inst, tf, start=v.created_at + timedelta(hours=24),
-                            end=v.created_at + timedelta(hours=30), limit=1)
-            if len(df):
-                after = float(df['close'].iloc[0])
+            # Reach back before the verdict so the ATR has its warm-up. The strategy
+            # sizes its stop from the ATR of the bar it enters on, so grading must
+            # too: an evening call's pre-close ATR is a fraction of the next
+            # morning's, and using it graded a stop ten times tighter than the one
+            # the trade would actually have carried.
+            frame = _feed_frame(inst, tf, start=v.created_at - timedelta(days=ATR_WARMUP_DAYS),
+                                end=v.created_at + timedelta(minutes=window + hold)
+                                + timedelta(hours=GRADE_SLACK_HOURS))
+            if len(frame[frame.index >= v.created_at]):
+                df = frame
                 break
-        if after is None or not v.price_at_verdict:
+        if df is None:
             continue
-        move = (after / v.price_at_verdict - 1) * 100
-        v.outcome_pct = round(move if v.direction == 'buy' else -move, 3)
+        after = df[df.index >= v.created_at]
+        if not len(after):
+            continue
+
+        # The entry is the first bar the lane was actually open for, and its price
+        # is the one the trade would have paid — latency included, not removed.
+        entry_ts = after.index[0]
+        entry_px = float(after['close'].iloc[0])
+        entry_atr = _atr_at(df, entry_ts)
+        end = entry_ts + timedelta(minutes=hold)
+        move = (float(after['close'].iloc[-1]) / entry_px - 1) * 100
+        if v.direction in ('buy', 'short') and entry_atr:
+            held = after[after.index <= end]
+            r = _replay(v, held if len(held) else after, entry_px, entry_atr)
+            v.outcome_kind = r['kind']
+            v.outcome_atr_net = round(r['gross_atr'] - _cost_atr(v, entry_px, entry_atr), 4)
+            v.mfe_atr, v.mae_atr = round(r['mfe'], 4), round(r['mae'], 4)
+            signed = (r['exit'] / entry_px - 1) * 100
+            v.outcome_pct = round(signed if v.direction == 'buy' else -signed, 3)
+            graded += 1
+        else:
+            # No direction, or no ATR to build a barrier from. Record what the
+            # price did so the row is not lost, but do not pretend it was a trade.
+            v.outcome_pct = round(move, 3)
+            priced_only += 1
         v.outcome_at = now
-        v.save(update_fields=['outcome_pct', 'outcome_at'])
-        done += 1
-    return {'scored': done}
+        v.save(update_fields=['outcome_pct', 'outcome_at', 'outcome_kind', 'outcome_atr_net',
+                              'mfe_atr', 'mae_atr'])
+    return {'scored': graded + priced_only, 'graded': graded, 'priced_only': priced_only}
 
 
-def scoreboard(days: int = 30) -> list[dict]:
-    """Does a score of 8 actually beat a score of 5? The only question that matters."""
+def scoreboard(days: int = 30, provenance: str = 'contemporaneous') -> list[dict]:
+    """Does a score of 8 actually beat a score of 5?
+
+    Contemporaneous rows only by default. Forecasts recorded before the fact and
+    outcomes rebuilt from bars afterwards are different kinds of evidence, and a
+    table that pools them is not answering the question it prints at the top.
+    """
     since = timezone.now() - timedelta(days=days)
-    rows = NewsVerdict.objects.filter(created_at__gte=since, outcome_at__isnull=False)
+    rows = NewsVerdict.objects.filter(created_at__gte=since, outcome_at__isnull=False,
+                                      direction__in=('buy', 'short'))
+    if provenance:
+        rows = rows.filter(provenance=provenance)
     buckets: dict[int, list] = {}
     for v in rows:
-        buckets.setdefault(v.score, []).append(v.outcome_pct)
+        if v.outcome_atr_net is None:
+            continue
+        buckets.setdefault(v.score, []).append(v)
     out = []
-    for score, moves in sorted(buckets.items(), reverse=True):
-        hits = sum(1 for m in moves if m > 0)
-        out.append({'score': score, 'n': len(moves), 'hit_rate': hits / len(moves) * 100,
-                    'avg_move_pct': sum(moves) / len(moves)})
+    for score, items in sorted(buckets.items(), reverse=True):
+        nets = [v.outcome_atr_net for v in items]
+        hits = sum(1 for v in items if v.outcome_kind == 'target')
+        out.append({
+            'score': score, 'n': len(items),
+            'hit_rate': hits / len(items) * 100,
+            'avg_move_pct': sum(v.outcome_pct or 0 for v in items) / len(items),
+            'avg_atr_net': sum(nets) / len(nets),
+            'targets': hits,
+            'stops': sum(1 for v in items if v.outcome_kind == 'stop'),
+            'timeouts': sum(1 for v in items if v.outcome_kind == 'timeout'),
+        })
     return out

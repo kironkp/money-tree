@@ -444,16 +444,24 @@ class Engine:
             1 for card in pending
             if not (self.broker.positions.get(card.symbol) and self.broker.positions[card.symbol].qty)
         )
-        decision = self.risk.evaluate(sig, ctx, acct, self.broker.positions, ctx.asset_class,
-                                      strategy_supports=strat.supports(ctx.asset_class),
-                                      allocation_pct=float(self.cfg.allocations.get(strat.key, 100.0)),
-                                      strategy_exposure=self.strategy_exposure(strat.key),
-                                      pending_positions=pending_slots,
-                                      # Submitted broker orders are already reflected in buying power.
-                                      pending_exposure=self.pending_entry_exposure(states={'awaiting_approval', 'approved'}),
-                                      pending_directional_exposure=self.pending_entry_exposure(side=entry_side),
-                                      pending_symbols={card.symbol for card in pending})
+        # The strategy's own veto runs first and reuses the block path below, so a
+        # refusal here is recorded, narrated and released exactly like a risk one.
+        veto = strat.preflight(sig, acct, self.broker.positions)
+        can_short, short_why = (True, '') if sig.action != 'sell' else self.broker.can_short(symbol)
+        if not can_short:
+            veto = veto or short_why
+        decision = Decision(False, reason=veto) if veto else self.risk.evaluate(
+            sig, ctx, acct, self.broker.positions, ctx.asset_class,
+            strategy_supports=strat.supports(ctx.asset_class),
+            allocation_pct=float(self.cfg.allocations.get(strat.key, 100.0)),
+            strategy_exposure=self.strategy_exposure(strat.key),
+            pending_positions=pending_slots,
+            # Submitted broker orders are already reflected in buying power.
+            pending_exposure=self.pending_entry_exposure(states={'awaiting_approval', 'approved'}),
+            pending_directional_exposure=self.pending_entry_exposure(side=entry_side),
+            pending_symbols={card.symbol for card in pending})
         if not decision.allowed:
+            strat.on_signal_blocked(sig, decision.reason)
             self.rec.on_signal(sig, strat.key, decision, None)
             self.say('signal', f'BLOCKED {sig.action.upper()} {symbol} ({strat.key}): {sig.reason} — {decision.reason}',
                      symbol, strat.key, sig.ts, {'blocked': decision.reason, 'rules': [r.as_dict(strat.key) for r in (rules or [])]},
@@ -493,7 +501,14 @@ class Engine:
                      '(live_confirm_orders is on).', symbol, strat.key, sig.ts, phase='submit', card=card)
             return
         self._card_event(card, 'approved')
-        self.submit_card(card.id, sig.ts)
+        order = self.submit_card(card.id, sig.ts)
+        # Only a broker that took the order spends the signal's claim. A rejection
+        # hands it back, which is the difference between forgetting a thesis and
+        # deciding against it.
+        if order is not None and order.status == 'rejected':
+            strat.on_signal_blocked(sig, f'broker rejected: {order.error}')
+        else:
+            strat.on_signal_accepted(sig)
 
     def submit_card(self, card_id: str, ts: datetime) -> OrderReq | None:
         """Send an approved card's entry to the broker (also used for operator approvals)."""

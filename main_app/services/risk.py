@@ -198,7 +198,13 @@ class RiskManager:
         if stop_dist <= 0:
             return Decision(False, reason='stop equals entry')
         equity = account.equity
-        risk_dollars = equity * c.risk_per_trade_pct / 100.0
+        # Conviction may only shrink the budget. A multiplier above 1 would let a
+        # model talk its way into a bigger bet, which is the failure this whole
+        # design is arranged to prevent.
+        conviction = max(0.0, min(1.0, float(getattr(sig, 'size_multiplier', 1.0) or 1.0)))
+        risk_dollars = equity * c.risk_per_trade_pct / 100.0 * conviction
+        if risk_dollars <= 0:
+            return Decision(False, reason='conviction multiplier is zero')
         qty_risk = risk_dollars / stop_dist
         qty_cap = equity * c.max_position_pct / 100.0 / price
         desired_qty = min(qty_risk, qty_cap)
@@ -234,4 +240,15 @@ class RiskManager:
                 return Decision(False, reason='insufficient cash' if c.leverage <= 1
                                 else f'buying power used up ({c.leverage:g}× leverage, open positions count against it)')
             return Decision(False, reason='price exceeds position cap (0 shares)')
-        return Decision(True, qty=qty, reason=f'risk ${risk_dollars:.0f} / stop {stop_dist:,.6g}')
+        # Report what this position ACTUALLY risks, not what the budget allowed.
+        # The two diverge whenever the notional cap binds before the risk budget
+        # does — which, with an ATR-scaled stop on 5-minute bars, is every stock
+        # entry: a $50 budget arrives as $6 of real risk. Saying "risk $50" there
+        # is not a rounding error, it is the wrong number.
+        delivered = qty * stop_dist
+        note = f'risk ${delivered:,.2f} / stop {stop_dist:,.6g}'
+        if delivered < risk_dollars * 0.9:
+            note += f' (capped from ${risk_dollars:,.2f} by the {c.max_position_pct:g}% position limit)'
+        if conviction < 1.0:
+            note += f' × {conviction:.2f} conviction'
+        return Decision(True, qty=qty, reason=note)

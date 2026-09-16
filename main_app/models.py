@@ -211,6 +211,28 @@ class AgentConfig(models.Model):
     # (fees + slippage, both sides); otherwise the trade cannot pay for itself.
     min_reward_to_cost = models.DecimalField(max_digits=5, decimal_places=2, default=Decimal('3'))
 
+    # --- the news arm's own limits ----------------------------------------
+    # Preregistered on 2026-09-17 and frozen: changing any of these starts a new
+    # evaluation identifier rather than extending the running one, because a
+    # limit tuned mid-experiment is a result chosen after seeing the data.
+    # Seven megacap names are one bet wearing seven hats, so the cap that matters
+    # is the aggregate, not the per-position one.
+    news_max_correlated_exposure_pct = models.DecimalField(max_digits=7, decimal_places=2,
+                                                           default=Decimal('40'))
+    news_max_same_direction_positions = models.PositiveIntegerField(default=3)
+    news_daily_loss_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('1'))
+    news_weekly_loss_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('2.5'))
+    news_max_consecutive_losses = models.PositiveIntegerField(default=10)
+    # Slippage is an assumption whose only evidence is circular — the simulator
+    # measures its own fills. If realised slippage runs at twice the configured
+    # number, the cost model is wrong and every gate built on it is wrong too.
+    news_slippage_trip_multiple = models.DecimalField(max_digits=5, decimal_places=2,
+                                                      default=Decimal('2'))
+    # What the research step may spend in a day. The owner's knob; a module
+    # constant in dossier.py is the ceiling a web edit cannot raise.
+    research_budget_usd_per_day = models.DecimalField(max_digits=8, decimal_places=4,
+                                                      default=Decimal('0.20'))
+
     # Live-mode ritual (v2).
     live_armed_at = models.DateTimeField(null=True, blank=True)
     live_confirm_orders = models.BooleanField(default=True)
@@ -821,9 +843,37 @@ class ApiUsage(models.Model):
     cost_usd = models.DecimalField(max_digits=10, decimal_places=5, default=D0)
     note = models.CharField(max_length=200, blank=True)
 
+    # --- reservation accounting ------------------------------------------
+    # A call is RESERVED at an estimate before it is made and SETTLED against
+    # the usage the API actually returned. Retries, timeouts and `incomplete`
+    # responses all cost money while producing nothing, so counting the things
+    # a call was meant to create is not budgeting — counting the calls is. A
+    # reservation that fails keeps its estimate rather than vanishing, because
+    # a budget that forgets failed calls reads them as headroom.
+    STATES = (('settled', 'Settled'), ('reserved', 'Reserved'), ('failed', 'Failed'))
+    state = models.CharField(max_length=8, choices=STATES, default='settled')
+    # Idempotency: settling one key twice must not charge twice.
+    reservation_key = models.CharField(max_length=64, blank=True)
+    estimated_usd = models.DecimalField(max_digits=10, decimal_places=5, default=D0)
+    attempts = models.PositiveIntegerField(default=1)
+    # Billing follows the tier the API ACTUALLY served, not the one requested:
+    # Flex and Standard are different rates and a silent fallback is a silent
+    # overspend.
+    service_tier = models.CharField(max_length=12, blank=True)
+    reasoning_tokens = models.PositiveIntegerField(default=0)
+    search_calls = models.PositiveIntegerField(default=0)        # billed per search action
+    search_content_tokens = models.PositiveIntegerField(default=0)
+    # True while the cost is modelled rather than read back from the API.
+    provisional = models.BooleanField(default=False)
+
     class Meta:
         ordering = ['-ts']
-        indexes = [models.Index(fields=['ts', 'project']), models.Index(fields=['provider', 'model'])]
+        indexes = [models.Index(fields=['ts', 'project']), models.Index(fields=['provider', 'model']),
+                   models.Index(fields=['state', '-ts'])]
+        constraints = [
+            models.UniqueConstraint(fields=['reservation_key'], name='uniq_api_reservation_key',
+                                    condition=~models.Q(reservation_key='')),
+        ]
 
     def __str__(self):
         return f'{self.project}/{self.provider} {self.model} ${self.cost_usd}'
@@ -986,9 +1036,49 @@ class NewsVerdict(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # --- how this row may be used as evidence ----------------------------
+    # A forecast recorded before the fact and an outcome rebuilt afterwards are
+    # not the same kind of thing. The 266 rows written before 2026-09-17 were
+    # scored without a price, graded against a window the desk never traded,
+    # and judged under thresholds that have since changed: they describe the
+    # score distribution honestly and they are useful for debugging the grader,
+    # but they are not experimental evidence and never enter a promotion
+    # statistic.
+    PROVENANCE = (('contemporaneous', 'Recorded before the fact'),
+                  ('reconstructed', 'Rebuilt afterwards'))
+    provenance = models.CharField(max_length=16, choices=PROVENANCE, default='contemporaneous')
+    arm = models.CharField(max_length=16, default='headline')   # headline | catalyst | catalyst_ctx
+    horizon_bucket = models.CharField(max_length=2, default='B0')
+
+    # --- the geometry the call was actually betting on -------------------
+    atr_at_verdict = models.FloatField(null=True, blank=True)
+    outcome_kind = models.CharField(max_length=8, blank=True)   # target | stop | timeout
+    outcome_atr_net = models.FloatField(null=True, blank=True)  # signed, in ATRs, net of round trip
+    mfe_atr = models.FloatField(null=True, blank=True)          # best it ever looked
+    mae_atr = models.FloatField(null=True, blank=True)          # worst it ever looked
+
+    # --- the lease ---------------------------------------------------------
+    # One underlying EVENT may become one order, once. `acted` alone could not
+    # express that: it was set before the risk manager had spoken, so the 68%
+    # of signals that get blocked destroyed their instruction, and four sittings
+    # that saw the same QQQ story shorted it four times into a rising market.
+    LEASE_STATES = (('available', 'Available'), ('leased', 'Leased'), ('consumed', 'Consumed'))
+    event_key = models.CharField(max_length=64, blank=True)     # identity of the underlying event
+    lease_state = models.CharField(max_length=10, choices=LEASE_STATES, default='available')
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    lease_owner = models.CharField(max_length=64, blank=True)   # which worker holds it
+
     class Meta:
         ordering = ['-score', '-created_at']
-        indexes = [models.Index(fields=['session', '-score']), models.Index(fields=['symbol', '-created_at'])]
+        indexes = [models.Index(fields=['session', '-score']), models.Index(fields=['symbol', '-created_at']),
+                   models.Index(fields=['event_key', 'lease_state'])]
+        constraints = [
+            # Two workers cannot hold the same event at once. This is the
+            # constraint, not a convention: the duplicate-QQQ failure was a race,
+            # and a race is only closed in the database.
+            models.UniqueConstraint(fields=['event_key'], name='uniq_leased_event',
+                                    condition=models.Q(lease_state='leased') & ~models.Q(event_key='')),
+        ]
 
     def __str__(self):
         return f'{self.score}/10 {self.direction} {self.symbol}'

@@ -66,7 +66,8 @@ class SimBrokerHonoursStopsAndTargets(SimpleTestCase):
         t = b.trades[-1]
         self.assertEqual(t.exit_reason, 'target')
         self.assertAlmostEqual(t.exit_price, 110.0)
-        self.assertAlmostEqual(t.pnl, 100.0)
+        # 10 points on 10 shares, less 0.3 bps of SEC/FINRA fees on the closing sale.
+        self.assertAlmostEqual(t.pnl, 99.967)
 
     def test_stop_wins_when_both_touched_in_one_bar(self):
         b = self._open()
@@ -79,8 +80,9 @@ class SimBrokerHonoursStopsAndTargets(SimpleTestCase):
         b.on_bar('X', bar(95, 96, 88, 92), T0 + timedelta(minutes=10))
         t = b.trades[-1]
         self.assertEqual(t.side, 'short')
-        self.assertAlmostEqual(t.pnl, 100.0)
-        self.assertAlmostEqual(b.cash, 10100.0)
+        # A short SELLS to open, so it pays the regulatory fee on the way in.
+        self.assertAlmostEqual(t.pnl, 99.97)
+        self.assertAlmostEqual(b.cash, 10099.97)
 
 
 class SimBrokerKeepsTheBooksStraight(SimpleTestCase):
@@ -90,9 +92,12 @@ class SimBrokerKeepsTheBooksStraight(SimpleTestCase):
         b.submit(entry())
         b.on_bar('X', bar(100, 101, 99, 100), T0 + timedelta(minutes=5))
         b.close_position('X', 100.0, T0 + timedelta(minutes=10), 'eod', 'x1')
-        self.assertAlmostEqual(b.trades[-1].fees, 2.0)  # 1000 notional × 10 bps × 2 legs
-        self.assertAlmostEqual(b.trades[-1].pnl, -2.0)
-        self.assertAlmostEqual(b.cash, 9998.0)
+        # 1000 notional x 10 bps x 2 legs, plus 0.3 bps of SEC/FINRA fees on the
+        # sale only. Sales and purchases do not cost the same, and pretending
+        # they do flatters the short side, which is where the news arm lives.
+        self.assertAlmostEqual(b.trades[-1].fees, 2.03)
+        self.assertAlmostEqual(b.trades[-1].pnl, -2.03)
+        self.assertAlmostEqual(b.cash, 9997.97)
 
     def test_liquidity_cap_leaves_a_partial_fill(self):
         b = SimBroker(1_000_000, slippage_bps=0, fee_bps={'stock': 0}, liquidity_cap_pct=1.0)
@@ -116,3 +121,25 @@ class SimBrokerKeepsTheBooksStraight(SimpleTestCase):
         b.submit(entry())
         dup = b.submit(entry())
         self.assertEqual(dup.status, 'rejected')
+
+
+class ShortsCostMoreThanLongs(SimpleTestCase):
+    """The short side had been modelled as a mirror of the long side. It is not."""
+
+    def test_a_sale_pays_a_fee_a_purchase_does_not(self):
+        b = SimBroker(10000, slippage_bps=0, fee_bps={'stock': 0})
+        self.assertAlmostEqual(b._fee('X', 10_000, 'buy'), 0.0)
+        self.assertAlmostEqual(b._fee('X', 10_000, 'sell'), 0.3)
+
+    def test_crypto_pays_no_equity_regulatory_fee(self):
+        b = SimBroker(10000, slippage_bps=0, fee_bps={'crypto': 0},
+                      asset_classes={'BTC/USD': 'crypto'})
+        self.assertAlmostEqual(b._fee('BTC/USD', 10_000, 'sell'), 0.0)
+
+    def test_borrow_is_charged_by_the_minute_not_assumed_away(self):
+        b = SimBroker(10000, asset_classes={'X': 'stock'})
+        four_hours = b.borrow_cost('X', 10_000, 240)
+        self.assertGreater(four_hours, 0.0)
+        # 40 bps a year on 10,000 for 240 of 525,600 minutes.
+        self.assertAlmostEqual(four_hours, 10_000 * 0.004 * (240 / 525_600), places=6)
+        self.assertEqual(b.borrow_cost('X', 10_000, 0), 0.0)

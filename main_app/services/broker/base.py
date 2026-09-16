@@ -168,6 +168,17 @@ class Broker:
     def cancel_open_orders(self, symbol: str | None = None) -> int:
         raise NotImplementedError
 
+    def can_short(self, symbol: str) -> tuple[bool, str]:
+        """May this symbol be sold short right now, and if not, why not?
+
+        Asked immediately before every short, never cached: shortability and
+        borrow availability are venue state that changes during the day, and a
+        stale yes is an order that gets rejected at best and creates an
+        unhedgeable position at worst. The simulator lends freely and says so;
+        a real venue has to be asked.
+        """
+        return True, ''
+
     def sync(self) -> dict:
         """Reconcile with the venue (no-op for the simulator)."""
         return {}

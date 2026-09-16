@@ -20,6 +20,7 @@ from calendar import monthrange
 from datetime import date, datetime, time as dtime, timedelta
 from decimal import Decimal
 
+from django.db import transaction
 from django.utils import timezone
 
 from main_app.models import ApiUsage
@@ -39,6 +40,11 @@ PRICES: dict[str, tuple[float, float]] = {
     # OpenAI text
     'gpt-4o': (2.50, 10.0),
     'gpt-4o-mini': (0.15, 0.60),
+    # The GPT-5.6 tiers. sol's $4/$20 is promotional and stated as holding only
+    # to ~21 Nov 2026, which is one reason the research step is built on terra.
+    'gpt-5.6-sol': (4.0, 20.0),
+    'gpt-5.6-terra': (2.0, 12.0),
+    'gpt-5.6-luna': (0.20, 1.20),
     'text-embedding-3-small': (0.02, 0.0),
     'text-embedding-3-large': (0.13, 0.0),
     # OpenAI realtime (audio tokens) — by far the most expensive thing a small
@@ -47,24 +53,42 @@ PRICES: dict[str, tuple[float, float]] = {
     'gpt-4o-mini-realtime-preview': (10.0, 20.0),
     # Non-token providers are priced per call via UNIT_PRICES.
 }
+# Flex is a SEPARATE price list, not a discount applied to the one above. The
+# distinction matters because a Flex request that cannot be served may come back
+# on Standard: billing the cheap rate for an expensive call is how a budget goes
+# quietly wrong, so the tier that gets priced is the one the API says it used.
+FLEX_PRICES: dict[str, tuple[float, float]] = {
+    'gpt-5.6-sol': (2.0, 10.0),
+    'gpt-5.6-terra': (1.0, 6.0),
+    'gpt-5.6-luna': (0.10, 0.60),
+}
 CACHE_READ_SHARE = 0.1
 DEFAULT_PRICE = (5.0, 25.0)      # unknown model: assume expensive, so it stands out
 UNIT_PRICES: dict[str, float] = {'serper': 0.001, 'resend': 0.0}   # USD per call
+# Hosted web search bills per SEARCH action, on top of tokens, and the usage
+# object never mentions it. Counting the search calls in the response is the
+# only way it reaches this ledger.
+SEARCH_CALL_USD = 0.01
 
 
-def price_for(model: str) -> tuple[float, float]:
-    if model in PRICES:
-        return PRICES[model]
-    for key, val in PRICES.items():        # tolerate dated suffixes: gpt-4o-2024-11-20
-        if model.startswith(key):
-            return val
+def price_for(model: str, service_tier: str = '') -> tuple[float, float]:
+    table = FLEX_PRICES if (service_tier or '').lower() == 'flex' else PRICES
+    for source in (table, PRICES):
+        if model in source:
+            return source[model]
+        # Longest key first: 'gpt-4o' is a prefix of 'gpt-4o-mini', so a dated
+        # suffix like gpt-4o-mini-2024-07-18 would otherwise be priced 16x high.
+        for key in sorted(source, key=len, reverse=True):
+            if model.startswith(key):
+                return source[key]
     return DEFAULT_PRICE
 
 
-def cost_of(model: str, input_tokens: int = 0, output_tokens: int = 0, cached_tokens: int = 0) -> Decimal:
-    pin, pout = price_for(model)
+def cost_of(model: str, input_tokens: int = 0, output_tokens: int = 0, cached_tokens: int = 0,
+            *, service_tier: str = '', search_calls: int = 0) -> Decimal:
+    pin, pout = price_for(model, service_tier)
     usd = (input_tokens * pin + cached_tokens * pin * CACHE_READ_SHARE + output_tokens * pout) / 1e6
-    return Decimal(str(round(usd, 6)))
+    return Decimal(str(round(usd + search_calls * SEARCH_CALL_USD, 6)))
 
 
 def record(model: str, *, provider: str = 'anthropic', project: str = 'moneytree', purpose: str = '',
@@ -116,6 +140,131 @@ def record_openai(model: str, usage, purpose: str, project: str = 'moneytree', n
                   input_tokens=int(g('input_tokens', 'prompt_tokens')) - int(cached),
                   output_tokens=int(g('output_tokens', 'completion_tokens')),
                   cached_tokens=int(cached))
+
+
+def search_calls_in(resp) -> int:
+    """How many billable web searches a Responses reply actually performed.
+
+    Billing is per SEARCH action: `open_page` and `find_in_page` ride along free,
+    and the usage object mentions none of it. Assuming one search per request —
+    which the briefing did — undercounts a multi-search call and overcounts a
+    call where the model chose not to search at all.
+    """
+    n = 0
+    for item in (getattr(resp, 'output', None) or []):
+        if getattr(item, 'type', '') != 'web_search_call':
+            continue
+        action = getattr(item, 'action', None)
+        if action is None or getattr(action, 'type', 'search') == 'search':
+            n += 1
+    return n
+
+
+# --- reservations ----------------------------------------------------------
+#
+# `record()` above is forgiving on purpose and is NOT a budget primitive: it
+# swallows its own failures, so a dropped row reads as $0 spent, which is
+# exactly backwards for anything deciding whether it may spend more. These
+# three functions are the budget primitive and they raise.
+#
+# The shape is reserve -> settle, because the thing that costs money is the
+# CALL, not the artifact it was supposed to produce. A timeout, a retry and an
+# `incomplete` response are all billed and none of them leaves a dossier behind,
+# so counting dossiers would undercount spend precisely on the bad days.
+
+
+class BudgetError(RuntimeError):
+    """The ledger could not answer. Callers must fail closed, never assume $0."""
+
+
+def reserve(key: str, *, model: str, estimated_usd: Decimal | float, provider: str = 'openai',
+            project: str = 'moneytree', purpose: str = '', service_tier: str = '',
+            note: str = '') -> ApiUsage:
+    """Debit an estimate before the request goes out. Idempotent on `key`."""
+    if not key:
+        raise BudgetError('a reservation needs a key')
+    est = Decimal(str(estimated_usd))
+    try:
+        with transaction.atomic():
+            existing = ApiUsage.objects.filter(reservation_key=key).first()
+            if existing is not None:
+                return existing
+            return ApiUsage.objects.create(
+                provider=provider, project=project, model=model, purpose=purpose or 'unknown',
+                cost_usd=est, estimated_usd=est, state='reserved', reservation_key=key,
+                service_tier=service_tier, provisional=True, note=note[:200])
+    except Exception as exc:                       # noqa: BLE001 - re-raised deliberately
+        raise BudgetError(f'could not reserve {key}: {exc}') from exc
+
+
+def settle(key: str, *, model: str = '', input_tokens: int = 0, output_tokens: int = 0,
+           cached_tokens: int = 0, reasoning_tokens: int = 0, search_calls: int = 0,
+           search_content_tokens: int = 0, service_tier: str = '', note: str = '') -> ApiUsage:
+    """Replace the estimate with what the API says it actually charged.
+
+    `service_tier` is the tier the response REPORTS, not the one requested.
+    Settling twice is a no-op, so a retried settle cannot double-charge.
+    """
+    try:
+        with transaction.atomic():
+            row = ApiUsage.objects.select_for_update().filter(reservation_key=key).first()
+            if row is None:
+                raise BudgetError(f'no reservation {key} to settle')
+            if row.state == 'settled':
+                return row
+            row.model = model or row.model
+            row.input_tokens, row.output_tokens = int(input_tokens), int(output_tokens)
+            row.cached_tokens, row.reasoning_tokens = int(cached_tokens), int(reasoning_tokens)
+            row.search_calls, row.search_content_tokens = int(search_calls), int(search_content_tokens)
+            row.service_tier = service_tier or row.service_tier
+            row.cost_usd = cost_of(row.model, input_tokens, output_tokens, cached_tokens,
+                                   service_tier=row.service_tier, search_calls=search_calls)
+            row.state, row.provisional = 'settled', False
+            if note:
+                row.note = note[:200]
+            row.save()
+            return row
+    except BudgetError:
+        raise
+    except Exception as exc:                       # noqa: BLE001
+        raise BudgetError(f'could not settle {key}: {exc}') from exc
+
+
+def abandon(key: str, reason: str = '') -> ApiUsage:
+    """The call failed. It still cost the estimate, and it still counts."""
+    try:
+        with transaction.atomic():
+            row = ApiUsage.objects.select_for_update().filter(reservation_key=key).first()
+            if row is None:
+                raise BudgetError(f'no reservation {key} to abandon')
+            if row.state == 'settled':
+                return row
+            row.state = 'failed'
+            row.attempts += 1
+            row.note = (f'failed: {reason}'[:200]) or row.note
+            row.save(update_fields=['state', 'attempts', 'note'])
+            return row
+    except BudgetError:
+        raise
+    except Exception as exc:                       # noqa: BLE001
+        raise BudgetError(f'could not abandon {key}: {exc}') from exc
+
+
+def spent_today(purpose: str = '', project: str = 'moneytree') -> Decimal:
+    """Everything charged today, whatever state it ended in. Raises on failure."""
+    try:
+        a, b = _bounds(cal.session_date(timezone.now()))
+        rows = ApiUsage.objects.filter(ts__gte=a, ts__lt=b, project=project)
+        if purpose:
+            rows = rows.filter(purpose=purpose)
+        return sum((r.cost_usd for r in rows), Decimal('0'))
+    except Exception as exc:                       # noqa: BLE001
+        raise BudgetError(f'could not read today\'s spend: {exc}') from exc
+
+
+def budget_headroom(limit_usd: Decimal | float, purpose: str) -> Decimal:
+    """What is left of today's allowance. Raises rather than guessing."""
+    return Decimal(str(limit_usd)) - spent_today(purpose)
 
 
 # --- reading it back -------------------------------------------------------

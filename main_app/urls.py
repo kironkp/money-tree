@@ -70,5 +70,6 @@ urlpatterns = [
     path('api/spend/report/', views.api_spend, name='api-spend-report'),
     path('spend/', views.spend_page, name='spend'),
     path('news-agent/', views.news_agent, name='news-agent'),
+    path('news-agent/scoreboard/', views.news_agent_scoreboard, name='news-agent-scoreboard'),
     path('news-agent/<int:pk>/', views.news_agent_session, name='news-agent-session'),
 ]

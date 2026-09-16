@@ -55,6 +55,11 @@
 </section>
 {% endif %}
 
+<div class="tabs">
+  <a href="{% url 'news-agent' %}" class="active">Sittings</a>
+  <a href="{% url 'news-agent-scoreboard' %}">Scoreboard</a>
+</div>
+
 <section class="card">
   <h3>Does a high score actually mean anything?</h3>
   {% if board %}

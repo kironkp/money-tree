@@ -1,0 +1,143 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Scoreboard · News Agent{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <p class="small muted"><a href="{% url 'news-agent' %}">← News Agent</a></p>
+    <h1>Does the research actually help?</h1>
+  </div>
+</div>
+
+<div class="tabs">
+  <a href="{% url 'news-agent' %}">Sittings</a>
+  <a href="{% url 'news-agent-scoreboard' %}" class="active">Scoreboard</a>
+</div>
+
+{% if not evaluation %}
+  <p class="message">No evaluation is open. One opens automatically on the next sitting.</p>
+{% else %}
+
+<section class="card">
+  <h3>The question, fixed before any data arrived</h3>
+  <p>The <strong>paired difference in net ATR per day</strong> between the complete research
+     policy and today's headline-only policy — counting the days each one chose not to trade.
+     Per day and not per trade, because an arm that earns more per trade while trading three
+     times as often loses three times as much money while every per-trade number looks fine.</p>
+  <p class="small muted">Hurdle <strong>{{ a.delta_min|floatformat:3 }} ATR/day</strong>. Looks happen only at
+     {{ evaluation.checkpoints|join:", " }} trading days, with alpha spent across them, because
+     checking every night and promoting the first time it passes would promote noise almost surely.</p>
+</section>
+
+<div class="na-stats">
+  <div class="na-stat"><div class="na-stat-n">{{ a.n_days }}</div><div class="na-stat-l">trading days collected</div></div>
+  <div class="na-stat"><div class="na-stat-n">{% if a.next_checkpoint %}{{ a.next_checkpoint }}{% else %}—{% endif %}</div><div class="na-stat-l">next look at</div></div>
+  <div class="na-stat"><div class="na-stat-n">{% if a.required_days %}{{ a.required_days }}{% else %}—{% endif %}</div><div class="na-stat-l">days needed for 80% power</div></div>
+  <div class="na-stat"><div class="na-stat-n">{% if a.sigma_lr %}{{ a.sigma_lr|floatformat:2 }}{% else %}—{% endif %}</div><div class="na-stat-l">long-run σ, ATR/day</div></div>
+  <div class="na-stat"><div class="na-stat-n">{{ evaluation.status|title }}</div><div class="na-stat-l">{{ evaluation.identifier }}</div></div>
+</div>
+
+<section class="card">
+  <h3>Where it stands</h3>
+  {% if a.primary %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Claim</th><th class="num">Mean</th><th class="num">Lower</th><th class="num">Upper</th><th class="num">n days</th></tr></thead>
+      <tbody>
+        <tr><td>Research policy − headline policy</td>
+          <td class="num {% if a.primary.mean > 0 %}up{% elif a.primary.mean < 0 %}down{% endif %}">{{ a.primary.mean|floatformat:3 }}</td>
+          <td class="num">{{ a.primary.lower|floatformat:3 }}</td>
+          <td class="num">{{ a.primary.upper|floatformat:3 }}</td>
+          <td class="num">{{ a.primary.n }}</td></tr>
+        {% if a.ablation %}
+        <tr><td>Catalyst alone − catalyst with context/thesis <span class="muted">(its own gate)</span></td>
+          <td class="num">{{ a.ablation.mean|floatformat:3 }}</td>
+          <td class="num">{{ a.ablation.lower|floatformat:3 }}</td>
+          <td class="num">{{ a.ablation.upper|floatformat:3 }}</td>
+          <td class="num">{{ a.ablation.n }}</td></tr>
+        {% endif %}
+      </tbody>
+    </table></div>
+    <p class="small muted">Bounds from a circular block bootstrap over whole weeks, which keeps runs of
+       good and bad days intact rather than shuffling them into a false calm.</p>
+  {% else %}
+    <p class="muted">Not enough days yet for an interval that survives serial dependence.
+       {{ a.n_days }} collected; at least 10 are needed before any number here would mean anything.</p>
+  {% endif %}
+  {% if verdict %}<p class="small"><strong>{{ verdict.decision|title }}</strong> — {{ verdict.reason }}</p>{% endif %}
+</section>
+
+<div class="grid cols-2">
+  <section class="card">
+    <h3>Are the probabilities calibrated?</h3>
+    <p class="small muted">Only the probabilities are scored. The 1–10 ratings never appear here —
+       a rating is not a probability, and scoring it as one would be inventing a number.</p>
+    {% for name, f in a.forecasts.items %}
+      <h4 class="small">{{ name }}</h4>
+      {% if f.brier %}
+        <p class="small">Brier {{ f.brier.brier|floatformat:4 }} over {{ f.brier.n }},
+          skill vs base rate {% if f.brier.skill != None %}{{ f.brier.skill|floatformat:3 }}{% else %}—{% endif %}</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Said</th><th class="num">n</th><th class="num">Happened</th></tr></thead>
+          <tbody>{% for r in f.reliability %}
+            <tr><td>{{ r.forecast|floatformat:2 }}</td><td class="num">{{ r.n }}</td>
+                <td class="num">{{ r.realised|floatformat:2 }}</td></tr>
+          {% endfor %}</tbody>
+        </table></div>
+      {% else %}<p class="muted small">Too few graded forecasts to score.</p>{% endif %}
+    {% endfor %}
+  </section>
+
+  <section class="card">
+    <h3>What the shadow trades did</h3>
+    <div class="kv">
+      <dt>Reached target</dt><dd>{{ a.outcomes.target }}</dd>
+      <dt>Hit the stop</dt><dd>{{ a.outcomes.stop }}</dd>
+      <dt>Timed out</dt><dd>{{ a.outcomes.timeout }}</dd>
+      <dt>Vetoed by context</dt><dd>{{ a.outcomes.vetoed }}</dd>
+    </div>
+    <p class="small muted">A veto is a decision with a result of zero, not a missing observation.</p>
+  </section>
+</div>
+
+<section class="card">
+  <h3>Day by day</h3>
+  {% if a.days %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Day</th><th class="num">Headline</th><th class="num">Research</th><th class="num">Difference</th></tr></thead>
+    <tbody>{% for d in a.days reversed %}
+      <tr><td>{{ d.date }}</td>
+        <td class="num">{{ d.headline|floatformat:3 }}</td>
+        <td class="num">{{ d.research|floatformat:3 }}</td>
+        <td class="num {% if d.diff > 0 %}up{% elif d.diff < 0 %}down{% endif %}">{{ d.diff|floatformat:3 }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="muted">No graded days yet.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h3>The rebuilt history</h3>
+  <p class="small muted">Verdicts from before the grader existed, scored after the fact against bars.
+     Kept apart from everything above and excluded from every statistic on this page: an outcome
+     rebuilt afterwards is not a forecast recorded before the fact.</p>
+  {% if reconstructed %}
+  <div class="table-wrap"><table>
+    <thead><tr><th>Score</th><th class="num">n</th><th class="num">Reached target</th><th class="num">Avg net ATR</th></tr></thead>
+    <tbody>{% for r in reconstructed %}
+      <tr><td><span class="na-score na-s{{ r.score }} na-small">{{ r.score }}</span></td>
+        <td class="num">{{ r.n }}</td><td class="num">{{ r.hit_rate|floatformat:0 }}%</td>
+        <td class="num {% if r.avg_atr_net > 0 %}up{% else %}down{% endif %}">{{ r.avg_atr_net|floatformat:2 }}</td></tr>
+    {% endfor %}</tbody>
+  </table></div>
+  {% else %}<p class="muted">Nothing graded.</p>{% endif %}
+</section>
+
+<section class="card">
+  <h3>The preregistration</h3>
+  <pre class="small">{{ prereg }}</pre>
+  <p class="small muted">Changing any of this supersedes the evaluation and restarts collection at zero.
+     That is the cost that stops a threshold being adjusted until the numbers look better.</p>
+</section>
+
+{% endif %}
+{% endblock %}

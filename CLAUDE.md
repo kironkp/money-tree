@@ -201,6 +201,49 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   lost and the pipeline totaled PF 0.51 / −$1,961.62. Corrected experiments
   #28–29 returned no valid Forex candidate. Nothing was promoted.
 
+## v1.33–1.36 — the News Agent learns to research
+
+One version per build, two decimals, tagged: **1.33** Phase 0, **1.34** Phase 1,
+**1.35** Phase 2, **1.36** Phase 3.
+
+- **v1.33 — measurement before intelligence.** Price and ATR are stamped on every
+  verdict, not only the ones that traded (6 of 266 → 182), so the scoreboard has a
+  control group. Outcomes replay the barrier race the trade implied — 1.5 ATR stop,
+  3 ATR target, the lane's own `max_hold` — anchored at the first bar the lane was
+  actually open and sized from the ATR of the entry bar, recording
+  `outcome_kind`/`outcome_atr_net`/MFE/MAE. Rebuilt rows are `provenance =
+  reconstructed` and excluded from every statistic. Instructions use an atomic
+  lease (`available → leased → consumed`) keyed on the EVENT, with a DB uniqueness
+  constraint — the four QQQ shorts from four sittings were that race. `news_risk.py`
+  holds the arm's own preregistered limits. `store.covering_frame` picks the feed
+  that covers the window: `best_source` ranks by overall quality, so every live
+  lookup had been returning bars from 1 September. Ledger: one price table with
+  Flex/Standard split, reservations that fail loudly, the web-search fee recorded.
+- **v1.34 — provenance.** `first_public_at` / `ingested_at` / `source_updated_at`
+  on every headline; freshness measured from first publication only. A wire story
+  revised three times is one event with a revision counter, not three. Article
+  bodies via `include_content=True` (2,481 chars vs 144), with `<script>`/`<style>`
+  contents dropped, not merely untagged. `services/research/` grades sources in
+  three tiers: **filed** (SEC EDGAR, with accession/form/period/XBRL tag),
+  **vendor** (yfinance, never authoritative), **measured** (our bars). Every field
+  nullable; gaps recorded as gaps.
+- **v1.35 — dossiers in shadow.** `services/dossier.py` researches one company at a
+  time on `gpt-5.6-terra`/Flex via the Responses API. Numbers are supplied, not
+  recalled; anything the model introduces needs a verbatim quote and a URL or it is
+  dropped. It forecasts the barrier race (must sum to 1), never a magnitude.
+  `barrier_base_rate` supplies the measured prior. CATALYST must be dated and under
+  24h or it is demoted to context; size multiplier is clamped to ≤ 1.0. Measured
+  $0.0483 per dossier.
+- **v1.36 — the preregistered gate.** `preregistration.py` hashes the model, prompt,
+  schema and every limit into a fingerprint; changing any of it supersedes the
+  evaluation and restarts at n=0. `evaluation.py` decides ONLY at preregistered
+  checkpoints (20/40/60/90/120 days) with O'Brien-Fleming alpha spending, on a
+  circular block bootstrap that survives serial dependence, with power in the
+  sample-size calculation and Holm across the two confirmatory claims. Promotion
+  opens a fresh decay epoch at n=0. `ACT_SOURCES = ('headline',)` makes shadow a
+  property of the query. A regression test runs 40 null histories and requires that
+  noise is not promoted.
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live

@@ -627,3 +627,66 @@ def refresh(limit: int = 4, now=None) -> list[SymbolDossier]:
             log.warning('dossier sweep stopped: %s', d.error)
             break
     return out
+
+
+# --- grading the shadow trade -----------------------------------------------
+
+def grade(limit: int = 50, now=None) -> dict:
+    """Replay the trade each dossier would have placed, had it been armed.
+
+    Two numbers per dossier, because the ablation is its own confirmatory
+    question: what the CATALYST alone would have earned, and what it earned once
+    CONTEXT and THESIS were allowed to shrink or veto it. Until that comparison
+    clears its own gate the multiplier may only reduce, so the second number can
+    only ever be the smaller of the two — which is the point.
+
+    Entry is the first bar at or after `decision_eligible_at`. Research latency
+    is part of the strategy's performance and is not removed: a dossier that took
+    54 seconds enters 54 seconds late, and if that costs it the move, it costs it
+    the move.
+    """
+    from .news_agent import _atr_at, _cost_atr_from, _feed_frame, _hold_minutes, replay
+
+    now = now or timezone.now()
+    due = list(SymbolDossier.objects
+               .filter(outcome_at__isnull=True, error='', decision_eligible_at__isnull=False)
+               .exclude(direction='none')[:limit])
+    done = skipped = 0
+    for d in due:
+        hold = _hold_minutes(d.market)
+        if d.decision_eligible_at > now - timedelta(minutes=hold):
+            continue
+        inst = Instrument.objects.filter(symbol=d.symbol).first()
+        if inst is None:
+            continue
+        df = None
+        for tf in ('5Min', '15Min', '1Hour', '4Hour'):
+            frame = _feed_frame(inst, tf,
+                                start=d.decision_eligible_at - timedelta(days=4),
+                                end=d.decision_eligible_at + timedelta(minutes=hold * 6))
+            if len(frame[frame.index >= d.decision_eligible_at]):
+                df = frame
+                break
+        if df is None:
+            skipped += 1
+            continue
+        after = df[df.index >= d.decision_eligible_at]
+        entry_ts, entry_px = after.index[0], float(after['close'].iloc[0])
+        entry_atr = _atr_at(df, entry_ts)
+        if not entry_atr:
+            skipped += 1
+            continue
+        held = after[after.index <= entry_ts + timedelta(minutes=hold)]
+        r = replay(d.direction, held if len(held) else after, entry_px, entry_atr)
+        net = r['gross_atr'] - _cost_atr_from(d.symbol, d.market, entry_px, entry_atr)
+        d.entry_at, d.entry_price, d.entry_atr = entry_ts.to_pydatetime(), entry_px, entry_atr
+        d.outcome_kind = r['kind']
+        d.net_atr_catalyst_only = round(net, 4)
+        # The combined policy respects the veto and the shrink. A veto is a real
+        # decision with a real result: zero, not a missing observation.
+        d.net_atr_combined = 0.0 if d.veto_reason else round(net * d.size_multiplier, 4)
+        d.outcome_at = now
+        d.save(update_fields=['entry_at', 'entry_price', 'entry_atr', 'outcome_kind',
+                              'net_atr_catalyst_only', 'net_atr_combined', 'outcome_at'])
+        done += 1
+    return {'graded': done, 'skipped': skipped}

@@ -1240,9 +1240,25 @@ class SymbolDossier(models.Model):
     duration_s = models.FloatField(default=0)
     error = models.CharField(max_length=300, blank=True)
 
+    # --- what actually happened, filled in once the race has run --------------
+    # Two numbers, because the ablation is a separate confirmatory question: what
+    # the catalyst alone would have earned, and what it earned after CONTEXT and
+    # THESIS were allowed to shrink or veto it. Until that comparison passes its
+    # own gate, the multiplier may only ever reduce.
+    entry_at = models.DateTimeField(null=True, blank=True)
+    entry_price = models.FloatField(null=True, blank=True)
+    entry_atr = models.FloatField(null=True, blank=True)
+    outcome_kind = models.CharField(max_length=8, blank=True)      # target | stop | timeout
+    net_atr_catalyst_only = models.FloatField(null=True, blank=True)
+    net_atr_combined = models.FloatField(null=True, blank=True)
+    outcome_at = models.DateTimeField(null=True, blank=True)
+    evaluation = models.ForeignKey('Evaluation', null=True, blank=True, on_delete=models.SET_NULL,
+                                   related_name='dossiers')
+
     class Meta:
         ordering = ['-as_of']
-        indexes = [models.Index(fields=['symbol', '-as_of']), models.Index(fields=['-as_of'])]
+        indexes = [models.Index(fields=['symbol', '-as_of']), models.Index(fields=['-as_of']),
+                   models.Index(fields=['evaluation', '-as_of'])]
 
     def __str__(self):
         return f'{self.symbol} {self.as_of:%m-%d %H:%M} {self.score_catalyst}/10'
@@ -1274,6 +1290,71 @@ class SymbolDossier(models.Model):
     @property
     def citable_facts(self) -> list:
         return [f for f in (self.facts or []) if f.get('value') is not None and f.get('source')]
+
+
+class Evaluation(models.Model):
+    """A frozen experiment. Nothing here may change while it is collecting.
+
+    The point of writing all of this down before the first observation is that a
+    threshold tuned after seeing the data is not a threshold, it is a result
+    chosen to be favourable. So the model, the exact prompt, the schema, every
+    limit and the kill rule are hashed into `fingerprint`; if any of them moves,
+    this evaluation is superseded and a new one starts at n=0 rather than
+    quietly inheriting evidence collected under different rules.
+
+    ONE primary hypothesis: the paired difference in total net ATR per day
+    between the complete research trading policy and the current headline-only
+    policy, including the days each chose not to trade. Policy-level and
+    per-day, because an arm that earns more per trade while trading three times
+    as often looks better on every per-trade metric while losing more money.
+
+    Promotion is decided ONLY at preregistered checkpoints, with alpha spent
+    across them. A scheduled job that re-checks an ordinary confidence interval
+    and promotes the first time one passes will promote noise with probability
+    approaching one.
+    """
+    KINDS = (('promotion', 'Promotion'), ('decay', 'Post-promotion decay'))
+    STATUSES = (('collecting', 'Collecting'), ('promoted', 'Promoted'),
+                ('demoted', 'Demoted'), ('superseded', 'Superseded'))
+
+    identifier = models.CharField(max_length=40, unique=True)
+    kind = models.CharField(max_length=10, choices=KINDS, default='promotion')
+    status = models.CharField(max_length=12, choices=STATUSES, default='collecting')
+    opened_at = models.DateTimeField(default=timezone.now)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    # A decay epoch starts at n=0 when its predecessor is promoted: an
+    # all-history sequence lets old results outvote a strategy that is failing
+    # right now.
+    predecessor = models.ForeignKey('self', null=True, blank=True, on_delete=models.SET_NULL,
+                                    related_name='successors')
+
+    fingerprint = models.CharField(max_length=40)
+    frozen = models.JSONField(default=dict, blank=True)   # model, prompt/schema hashes, limits
+
+    # The hypothesis, in numbers, fixed before collection.
+    delta_min = models.FloatField(default=0.0)      # ATR/day, the economic hurdle
+    alpha = models.FloatField(default=0.05)
+    beta = models.FloatField(default=0.20)          # 1 - power
+    method = models.CharField(max_length=60, default='fixed-checkpoints/obf/block-bootstrap')
+    checkpoints = models.JSONField(default=list, blank=True)       # [trading days]
+    checkpoints_done = models.JSONField(default=list, blank=True)  # [{n, spent, lower, decision}]
+    kill_rule = models.CharField(max_length=300, blank=True)
+    note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ['-opened_at']
+
+    def __str__(self):
+        return f'{self.identifier} ({self.status})'
+
+    @property
+    def is_open(self) -> bool:
+        return self.status == 'collecting'
+
+    @property
+    def next_checkpoint(self) -> int | None:
+        done = {c.get('n') for c in (self.checkpoints_done or [])}
+        return next((n for n in (self.checkpoints or []) if n not in done), None)
 
 
 class FeedEvent(models.Model):

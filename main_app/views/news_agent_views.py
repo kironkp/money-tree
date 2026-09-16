@@ -74,3 +74,27 @@ def news_agent_session(request, pk):
         'prev': NewsSession.objects.filter(started_at__lt=session.started_at).first(),
         'next': NewsSession.objects.filter(started_at__gt=session.started_at).order_by('started_at').first(),
     })
+
+
+@login_required
+def news_agent_scoreboard(request):
+    """Is the research arm actually better? The page that decides whether it trades.
+
+    Deliberately shows the sample size and the hurdle next to every number. A
+    difference without an n and a threshold is a number people read as a result.
+    """
+    from main_app.models import Evaluation, SymbolDossier
+    from main_app.services.evaluation import assess, decide
+    from main_app.services.preregistration import describe
+
+    ev = Evaluation.objects.filter(status='collecting', kind='promotion').first()
+    a = assess(ev) if ev else None
+    return render(request, 'news_agent/scoreboard.html', {
+        'evaluation': ev,
+        'prereg': describe(ev) if ev else '',
+        'a': a,
+        'verdict': decide(ev) if ev else None,
+        'history': Evaluation.objects.exclude(status='collecting')[:10],
+        'recent': SymbolDossier.objects.filter(error='')[:12],
+        'reconstructed': scoreboard(provenance='reconstructed'),
+    })

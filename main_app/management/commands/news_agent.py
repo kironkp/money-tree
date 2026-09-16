@@ -4,7 +4,7 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-from main_app.services.dossier import refresh
+from main_app.services.dossier import grade as grade_dossiers, refresh
 from main_app.services.news_agent import (MODEL, expire_leases, run_session, score_verdicts,
                                           scoreboard)
 
@@ -55,6 +55,9 @@ class Command(BaseCommand):
         # optimizer, StartInterval plists drift out of phase after any reboot so a
         # separate job cannot be relied on to run before the sitting that reads it,
         # and CLAUDE.md warns against a fourth chatty SQLite writer.
+        graded = grade_dossiers()
+        if graded['graded']:
+            self.stdout.write(f"graded {graded['graded']} shadow trade(s)")
         if not o['no_research']:
             for d in refresh(limit=o['research_limit']):
                 if d.error:

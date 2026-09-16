@@ -336,6 +336,12 @@ ORDER_WINDOW_MINUTES = {
     Market.DEGEN: 4 * 60,
 }
 DEFAULT_ORDER_WINDOW = 4 * 60
+# Which arms may produce an instruction at all. Research is in shadow, so it is
+# not in this tuple — and because `pending_for` filters on it, shadow is a
+# property of the query rather than of anyone remembering not to write a verdict.
+# Adding to it changes the frozen fingerprint and supersedes the running
+# evaluation, which is the intended cost of arming a new arm.
+ACT_SOURCES = ('headline',)
 # A claim that is neither released nor consumed is a crash, not a position. It
 # returns to the pool rather than locking the event out forever.
 LEASE_MINUTES = 10
@@ -381,6 +387,7 @@ def pending_for(symbol: str, now=None) -> NewsVerdict | None:
         return None
     return (NewsVerdict.objects
             .filter(_window_q(now), symbol=symbol, tradable=True, lease_state='available',
+                    arm__in=ACT_SOURCES,
                     score__gte=NewsVerdict.ACT_THRESHOLD, direction__in=('buy', 'short'))
             .order_by('-created_at', '-score')
             .first())
@@ -483,20 +490,29 @@ def _atr_at(df, ts) -> float | None:
     return a if a == a and a > 0 else None
 
 
-def _cost_atr(v: NewsVerdict, entry_px: float, atr: float) -> float:
+def _cost_atr_from(symbol: str, market: str, entry_px: float, atr: float) -> float:
     """The round trip, expressed in the ATRs the outcome is measured in."""
     from main_app.models import AgentConfig
     from .risk import RiskConfig
-    inst = Instrument.objects.filter(symbol=v.symbol).first()
+    inst = Instrument.objects.filter(symbol=symbol).first()
     asset_class = inst.asset_class if inst else 'stock'
-    rc = RiskConfig.from_model(AgentConfig.get(), v.market or Market.STOCKS)
+    rc = RiskConfig.from_model(AgentConfig.get(), market or Market.STOCKS)
     pct = rc.round_trip_cost_pct(asset_class) / 100.0
     return (pct * float(entry_px) / float(atr)) if atr else 0.0
 
 
-def _replay(v: NewsVerdict, df, entry: float, atr: float) -> dict:
-    """Walk the bars and see which barrier the price touched first."""
-    long = v.direction == 'buy'
+def _cost_atr(v: NewsVerdict, entry_px: float, atr: float) -> float:
+    return _cost_atr_from(v.symbol, v.market, entry_px, atr)
+
+
+def replay(direction: str, df, entry: float, atr: float) -> dict:
+    """Walk the bars and see which barrier the price touched first.
+
+    Shared by the headline arm and the research arm so the two are graded by
+    identical machinery — a comparison between policies measured different ways
+    is not a comparison.
+    """
+    long = direction == 'buy'
     stop = entry - GRADE_STOP_ATR * atr if long else entry + GRADE_STOP_ATR * atr
     target = entry + GRADE_RR * GRADE_STOP_ATR * atr if long else entry - GRADE_RR * GRADE_STOP_ATR * atr
     mfe = mae = 0.0
@@ -569,7 +585,7 @@ def score_verdicts(max_items: int = 100) -> dict:
         move = (float(after['close'].iloc[-1]) / entry_px - 1) * 100
         if v.direction in ('buy', 'short') and entry_atr:
             held = after[after.index <= end]
-            r = _replay(v, held if len(held) else after, entry_px, entry_atr)
+            r = replay(v.direction, held if len(held) else after, entry_px, entry_atr)
             v.outcome_kind = r['kind']
             v.outcome_atr_net = round(r['gross_atr'] - _cost_atr(v, entry_px, entry_atr), 4)
             v.mfe_atr, v.mae_atr = round(r['mfe'], 4), round(r['mae'], 4)

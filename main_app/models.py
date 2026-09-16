@@ -894,13 +894,32 @@ class NewsItem(models.Model):
 
     # --- the headline as published ---
     external_id = models.CharField(max_length=64, unique=True)   # provider id: dedupes re-polls
+    article_id = models.CharField(max_length=64, blank=True)     # the provider's bare id
     source = models.CharField(max_length=40, default='alpaca')
     published_at = models.DateTimeField()
     headline = models.CharField(max_length=500)
     summary = models.TextField(blank=True)
+    # The article body, tags stripped. The same free Alpaca call returns it; the
+    # first version asked for include_content=False and then scored 144-character
+    # summaries truncated to 220.
+    content = models.TextField(blank=True)
     url = models.URLField(max_length=500, blank=True)
     symbols = models.JSONField(default=list, blank=True)
     market = models.CharField(max_length=8, choices=Market.choices, blank=True)
+
+    # --- the clocks ------------------------------------------------------
+    # Freshness is measured from `first_public_at` and from nothing else.
+    # Ingestion time flatters a slow poller, and a wire story revised three times
+    # has three `updated_at`s but only one moment it first reached the market —
+    # which is the moment the price reacted to, and the only one a latency claim
+    # can honestly be made against.
+    first_public_at = models.DateTimeField(null=True, blank=True)
+    source_updated_at = models.DateTimeField(null=True, blank=True)
+    ingested_at = models.DateTimeField(default=timezone.now)
+    # Revisions of one article are one event. Twelve outlets rewriting a story is
+    # `duplicate_of`; the wire updating its own copy three times is this.
+    content_hash = models.CharField(max_length=40, blank=True)
+    revision = models.PositiveSmallIntegerField(default=1)
 
     # --- what the classifier made of it ---
     classified_at = models.DateTimeField(null=True, blank=True)
@@ -929,6 +948,7 @@ class NewsItem(models.Model):
             models.Index(fields=['-published_at']),
             models.Index(fields=['market', '-published_at']),
             models.Index(fields=['kind', 'direction']),
+            models.Index(fields=['article_id']),
         ]
 
     def __str__(self):
@@ -939,6 +959,22 @@ class NewsItem(models.Model):
         """Worth a human's attention: a confirmed, sizeable, directional event."""
         return (self.magnitude >= 4 and self.confidence >= 4
                 and self.direction in ('bullish', 'bearish') and self.novel)
+
+    @property
+    def first_public(self):
+        """The moment the market could first have known. Never the moment we did."""
+        return self.first_public_at or self.published_at
+
+    @property
+    def age_minutes(self) -> float:
+        return (timezone.now() - self.first_public).total_seconds() / 60
+
+    @property
+    def ingest_lag_seconds(self) -> float | None:
+        """How long after publication we saw it. Part of the strategy's latency."""
+        if not self.ingested_at:
+            return None
+        return (self.ingested_at - self.first_public).total_seconds()
 
 
 class Briefing(models.Model):
@@ -1056,6 +1092,15 @@ class NewsVerdict(models.Model):
     outcome_atr_net = models.FloatField(null=True, blank=True)  # signed, in ATRs, net of round trip
     mfe_atr = models.FloatField(null=True, blank=True)          # best it ever looked
     mae_atr = models.FloatField(null=True, blank=True)          # worst it ever looked
+
+    # --- the decision clock ------------------------------------------------
+    # Research latency is part of strategy performance, so it is recorded rather
+    # than assumed away: a dossier that takes 32 seconds enters 32 seconds late,
+    # and a shadow trade may not be priced before `decision_eligible_at`.
+    research_started_at = models.DateTimeField(null=True, blank=True)
+    research_completed_at = models.DateTimeField(null=True, blank=True)
+    decision_eligible_at = models.DateTimeField(null=True, blank=True)
+    quote_at = models.DateTimeField(null=True, blank=True)   # the tape the price came from
 
     # --- the lease ---------------------------------------------------------
     # One underlying EVENT may become one order, once. `acted` alone could not

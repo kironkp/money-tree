@@ -49,6 +49,9 @@ MAX_CLASSIFY_PER_RUN = 40      # model calls per hourly run
 CLASSIFY_MODEL_OPENAI = 'gpt-4o-mini'
 CLASSIFY_MODEL_ANTHROPIC = 'claude-haiku-4-5-20251001'
 LOOKBACK_HOURS = 3             # overlap the hourly cadence so nothing slips between runs
+# Wire copy is long and most of the signal is in the first few paragraphs; this
+# is a cap on storage and on prompt size, not a judgement about the article.
+MAX_CONTENT_CHARS = 20_000
 
 STOPWORDS = {'the', 'a', 'an', 'of', 'to', 'in', 'on', 'for', 'and', 'as', 'at', 'is', 'its',
              'after', 'over', 'with', 'says', 'say', 'new', 'up', 'down', 'more', 'than'}
@@ -97,6 +100,40 @@ def story_key(headline: str) -> str:
 
 # --- 1. ingest --------------------------------------------------------------
 
+def clean_html(raw: str) -> str:
+    """Article HTML down to readable text.
+
+    The body arrives as markup and is going into a model prompt, not a browser,
+    so tags are stripped rather than sanitized-and-kept: there is nothing here we
+    want to render, and the cheapest way to be safe about someone else's HTML is
+    not to keep any of it. Entities are unescaped so a headline about "AT&T"
+    does not reach the model as "AT&amp;T", and whitespace is collapsed because
+    wire copy is full of it and every blank line is a token.
+    """
+    import html as _html
+    import re as _re
+
+    from django.utils.html import strip_tags
+    if not raw:
+        return ''
+    # Drop these elements CONTENTS AND ALL before stripping tags. strip_tags
+    # removes the <script> markers and keeps what was between them, so inline
+    # JavaScript, CSS and tracking code arrive looking like article prose. That
+    # is not just wasted tokens: an article body is untrusted text from the
+    # internet, and a script block is exactly where someone would put an
+    # instruction hoping a model reads it as one.
+    text = _re.sub(r'(?is)<(script|style|noscript|iframe|svg)\b.*?</\1\s*>', ' ', raw)
+    text = strip_tags(_html.unescape(text))
+    text = _re.sub(r'[ \t\r\f\v]+', ' ', text)
+    text = _re.sub(r'\n\s*\n+', '\n\n', text).strip()
+    return text[:MAX_CONTENT_CHARS]
+
+
+def content_hash(headline: str, body: str) -> str:
+    """Identity of a REVISION. A wire story updated three times is one event."""
+    return hashlib.sha1(f'{(headline or "").strip()}\x00{(body or "").strip()}'.encode()).hexdigest()
+
+
 def fetch_alpaca_news(since: datetime, limit: int = MAX_INGEST_PER_RUN) -> list[dict]:
     """Headlines from Alpaca's news feed. Free on the account's existing plan."""
     if not settings.ALPACA_ENABLED:
@@ -109,17 +146,22 @@ def fetch_alpaca_news(since: datetime, limit: int = MAX_INGEST_PER_RUN) -> list[
     token = None
     while len(out) < limit:
         res = client.get_news(NewsRequest(start=since, limit=min(50, limit - len(out)),
-                                          include_content=False, page_token=token))
+                                          include_content=True, page_token=token))
         data = res.data if hasattr(res, 'data') else {}
         items = data.get('news', []) if isinstance(data, dict) else list(res)
         if not items:
             break
         for n in items:
+            article_id = str(getattr(n, 'id', '') or '')
+            body = clean_html(getattr(n, 'content', '') or '')
             out.append({
-                'external_id': f'alpaca:{getattr(n, "id", "")}',
+                'external_id': f'alpaca:{article_id}',
+                'article_id': article_id[:64],
                 'published_at': getattr(n, 'created_at', None),
+                'updated_at': getattr(n, 'updated_at', None),
                 'headline': (getattr(n, 'headline', '') or '')[:500],
                 'summary': (getattr(n, 'summary', '') or '')[:2000],
+                'content': body,
                 'url': (getattr(n, 'url', '') or '')[:500],
                 'symbols': list(getattr(n, 'symbols', []) or []),
                 'source': (getattr(n, 'source', '') or 'alpaca')[:40],
@@ -131,35 +173,85 @@ def fetch_alpaca_news(since: datetime, limit: int = MAX_INGEST_PER_RUN) -> list[
 
 
 def ingest(since: datetime | None = None) -> dict:
-    """Store new headlines that touch something we trade. Cheap: no model calls."""
+    """Store new headlines that touch something we trade. Cheap: no model calls.
+
+    Three kinds of sameness, and they are not the same:
+      - the SAME poll returning the same article  -> nothing to do
+      - the wire REVISING its own article         -> one event, a new revision
+      - twelve outlets rewriting one story        -> one event, eleven duplicates
+
+    Only the third was handled before, so a story the wire updated three times
+    arrived as three fresh events and a freshness rule built on that would have
+    been measuring our polling, not the market's information.
+    """
     since = since or timezone.now() - timedelta(hours=LOOKBACK_HOURS)
     known = tradable_map()
     raw = fetch_alpaca_news(since)
-    seen_ids = set(NewsItem.objects.filter(published_at__gte=since - timedelta(hours=6))
-                   .values_list('external_id', flat=True))
-    kept = skipped = 0
+    now = timezone.now()
+    kept = skipped = revised = unchanged = 0
+
     for item in raw:
-        if not item['external_id'] or item['external_id'] in seen_ids or not item['published_at']:
+        if not item.get('external_id') or not item.get('published_at'):
             continue
         symbols, market = match_symbols(item['symbols'], known)
         if not symbols:
             skipped += 1
             continue                      # a story about nothing we can trade is not our business
-        key = story_key(item['headline'])
-        twin = NewsItem.objects.filter(
-            published_at__gte=item['published_at'] - timedelta(hours=12)
-        ).filter(rationale__startswith='').exclude(external_id=item['external_id'])
-        prior = next((n for n in twin.only('id', 'headline', 'novel')
-                      if story_key(n.headline) == key), None)
+
+        digest = content_hash(item['headline'], item.get('content', ''))
+        existing = NewsItem.objects.filter(external_id=item['external_id']).first()
+        if existing is not None:
+            if existing.content_hash == digest:
+                unchanged += 1
+                continue
+            # A revision of an article we already hold. `first_public_at` does not
+            # move — the market learned this when it first appeared, not when the
+            # wire fixed a typo — and re-reading is only worth a model call when
+            # the text the classifier actually sees has changed.
+            text_changed = (existing.headline != item['headline']
+                            or existing.summary != item['summary'])
+            existing.headline = item['headline']
+            existing.summary = item['summary']
+            existing.content = item.get('content', '')
+            existing.content_hash = digest
+            existing.source_updated_at = item.get('updated_at')
+            existing.revision += 1
+            fields = ['headline', 'summary', 'content', 'content_hash', 'source_updated_at',
+                      'revision']
+            if text_changed:
+                existing.classified_at = None
+                fields.append('classified_at')
+            existing.save(update_fields=fields)
+            revised += 1
+            continue
+
+        prior = _same_story(item['headline'], item['published_at'], item['external_id'])
         NewsItem.objects.create(
-            external_id=item['external_id'], source=item['source'],
-            published_at=item['published_at'], headline=item['headline'],
-            summary=item['summary'], url=item['url'], symbols=symbols, market=market,
-            tradable=True, novel=prior is None, duplicate_of=prior,
+            external_id=item['external_id'], article_id=item.get('article_id', '')[:64],
+            source=item['source'], published_at=item['published_at'],
+            first_public_at=item['published_at'], source_updated_at=item.get('updated_at'),
+            ingested_at=now, headline=item['headline'], summary=item['summary'],
+            content=item.get('content', ''), content_hash=digest, url=item['url'],
+            symbols=symbols, market=market, tradable=True,
+            novel=prior is None, duplicate_of=prior,
         )
-        seen_ids.add(item['external_id'])
         kept += 1
-    return {'fetched': len(raw), 'stored': kept, 'not_ours': skipped}
+    return {'fetched': len(raw), 'stored': kept, 'revised': revised,
+            'unchanged': unchanged, 'not_ours': skipped}
+
+
+def _same_story(headline: str, published_at: datetime, external_id: str):
+    """The earlier row this is a rewrite of, if there is one.
+
+    Matched on the content fingerprint rather than on the text, so outlet
+    boilerplate and word order do not make one story look like twelve.
+    """
+    key = story_key(headline)
+    window = NewsItem.objects.filter(
+        published_at__gte=published_at - timedelta(hours=12),
+        published_at__lte=published_at + timedelta(hours=12),
+    ).exclude(external_id=external_id).only('id', 'headline')[:400]
+    return next((n for n in window if story_key(n.headline) == key), None)
 
 
 # --- 2. classify ------------------------------------------------------------

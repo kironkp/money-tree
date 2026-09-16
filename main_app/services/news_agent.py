@@ -46,6 +46,10 @@ log = logging.getLogger('moneytree.news_agent')
 MODEL = 'gpt-5.6-sol'          # the account's flagship tier
 MAX_STORIES = 40               # per sitting, newest first
 LOOKBACK_HOURS = 5             # overlaps the 4-hour cadence so nothing is missed
+# The article body is free from the same Alpaca call, but it is not free in the
+# prompt. Spend it on the stories the classifier already judged to have weight.
+BODY_FROM_MAGNITUDE = 3
+BODY_CHARS = 1200
 # Prices live in spend.PRICES and nowhere else. This module used to carry its own
 # PRICE_PER_M = (1.25, 10.0) for a model that bills $4/$20, so every sitting was
 # recorded at 46% of what it cost and the owner's mental budget was built on it.
@@ -150,10 +154,17 @@ def _prompt(stories: list[NewsItem], uni: dict[str, str]) -> str:
     parts += ['', f'STORIES TO SCORE ({len(stories)}). Return one verdict for every id.']
     for s in stories:
         tags = ', '.join(s.symbols) or 'untagged'
-        parts.append(f'  [id {s.pk}] ({s.published_at:%b %-d %H:%M}Z, {s.kind or "?"}, tagged {tags}) '
-                     f'{s.headline}')
+        age = int(s.age_minutes)
+        parts.append(f'  [id {s.pk}] ({s.first_public:%b %-d %H:%M}Z, {age} min old, '
+                     f'{s.kind or "?"}, tagged {tags}) {s.headline}')
         if s.summary:
             parts.append(f'        {s.summary[:220]}')
+        # The body, but only where the classifier already thought the story had
+        # weight. Every story getting a paragraph would triple the prompt to say
+        # more about the listicles, which are the ones already being scored 1.
+        if s.content and s.magnitude >= BODY_FROM_MAGNITUDE:
+            body = ' '.join(s.content.split())[:BODY_CHARS]
+            parts.append(f'        [body] {body}')
     return '\n'.join(parts)
 
 
@@ -281,36 +292,9 @@ def event_key(symbol: str, headline: str) -> str:
 
 
 def _feed_frame(inst, timeframe: str, *, start=None, end=None, limit=None):
-    """Bars from a feed that actually covers the window being asked about.
-
-    `store.best_source` ranks feeds by overall quality, not by whether they hold
-    the days in question. SIP is ranked first and is the right answer for a
-    backtest — but the local SIP copy stops where the last history sync stopped,
-    while the live loop keeps writing IEX. On 2026-09-17 that gap was two weeks,
-    so every price this module stamped came from 1 September and every grading
-    window came back empty. Freshest covering feed wins, priority breaks ties.
-    """
-    from django.db.models import Max
-
-    from main_app.models import Bar
-
-    from .data.store import SOURCE_PRIORITY, empty_frame, load_frame
-    qs = Bar.objects.filter(instrument=inst, timeframe=timeframe)
-    if start is not None:
-        qs = qs.filter(ts__gte=start)
-    if end is not None:
-        qs = qs.filter(ts__lt=end)
-    # One aggregate to choose the feed, then one load. Loading every feed and
-    # throwing the losers away turned a 4-hourly job into a minutes-long one.
-    rows = list(qs.values('source').annotate(last=Max('ts')))
-    if not rows:
-        return empty_frame()
-
-    def rank(src):
-        return SOURCE_PRIORITY.index(src) if src in SOURCE_PRIORITY else len(SOURCE_PRIORITY)
-
-    best = max(rows, key=lambda r: (r['last'], -rank(r['source'])))
-    return load_frame(inst, timeframe, start=start, end=end, limit=limit, source=best['source'])
+    """The feed that covers the window. See store.covering_frame for why."""
+    from .data.store import covering_frame
+    return covering_frame(inst, timeframe, start=start, end=end, limit=limit)
 
 
 def _price_and_atr(symbol: str, at=None) -> tuple[float | None, float | None]:

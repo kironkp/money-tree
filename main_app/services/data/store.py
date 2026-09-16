@@ -113,6 +113,37 @@ def best_source(instrument: Instrument, timeframe: str, exclude_sources: list | 
     return next(iter(sorted(have)), None)
 
 
+def covering_frame(instrument: Instrument, timeframe: str, start: datetime | None = None,
+                   end: datetime | None = None, limit: int | None = None) -> pd.DataFrame:
+    """Bars from a feed that actually covers the window being asked about.
+
+    `best_source` ranks feeds by overall quality, which is right for a backtest
+    and wrong for anything asking about now: SIP is ranked first, and the local
+    SIP copy only reaches as far as the last history sync while the live loop
+    keeps writing IEX. On 2026-09-17 that gap was two weeks, so every live price
+    lookup silently returned bars from 1 September.
+
+    Freshest covering feed wins; priority breaks ties. One aggregate to choose,
+    one load to fetch.
+    """
+    from django.db.models import Max
+    qs = Bar.objects.filter(instrument=instrument, timeframe=timeframe)
+    if start is not None:
+        qs = qs.filter(ts__gte=start)
+    if end is not None:
+        qs = qs.filter(ts__lt=end)
+    rows = list(qs.values('source').annotate(last=Max('ts')))
+    if not rows:
+        return empty_frame()
+
+    def rank(src):
+        return SOURCE_PRIORITY.index(src) if src in SOURCE_PRIORITY else len(SOURCE_PRIORITY)
+
+    best = max(rows, key=lambda r: (r['last'], -rank(r['source'])))
+    return load_frame(instrument, timeframe, start=start, end=end, limit=limit,
+                      source=best['source'])
+
+
 def load_frame(instrument: Instrument, timeframe: str, start: datetime | None = None,
                end: datetime | None = None, limit: int | None = None,
                exclude_sources: list | None = None, source: str | None = None) -> pd.DataFrame:

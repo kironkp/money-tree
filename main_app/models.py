@@ -1047,6 +1047,10 @@ class NewsVerdict(models.Model):
     session = models.ForeignKey(NewsSession, on_delete=models.CASCADE, related_name='verdicts')
     news = models.ForeignKey('NewsItem', on_delete=models.SET_NULL, null=True, blank=True,
                              related_name='verdicts')
+    # Where this score came from, when it came from research rather than a
+    # headline. Null is the headline arm, which is most of the table.
+    dossier = models.ForeignKey('SymbolDossier', on_delete=models.SET_NULL, null=True, blank=True,
+                                related_name='verdicts')
     headline = models.CharField(max_length=500)      # copied, so a verdict survives pruning
     url = models.URLField(max_length=500, blank=True)
 
@@ -1144,6 +1148,132 @@ class NewsVerdict(models.Model):
         if self.outcome_pct is None:
             return None
         return self.outcome_pct > 0
+
+
+class SymbolDossier(models.Model):
+    """What we know about one company right now, and what it implies for today.
+
+    The News Agent scores headlines. This scores a COMPANY: the stories clustered
+    together, the filed and vendor numbers underneath them, where the price
+    already is, and a two-sided case — which is the unit of analysis the owner
+    was actually asking for when he compared a 4/10 on a listicle against a
+    sourced research note.
+
+    Three scores, because there are three questions and only one of them can move
+    a position on a desk that force-closes after 240 minutes:
+
+      CATALYST  a dated, firm-specific event inside the next day. The only tier
+                that may ever open a trade.
+      CONTEXT   guidance, estimate revisions, positioning. May shrink a position
+                or veto it. Never enlarges one.
+      THESIS    valuation, growth, product cycle. Display only.
+
+    Built in SHADOW: written, scored, displayed and graded, emitting no
+    instruction and touching no order, until a preregistered gate says the
+    research arm beats the headline arm on a paired daily comparison.
+    """
+    ARMS = (('shadow', 'Shadow'), ('armed', 'Armed'))
+    DIRECTIONS = (('buy', 'Buy'), ('short', 'Short'), ('none', 'No action'))
+
+    symbol = models.CharField(max_length=16)
+    market = models.CharField(max_length=8, choices=Market.choices, blank=True)
+    as_of = models.DateTimeField(default=timezone.now)
+    arm = models.CharField(max_length=8, choices=ARMS, default='shadow')
+
+    # --- the clocks. Research latency is part of performance, so it is recorded.
+    research_started_at = models.DateTimeField(null=True, blank=True)
+    research_completed_at = models.DateTimeField(null=True, blank=True)
+    decision_eligible_at = models.DateTimeField(null=True, blank=True)
+
+    # --- the evidence. Documented shapes, following Strategy.history convention.
+    # facts:    {label, value, unit, period, tier, source, url, as_of, quote,
+    #            accession, form, xbrl_tag}
+    # stories:  {news_id, headline, url, first_public_at, age_minutes, weight}
+    # bull/bear:{claim, facts: [label, ...]}
+    # triggers: {condition, direction, metric, comparator, threshold, window}
+    facts = models.JSONField(default=list, blank=True)
+    stories = models.JSONField(default=list, blank=True)
+    bull = models.JSONField(default=list, blank=True)
+    bear = models.JSONField(default=list, blank=True)
+    triggers = models.JSONField(default=list, blank=True)
+    narrative = models.TextField(blank=True)
+
+    # --- the catalyst, if there is one. Dated or it does not count.
+    catalyst_headline = models.CharField(max_length=500, blank=True)
+    catalyst_url = models.URLField(max_length=500, blank=True)
+    catalyst_at = models.DateTimeField(null=True, blank=True)   # first_public_at of the event
+
+    # --- the three scores. Human-facing summaries, never given a Brier score:
+    # a 1-10 rating is not a probability and cannot be scored as one.
+    score_catalyst = models.PositiveSmallIntegerField(default=0)
+    score_context = models.PositiveSmallIntegerField(default=0)
+    score_thesis = models.PositiveSmallIntegerField(default=0)
+    direction = models.CharField(max_length=6, choices=DIRECTIONS, default='none')
+
+    # --- the forecasts. These ARE probabilities of defined events, and they are
+    # what the scoreboard grades. The first three describe one barrier race and
+    # must sum to 1; p_positive_net is a separate binary question.
+    p_target_first = models.FloatField(null=True, blank=True)
+    p_stop_first = models.FloatField(null=True, blank=True)
+    p_timeout = models.FloatField(null=True, blank=True)
+    p_positive_net = models.FloatField(null=True, blank=True)
+    # The model's own spread. Descriptive until an empirical or conformal
+    # procedure establishes coverage — NOT a validated interval.
+    p_low = models.FloatField(null=True, blank=True)
+    p_high = models.FloatField(null=True, blank=True)
+    base_rate = models.FloatField(null=True, blank=True)   # measured, supplied to the model
+
+    # --- what it would have done, had it been armed.
+    size_multiplier = models.FloatField(default=1.0)       # clamped to <= 1.0
+    veto_reason = models.CharField(max_length=300, blank=True)
+    refused_reason = models.CharField(max_length=300, blank=True)
+    thin_evidence = models.BooleanField(default=False)
+
+    # --- what it cost, measured rather than modelled.
+    model = models.CharField(max_length=60, blank=True)
+    service_tier = models.CharField(max_length=12, blank=True)
+    searches = models.PositiveSmallIntegerField(default=0)
+    input_tokens = models.PositiveIntegerField(default=0)
+    output_tokens = models.PositiveIntegerField(default=0)
+    reasoning_tokens = models.PositiveIntegerField(default=0)
+    cost_usd = models.DecimalField(max_digits=10, decimal_places=5, default=D0)
+    duration_s = models.FloatField(default=0)
+    error = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ['-as_of']
+        indexes = [models.Index(fields=['symbol', '-as_of']), models.Index(fields=['-as_of'])]
+
+    def __str__(self):
+        return f'{self.symbol} {self.as_of:%m-%d %H:%M} {self.score_catalyst}/10'
+
+    @property
+    def has_catalyst(self) -> bool:
+        return bool(self.catalyst_at and self.catalyst_headline)
+
+    @property
+    def catalyst_age_minutes(self) -> float | None:
+        if not self.catalyst_at:
+            return None
+        return (timezone.now() - self.catalyst_at).total_seconds() / 60
+
+    @property
+    def probabilities_consistent(self) -> bool:
+        parts = [self.p_target_first, self.p_stop_first, self.p_timeout]
+        if any(p is None for p in parts):
+            return False
+        return abs(sum(parts) - 1.0) <= 0.02
+
+    @property
+    def edge_vs_base_rate(self) -> float | None:
+        """How far the forecast departs from what the tape does unprompted."""
+        if self.p_target_first is None or self.base_rate is None:
+            return None
+        return self.p_target_first - self.base_rate
+
+    @property
+    def citable_facts(self) -> list:
+        return [f for f in (self.facts or []) if f.get('value') is not None and f.get('source')]
 
 
 class FeedEvent(models.Model):

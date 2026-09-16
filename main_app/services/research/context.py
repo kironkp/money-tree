@@ -123,3 +123,62 @@ def regime() -> FactSheet:
                 sheet.facts.append(f)
         sheet.errors.extend(one.errors)
     return sheet
+
+
+def barrier_base_rate(symbol: str, stop_atr: float = 1.5, rr: float = 2.0,
+                      hold_minutes: int = 240, samples: int = 800) -> dict | None:
+    """What the tape does unprompted, on this symbol, with this geometry.
+
+    The model is asked for the probability that price touches the target before
+    the stop. That number is meaningless without knowing what it is from a
+    standing start — a 30% forecast is bearish if the base rate is 45% and
+    wildly bullish if it is 12%. So the base rate is measured here, on this
+    symbol's own bars, and handed to the model as a supplied fact rather than
+    left for it to guess.
+
+    Entries are sampled long-only; the short base rate is measured separately by
+    passing the mirrored geometry. Both barriers inside one bar counts as the
+    stop, the same conservative tie-break the grader uses, because OHLC cannot
+    say which came first and the flattering assumption is how a backtest lies.
+    """
+    import numpy as np
+
+    from ..indicators import atr as atr_of
+    df, tf = _frame(symbol)
+    if df is None or len(df) < 200:
+        return None
+    per_day = BARS_PER_DAY.get(tf, 78)
+    horizon = max(2, int(hold_minutes / (390 / per_day))) if per_day else 48
+    atr = atr_of(df, 14).to_numpy()
+    close, high, low = df['close'].to_numpy(), df['high'].to_numpy(), df['low'].to_numpy()
+    usable = len(df) - horizon - 1
+    if usable < 50:
+        return None
+    stride = max(1, usable // samples)
+
+    out = {'target': 0, 'stop': 0, 'timeout': 0}
+    for side in ('long',):
+        for i in range(14, usable, stride):
+            a = atr[i]
+            if not (a == a) or a <= 0:
+                continue
+            entry = close[i]
+            stop = entry - stop_atr * a
+            target = entry + rr * stop_atr * a
+            window = slice(i + 1, i + 1 + horizon)
+            hit_stop = np.nonzero(low[window] <= stop)[0]
+            hit_target = np.nonzero(high[window] >= target)[0]
+            first_stop = hit_stop[0] if len(hit_stop) else None
+            first_target = hit_target[0] if len(hit_target) else None
+            if first_stop is None and first_target is None:
+                out['timeout'] += 1
+            elif first_target is None or (first_stop is not None and first_stop <= first_target):
+                out['stop'] += 1                     # ties go to the stop
+            else:
+                out['target'] += 1
+    n = sum(out.values())
+    if n < 50:
+        return None
+    return {'n': n, 'timeframe': tf, 'horizon_bars': horizon,
+            'p_target_first': out['target'] / n, 'p_stop_first': out['stop'] / n,
+            'p_timeout': out['timeout'] / n}

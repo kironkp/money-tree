@@ -4,6 +4,7 @@ from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from main_app.services.dossier import refresh
 from main_app.services.news_agent import (MODEL, expire_leases, run_session, score_verdicts,
                                           scoreboard)
 
@@ -15,6 +16,10 @@ class Command(BaseCommand):
         parser.add_argument('--hours', type=int, default=0, help='look back this far (default: 5)')
         parser.add_argument('--model', default=MODEL)
         parser.add_argument('--scoreboard', action='store_true', help='is a high score actually better?')
+        parser.add_argument('--no-research', action='store_true',
+                            help='skip the per-company dossiers this sitting')
+        parser.add_argument('--research-limit', type=int, default=4,
+                            help='how many companies to research this sitting')
         parser.add_argument('--reconstructed', action='store_true',
                             help='score the rebuilt history instead — never evidence, useful for debugging')
 
@@ -44,6 +49,20 @@ class Command(BaseCommand):
         if scored['scored']:
             self.stdout.write(f"graded {scored['graded']} call(s) against price"
                               f" ({scored['priced_only']} priced but not directional)")
+
+        # Research runs inside the sitting rather than as a fifth launchd job: the
+        # label com.kiron.moneytree.research already belongs to the walk-forward
+        # optimizer, StartInterval plists drift out of phase after any reboot so a
+        # separate job cannot be relied on to run before the sitting that reads it,
+        # and CLAUDE.md warns against a fourth chatty SQLite writer.
+        if not o['no_research']:
+            for d in refresh(limit=o['research_limit']):
+                if d.error:
+                    self.stdout.write(self.style.WARNING(f'  {d.symbol}: {d.error[:80]}'))
+                else:
+                    self.stdout.write(
+                        f'  {d.symbol} researched: catalyst {d.score_catalyst}/10, '
+                        f'{d.direction}, ${float(d.cost_usd):.4f}')
 
         since = timezone.now() - timedelta(hours=o['hours']) if o['hours'] else None
         s = run_session(since=since, model=o['model'])

@@ -43,6 +43,7 @@ TABLES='main_app_account main_app_agentconfig main_app_agentrun main_app_apiusag
         main_app_briefing main_app_experiment main_app_fill main_app_instrument
         main_app_journalentry main_app_marketsession main_app_newsitem
         main_app_newssession main_app_newsverdict main_app_order main_app_position
+        main_app_symboldossier
         main_app_riskevent main_app_signal main_app_signupinvite main_app_strategy
         main_app_trade main_app_tradecard main_app_equitysnapshot'
 

@@ -29,7 +29,7 @@ environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 SECRET_KEY = env('SECRET_KEY')
 # Bump per release; tagged in git (v1.0, v1.1, …) with a matching
 # backups/db-<tag>.sqlite3 snapshot. Rollback recipe lives in CLAUDE.md.
-VERSION = '1.38'
+VERSION = '1.39'
 
 # Tests must be deterministic even when a developer's local .env selects
 # production behavior. Manifest storage is a deployment concern; requiring

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Keep the four lane agents alive. Runs at load (so a reboot brings them
+       back) and every five minutes after that. `ensure_agents` is idempotent:
+       it starts only what is missing, so this can fire as often as it likes.
+
+       This REPLACES the old com.kiron.moneytree.agent.plist, which predates the
+       four-lane split: it ran `run_agent --mode sim` with no --market, which
+       today would start a second stocks agent competing with the real one for
+       its lock. Before this existed, the agents were started only by the 02:10
+       nightly research job, so a reboot at 10am meant no trading until 02:10 the
+       next night.
+         cp deploy/launchd/com.kiron.moneytree.agents.plist ~/Library/LaunchAgents/
+         launchctl load ~/Library/LaunchAgents/com.kiron.moneytree.agents.plist -->
+  <key>Label</key><string>com.kiron.moneytree.agents</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/kironkp/.local/bin/pipenv</string>
+    <string>run</string><string>python</string><string>manage.py</string>
+    <string>ensure_agents</string><string>--mode</string><string>sim</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>300</integer>
+  <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/ensure-agents.log</string>
+  <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/ensure-agents.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/kironkp/.local/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>

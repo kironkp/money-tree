@@ -46,10 +46,21 @@ class TheGraphDescribesSomethingReal(TestCase):
             self.assertTrue(n['eq'] and n['eq']['html'], f'{n["id"]} has no formula')
             self.assertTrue(n['eq']['subs'], f'{n["id"]} shows a formula with no real numbers in it')
 
-    def test_it_admits_what_is_not_running(self):
-        """A diagram that draws the watchdog as live would be worse than no diagram."""
-        watchdog = next(n for n in self.g['nodes'] if n['id'] == 'ops.watchdog')
-        self.assertIn('not loaded', watchdog['note'].lower())
+    def test_scheduled_jobs_report_from_evidence_not_from_their_plists(self):
+        """A schedule file says what someone intended; a log says what ran.
+
+        The watchdog's plist sat in the repository for weeks looking exactly like
+        a job that was working, while nothing was watching anything.
+        """
+        from main_app.services.graph_state import _job
+        dead = _job('nothing-here.log', 12, 'nobody would notice')
+        self.assertEqual(dead['status'], 'error')
+        self.assertIn('never run', dead['sub'])
+
+    def test_the_supervisor_is_wired_to_every_lane(self):
+        wired = {e['to'] for e in self.g['edges'] if e['from'] == 'ops.agents'}
+        for lane in ('stocks', 'crypto', 'degen', 'forex'):
+            self.assertIn(f'agent.{lane}', wired)
 
 
 class TheMapRenders(TestCase):

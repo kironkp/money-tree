@@ -405,13 +405,26 @@ def _ops_nodes() -> list[dict]:
                 'nothing. The tier that gets billed is the one the API says it served.',
                 file='main_app/services/spend.py', cluster='ops', col=7, row=8))
     a.append(_n('ops.watchdog', 'bot', 'Watchdog', 'infra', 'eye',
-                'Meant to close positions when an agent dies. Currently not running.',
-                'It exists, it is written, and its schedule file has never been loaded on this '
-                'machine — so if a lane agent died holding a position, nothing would notice. The '
-                'map shows what is actually loaded rather than what is written down, because the '
-                'difference is exactly the kind of thing a diagram normally hides.',
-                cadence='every 5 minutes — NOT LOADED', file='main_app/management/commands/watchdog.py',
-                cluster='ops', col=8, row=4, note='not loaded'))
+                'Closes positions at the venue when an agent dies holding them.',
+                'An independent process, on purpose: an agent that has crashed cannot be trusted '
+                'to clean up after itself. It acts only on the broker-backed accounts, so today it '
+                'watches and finds nothing, which is what it should do until a lane graduates. Its '
+                'status here is read from its log rather than from its schedule file — the file '
+                'sat in the repository for weeks looking exactly like a job that was working.',
+                cadence='every 5 minutes', file='main_app/management/commands/watchdog.py',
+                cluster='ops', col=8, row=4))
+    a.append(_n('ops.agents', 'bot', 'Agent Supervisor', 'infra', 'heartbeat',
+                'Starts any lane agent that is not running, and leaves the rest alone.',
+                'Runs when the machine boots and every five minutes after. It is idempotent — it '
+                'starts what is missing and touches nothing else — which is why it can be on a '
+                'timer at all, where a restart job on the same timer would kill a working agent '
+                'every five minutes. Before it existed the four agents were started only by the '
+                '02:10 research job, so a reboot in the morning meant no trading until the next '
+                'night.',
+                cadence='at boot, then every 5 minutes',
+                file='main_app/management/commands/ensure_agents.py',
+                cluster='ops', col=2, row=1))
+
     a.append(_n('ops.backup', 'bot', 'Nightly Backup', 'infra', 'archive-box',
                 'Pushes the code and the irreplaceable rows to a private repository at 2am.',
                 'The trading ledger is dumped as plain SQL and committed, because it deltas well '
@@ -691,7 +704,11 @@ def edges() -> list[dict]:
         e('store.ledger', 'ops.coach', 'number', ''),
         e('store.ledger', 'ops.backup', 'control', 'nightly'),
         e('store.verdicts', 'ops.backup', 'control', ''),
-        e('ops.watchdog', 'core.sim', 'control', 'would close a stranded position'),
+        e('ops.watchdog', 'core.alpaca_broker', 'control', 'closes a stranded position'),
+        e('ops.agents', 'agent.stocks', 'control', 'keeps it alive'),
+        e('ops.agents', 'agent.crypto', 'control', ''),
+        e('ops.agents', 'agent.degen', 'control', ''),
+        e('ops.agents', 'agent.forex', 'control', ''),
     ]
     return out
 

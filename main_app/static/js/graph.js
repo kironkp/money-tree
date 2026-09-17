@@ -222,6 +222,7 @@
     mail: 'M3 6h18v12H3zM3 7l9 6 9-6',
     receipt: 'M5 3h14v18l-2-2-2 2-2-2-2 2-2-2-2 2zM9 8h6M9 12h6M9 16h4',
     eye: 'M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6zM12 15a3 3 0 100-6 3 3 0 000 6',
+    heartbeat: 'M2 12h4l2-6 4 12 2-6h8',
     'archive-box': 'M3 5h18v4H3zM5 9v11h14V9M10 13h4',
     ruler: 'M3 9h18v6H3zM7 9v3M11 9v4M15 9v3M19 9v4',
     toll: 'M4 20V9l8-5 8 5v11M9 20v-6h6v6M4 20h16',

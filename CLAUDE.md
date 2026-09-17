@@ -287,6 +287,29 @@ feeds it and what it feeds.
   watchdog's plist exists and has never been loaded on this machine, so nothing
   would close a position if a lane agent died holding one. That is drawn in red.
 
+## v1.39 — what is scheduled vs what is running
+
+Nine launchd jobs exist; only seven had ever been loaded. The two that had not
+were the two that keep the desk alive.
+
+- **The watchdog was never loaded.** Its plist sat in `deploy/launchd/` for weeks
+  looking exactly like a job that was working. If a broker-backed agent had died
+  holding a position, nothing would have closed it. Now loaded and verified.
+- **Nothing started the agents after a reboot.** The four lanes were launched only
+  by `restart_agents` inside the 02:10 nightly research job, so a reboot at 10am
+  meant no trading until 02:10 the following night, silently. New
+  `manage.py ensure_agents` is idempotent — it starts only what is missing — so
+  `com.kiron.moneytree.agents.plist` can carry `RunAtLoad` plus a 5-minute
+  interval. `restart_agents` stays for the post-promotion reload, where killing
+  and respawning is the point.
+- The old `com.kiron.moneytree.agent.plist` is **deleted**. It predated the
+  four-lane split: `run_agent --mode sim` with no `--market` would have started a
+  second stocks agent contending for the first one's lock.
+- **The map now reads job status from the job's log, not from its plist.** A
+  schedule file says what someone intended; a log written five minutes ago says
+  what is running. `graph_state._job()` stats the log and reports live, stale or
+  never-run. This is the whole reason the gap went unnoticed for weeks.
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live

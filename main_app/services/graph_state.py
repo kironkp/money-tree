@@ -34,6 +34,24 @@ def _money(x) -> str:
     return f'{sign}{x:,.2f}'
 
 
+def _job(log_name: str, max_age_min: int, if_dead: str) -> dict:
+    """Is a scheduled job actually running? Ask its log, not its plist."""
+    from django.conf import settings
+    path = settings.BASE_DIR / 'run' / log_name
+    try:
+        age = (timezone.now().timestamp() - path.stat().st_mtime) / 60
+    except OSError:
+        return {'status': 'error', 'headline': 'off', 'sub': 'never run',
+                'detail': f'no log has ever been written, so {if_dead}'}
+    if age <= max_age_min:
+        return {'status': 'ok', 'headline': 'live',
+                'sub': f'ran {age:.0f} min ago', 'detail': ''}
+    hours = age / 60
+    when = f'{age:.0f} min' if hours < 1 else f'{hours:.0f} h'
+    return {'status': 'warn', 'headline': 'stale', 'sub': f'last ran {when} ago',
+            'detail': f'it has not run recently, so {if_dead}'}
+
+
 def state() -> dict:
     """One dict of node id -> live state. Every value is cheap or absent."""
     now = timezone.now()
@@ -163,11 +181,12 @@ def state() -> dict:
     }
 
     # --- what is actually scheduled -----------------------------------------
-    out['ops.watchdog'] = {
-        'status': 'error', 'headline': 'off', 'sub': 'never loaded',
-        'detail': 'its schedule file exists but has not been loaded on this machine, so nothing '
-                  'would close a position if an agent died holding one',
-    }
+    # Read from evidence, not from the plists. A schedule file on disk says what
+    # someone intended; a log written five minutes ago says what is running. The
+    # watchdog sat unloaded for weeks while its plist sat in the repository
+    # looking exactly like a job that was working.
+    out['ops.watchdog'] = _job('watchdog.log', 12, 'nothing would close a stranded position')
+    out['ops.agents'] = _job('ensure-agents.log', 12, 'a reboot would leave the lanes dead')
     out['core.alpaca_broker'] = {'status': 'idle', 'headline': 'dormant', 'sub': 'no lane qualified',
                                  'detail': 'three separate locks, none of them open'}
     out['gate.shadow'] = {'status': 'warn', 'headline': 'closed', 'sub': 'research cannot trade',

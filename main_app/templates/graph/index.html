@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% load asset_tags %}
+{% block title %}The Map · MoneyTree{% endblock %}
+{% block body_class %}floor-page{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static_v 'css/graph.css' %}">{% endblock %}
+{% block content %}
+
+<div class="floor">
+  <div id="f-stage">
+    <div id="f-view">
+      <svg id="f-cables" viewBox="-4000 -3000 8000 6000" aria-hidden="true"></svg>
+      <div id="f-nodes"></div>
+    </div>
+  </div>
+
+  <div class="f-bar">
+    <div class="f-glass f-title">
+      <h1>The Floor</h1>
+      <p>{{ counts.nodes }} parts &middot; {{ counts.edges }} cables &middot; everything that runs itself</p>
+    </div>
+    <div class="f-glass f-lanes">
+      {% for key, lane in lanes.items %}
+        <button class="f-lane" data-lane="{{ key }}" style="--c: var(--lane-{{ key }})"
+                title="{{ lane.note }}">{{ lane.name }}</button>
+      {% endfor %}
+    </div>
+    <div class="f-glass f-tools">
+      <button class="f-btn" id="f-arrange">Arrange</button>
+      <button class="f-btn" id="f-shake">Shake</button>
+      <button class="f-btn" id="f-reset">Reset</button>
+    </div>
+  </div>
+
+  <aside class="f-panel" id="f-panel" aria-live="polite"></aside>
+
+  <p class="f-hint" id="f-hint">drag a bot &middot; the cables follow &middot; click one to read it</p>
+  <div class="f-legend">
+    <span><i></i>price &amp; orders</span>
+    <span><i class="dash"></i>news</span>
+    <span><i class="dash"></i>numbers</span>
+  </div>
+</div>
+
+{# json_script escapes < and & so markup inside an equation cannot close this tag #}
+{{ graph|json_script:"graph-data" }}
+{{ state|json_script:"graph-state" }}
+{% endblock %}
+{% block scripts %}<script src="{% static_v 'js/graph.js' %}"></script>{% endblock %}

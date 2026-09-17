@@ -1,0 +1,280 @@
+/* =========================================================
+   THE FLOOR — MoneyTree's machine room.
+
+   A patchbay, not a canvas. Every bot is a rack unit with a
+   coloured spine and lit ports; every connection is a cable
+   that sags under its own weight and swings when you move
+   what it is plugged into.
+
+   One structural rule makes it legible: HUE IS LANE, FORM IS
+   PAYLOAD, and lane colour never touches type. Lane colour
+   lives only in chrome — a node's spine, a cable's stroke, a
+   chip's fill. Profit-green and loss-red keep typography to
+   themselves, because two colour languages arguing on one
+   screen is how a dashboard becomes decoration.
+   ========================================================= */
+
+.floor {
+  --f-void:      #070A12;
+  --f-deck:      #0C1220;
+  --f-rack:      #141C2E;
+  --f-rack-2:    #1B2439;
+  --f-rule:      #263149;
+
+  --f-ink:       #E6ECF7;
+  --f-dim:       #8A96AD;
+  --f-faint:     #5A6480;
+  --f-beam:      #3D8BFF;
+  --f-beam-soft: #1E4C99;
+  --f-hot:       #FFB338;
+  --f-cut:       #FF5C5C;
+  --f-live:      #3DDC97;
+
+  --lane-stocks: #4DA3FF;
+  --lane-crypto: #21D4C4;
+  --lane-degen:  #C77DFF;
+  --lane-forex:  #FFB338;
+  --lane-all:    #7C8AA6;
+  --lane-infra:  #5A6480;
+
+  --r-1: 3px; --r-2: 6px; --r-3: 10px; --r-4: 16px; --r-5: 26px;
+  --font-display: 'Archivo', 'Inter', system-ui, sans-serif;
+  --font-math: 'Source Serif 4', ui-serif, Palatino, Georgia, serif;
+}
+.floor { --f-rule-lit: #3A4869; }
+
+/* The page takes the whole viewport under the header. */
+body.floor-page .site-main { max-width: none; padding: 0; }
+body.floor-page footer.site-main { display: none; }
+
+.floor {
+  position: relative;
+  height: calc(100vh - 56px);
+  background:
+    radial-gradient(1100px 620px at 22% 8%, #14213B 0%, transparent 62%),
+    radial-gradient(900px 520px at 88% 92%, #101A2E 0%, transparent 58%),
+    var(--f-void);
+  color: var(--f-ink);
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  font-family: var(--font-body);
+}
+/* The floor is its own visual world and does not follow the app theme:
+   a patchbay with the lights on is a different object. */
+.floor::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(rgba(61,139,255,.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(61,139,255,.045) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 120% 100% at 50% 40%, #000 30%, transparent 78%);
+}
+
+/* ---------------------------------------------------------- stage */
+#f-stage { position: absolute; inset: 0; cursor: grab; }
+#f-stage.dragging { cursor: grabbing; }
+#f-view { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+
+#f-cables { position: absolute; left: -4000px; top: -3000px; width: 8000px; height: 6000px;
+            pointer-events: none; overflow: visible; }
+#f-cables path { fill: none; stroke-linecap: round; }
+.cable { transition: opacity .28s ease; }
+.cable.dim { opacity: .13; }
+.cable.lit { filter: drop-shadow(0 0 6px currentColor); }
+
+/* ---------------------------------------------------------- nodes */
+.fnode {
+  position: absolute; left: 0; top: 0; width: 212px;
+  background: linear-gradient(180deg, var(--f-rack) 0%, var(--f-rack-2) 100%);
+  border: 1px solid var(--f-rule);
+  border-radius: var(--r-3);
+  box-shadow: 0 10px 30px -12px #000, inset 0 1px 0 rgba(255,255,255,.05);
+  padding: 11px 12px 11px 15px;
+  cursor: grab;
+  transition: border-color .2s ease, box-shadow .2s ease, opacity .28s ease;
+}
+.fnode:active { cursor: grabbing; }
+.fnode.dim { opacity: .2; }
+.fnode.sel, .fnode:hover { border-color: var(--f-rule-lit); }
+.fnode.sel {
+  box-shadow: 0 0 0 1px var(--lane), 0 14px 44px -14px #000,
+              0 0 34px -6px color-mix(in srgb, var(--lane) 55%, transparent);
+}
+/* the coloured spine — the only place lane colour lives on a node */
+.fnode::before {
+  content: ''; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px;
+  background: var(--lane); border-radius: 0 2px 2px 0;
+  box-shadow: 0 0 10px -1px var(--lane);
+}
+
+/* four silhouettes, so the machine reads at a zoom where no text does */
+.fnode.k-bot      { border-radius: var(--r-3); }
+.fnode.k-store,
+.fnode.k-source   { border-radius: var(--r-1); }
+.fnode.k-equation { border-radius: var(--r-3) var(--r-3) var(--r-4) var(--r-4);
+                    background: linear-gradient(180deg, #131A2B 0%, #10192C 100%); }
+.fnode.k-paper    { border-radius: var(--r-1) var(--r-1) 0 0;
+                    clip-path: polygon(0 0,100% 0,100% 93%,88% 100%,72% 94%,55% 100%,38% 94%,20% 100%,6% 94%,0 99%); 
+                    padding-bottom: 20px; }
+.fnode.k-gate     { border-radius: var(--r-5); padding-left: 18px; }
+.fnode.k-venue    { border-radius: var(--r-1) var(--r-3) var(--r-3) var(--r-1); }
+
+.fn-top { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
+.fn-icon { width: 20px; height: 20px; flex: 0 0 20px; color: var(--lane); }
+.fn-icon svg { width: 100%; height: 100%; display: block; }
+.fn-name {
+  font-family: var(--font-display); font-weight: 600; font-stretch: 112%;
+  font-size: 12.5px; letter-spacing: .055em; text-transform: uppercase;
+  color: var(--f-ink); line-height: 1.15; flex: 1 1 auto;
+}
+.fn-led { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; background: var(--f-faint); }
+.fn-led.ok    { background: var(--f-live); box-shadow: 0 0 8px var(--f-live); }
+.fn-led.warn  { background: var(--f-hot);  box-shadow: 0 0 8px var(--f-hot); }
+.fn-led.error { background: var(--f-cut);  box-shadow: 0 0 9px var(--f-cut);
+                animation: fpulse 1.4s ease-in-out infinite; }
+.fn-led.stale { background: var(--f-hot); opacity: .45; }
+@keyframes fpulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+.fn-one { font-size: 11.5px; line-height: 1.4; color: var(--f-dim); }
+.fn-live { display: flex; align-items: baseline; gap: 7px; margin-top: 8px;
+           padding-top: 8px; border-top: 1px solid var(--f-rule); }
+.fn-big { font-family: var(--font-mono); font-size: 15px; font-weight: 600;
+          font-variant-numeric: tabular-nums; color: var(--f-ink); }
+.fn-sub { font-size: 10.5px; color: var(--f-faint); }
+.fn-tag { position: absolute; top: -8px; right: 10px; font-size: 9px; letter-spacing: .09em;
+          text-transform: uppercase; font-weight: 600; padding: 2px 7px; border-radius: 999px;
+          background: color-mix(in srgb, var(--lane) 22%, var(--f-void));
+          color: var(--lane); border: 1px solid color-mix(in srgb, var(--lane) 40%, transparent); }
+.fnode.offline { opacity: .55; }
+.fnode.offline .fn-name { color: var(--f-dim); }
+
+/* ---------------------------------------------------------- chrome */
+.f-bar {
+  position: absolute; top: 16px; left: 16px; right: 16px; z-index: 30;
+  display: flex; gap: 10px; align-items: center; pointer-events: none;
+}
+.f-bar > * { pointer-events: auto; }
+.f-glass {
+  background: rgba(12,18,32,.72); backdrop-filter: blur(14px) saturate(1.3);
+  border: 1px solid var(--f-rule); border-radius: var(--r-3);
+  box-shadow: 0 12px 34px -16px #000;
+}
+.f-title { padding: 9px 14px; }
+.f-title h1 { font-family: var(--font-display); font-stretch: 112%; font-weight: 700;
+              font-size: 14px; letter-spacing: .14em; text-transform: uppercase;
+              margin: 0; color: var(--f-ink); }
+.f-title p { margin: 2px 0 0; font-size: 10.5px; color: var(--f-faint);
+             font-family: var(--font-mono); }
+.f-tools { display: flex; gap: 2px; padding: 5px; margin-left: auto; }
+.f-btn {
+  appearance: none; background: transparent; border: 0; color: var(--f-dim);
+  font: 600 11px/1 var(--font-body); letter-spacing: .05em; text-transform: uppercase;
+  padding: 8px 11px; border-radius: var(--r-2); cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+.f-btn:hover { background: var(--f-rack-2); color: var(--f-ink); }
+.f-btn.on { background: var(--f-beam-soft); color: #fff; }
+.f-lanes { display: flex; gap: 2px; padding: 5px; }
+.f-lane {
+  appearance: none; border: 0; cursor: pointer; padding: 7px 10px; border-radius: var(--r-2);
+  background: transparent; color: var(--f-dim);
+  font: 600 10.5px/1 var(--font-body); letter-spacing: .07em; text-transform: uppercase;
+  display: flex; align-items: center; gap: 6px; transition: background .16s ease;
+}
+.f-lane::before { content: ''; width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
+.f-lane:hover { background: var(--f-rack-2); }
+.f-lane.off { opacity: .35; }
+
+/* ---------------------------------------------------------- inspector */
+.f-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; width: 396px; max-width: 92vw; z-index: 40;
+  background: rgba(10,15,26,.93); backdrop-filter: blur(20px) saturate(1.25);
+  border-left: 1px solid var(--f-rule);
+  transform: translateX(100%); transition: transform .34s cubic-bezier(.22,.68,.32,1);
+  overflow-y: auto; overscroll-behavior: contain;
+}
+.f-panel.open { transform: none; }
+.f-panel-in { padding: 22px 24px 60px; }
+.f-panel-top { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 4px; }
+.f-panel-icon { width: 34px; height: 34px; flex: 0 0 34px; color: var(--lane); }
+.f-panel h2 { font-family: var(--font-display); font-stretch: 112%; font-weight: 700;
+              font-size: 19px; letter-spacing: .02em; margin: 0; color: var(--f-ink); }
+.f-kicker { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .1em;
+            text-transform: uppercase; color: var(--lane); margin: 3px 0 0; }
+.f-close { position: absolute; top: 18px; right: 18px; background: transparent; border: 0;
+           color: var(--f-faint); font-size: 22px; line-height: 1; cursor: pointer; padding: 4px; }
+.f-close:hover { color: var(--f-ink); }
+.f-lede { font-size: 15px; line-height: 1.5; color: var(--f-ink); margin: 16px 0 12px; }
+.f-body { font-size: 13.5px; line-height: 1.62; color: var(--f-dim); margin: 0 0 18px; }
+.f-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px;
+           font-size: 12px; margin: 0 0 18px; padding: 14px 0; 
+           border-top: 1px solid var(--f-rule); border-bottom: 1px solid var(--f-rule); }
+.f-facts dt { color: var(--f-faint); text-transform: uppercase; letter-spacing: .07em;
+              font-size: 10px; padding-top: 2px; }
+.f-facts dd { margin: 0; color: var(--f-ink); font-family: var(--font-mono); font-size: 11.5px;
+              word-break: break-word; }
+.f-wires h3 { font-family: var(--font-display); font-stretch: 112%; font-size: 10.5px;
+              letter-spacing: .12em; text-transform: uppercase; color: var(--f-faint);
+              margin: 18px 0 8px; }
+.f-wire { display: flex; align-items: center; gap: 9px; padding: 7px 0; font-size: 12.5px;
+          border-bottom: 1px solid rgba(38,49,73,.5); cursor: pointer; }
+.f-wire:hover .f-wire-name { color: var(--f-beam); }
+.f-wire-dot { width: 7px; height: 7px; border-radius: 2px; flex: 0 0 7px; background: var(--c); }
+.f-wire-name { color: var(--f-ink); flex: 1 1 auto; }
+.f-wire-what { color: var(--f-faint); font-size: 11px; font-family: var(--font-mono); }
+.f-note { font-size: 12px; line-height: 1.55; color: var(--f-dim); border-left: 2px solid var(--f-hot);
+          padding: 2px 0 2px 12px; margin: 14px 0; }
+
+/* ---------------------------------------------------------- equations */
+.eq { font-family: var(--font-math); font-size: 17px; line-height: 1; color: var(--f-ink);
+      display: inline-flex; align-items: center; gap: .14em; white-space: nowrap; }
+.eq .v { font-style: italic; }
+.eq .op { font-style: normal; margin: 0 .24em; color: var(--f-dim); }
+.eq .fn { font-style: normal; }
+.eq .n { font-family: var(--font-mono); font-size: .8em; font-style: normal;
+         font-variant-numeric: tabular-nums; color: var(--f-beam); }
+.eq sub, .eq sup, .eq .pow { font-size: .58em; line-height: 0; font-style: normal; }
+.eq sub { vertical-align: -.36em; } .eq sup { vertical-align: .56em; }
+.eq .pow { vertical-align: .95em; }
+.frac { display: inline-grid; grid-template-rows: 1fr auto 1fr; justify-items: center;
+        align-items: center; vertical-align: -.5em; margin: 0 .2em; }
+.frac > .num { padding: 0 .36em .13em; }
+.frac > .bar { width: 100%; height: 1px; background: currentColor; opacity: .55; }
+.frac > .den { padding: .13em .36em 0; }
+.sqrt { display: inline-flex; align-items: stretch; }
+.sqrt::before { content: '\221A'; font-size: 1.05em; line-height: 1; }
+.sqrt > .rad { display: flex; align-items: center; border-top: 1px solid currentColor;
+               padding: .1em .18em 0 .05em; margin-top: .05em; }
+.paren, .ceil, .abs { display: inline-flex; align-items: center; }
+.paren::before, .paren::after, .ceil::before, .ceil::after {
+  display: inline-block; transform: scaleY(1.8); padding: 0 .05em; color: var(--f-dim); }
+.paren::before { content: '('; } .paren::after { content: ')'; }
+.ceil::before { content: '\2308'; } .ceil::after { content: '\2309'; }
+.abs { border-left: 1px solid var(--f-dim); border-right: 1px solid var(--f-dim); padding: 0 .2em; }
+.eq-block { display: block; margin: 16px 0 8px; overflow-x: auto; padding: 16px 14px;
+            background: #0A101C; border: 1px solid var(--f-rule); border-radius: var(--r-2); }
+.eq-subs { font-family: var(--font-mono); font-size: 11px; color: var(--f-beam);
+           line-height: 1.6; margin: 0 0 14px; }
+
+/* ---------------------------------------------------------- misc */
+.f-hint { position: absolute; left: 18px; bottom: 16px; z-index: 20; font-size: 11px;
+          color: var(--f-faint); font-family: var(--font-mono); pointer-events: none;
+          transition: opacity .4s ease; }
+.f-hint.gone { opacity: 0; }
+.f-legend { position: absolute; right: 18px; bottom: 16px; z-index: 20; display: flex; gap: 14px;
+            font-size: 10px; color: var(--f-faint); font-family: var(--font-mono);
+            text-transform: uppercase; letter-spacing: .08em; pointer-events: none; }
+.f-legend i { display: inline-block; width: 18px; height: 2px; background: currentColor;
+              vertical-align: middle; margin-right: 5px; border-radius: 2px; }
+.f-legend .dash { background: repeating-linear-gradient(90deg, currentColor 0 4px, transparent 4px 8px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .cable, .fnode, .f-panel { transition: none !important; }
+  .fn-led.error { animation: none; }
+}
+@media (max-width: 720px) {
+  .f-bar { flex-wrap: wrap; }
+  .f-lanes { order: 3; width: 100%; }
+  .f-panel { width: 100%; }
+}

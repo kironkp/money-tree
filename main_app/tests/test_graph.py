@@ -1,0 +1,83 @@
+"""The map. Mostly tests that it cannot lie about the machine it draws."""
+from django.test import TestCase
+
+from main_app.services.graph_model import LANES, PAYLOADS, graph
+
+
+class TheGraphDescribesSomethingReal(TestCase):
+    def setUp(self):
+        self.g = graph()
+        self.ids = {n['id'] for n in self.g['nodes']}
+
+    def test_every_cable_is_plugged_in_at_both_ends(self):
+        for e in self.g['edges']:
+            self.assertIn(e['from'], self.ids, f'{e} starts nowhere')
+            self.assertIn(e['to'], self.ids, f'{e} ends nowhere')
+
+    def test_nothing_is_stranded(self):
+        wired = set()
+        for e in self.g['edges']:
+            wired.add(e['from'])
+            wired.add(e['to'])
+        self.assertEqual(self.ids - wired, set(), 'a node nothing connects to is a node nobody can find')
+
+    def test_every_node_can_explain_itself(self):
+        for n in self.g['nodes']:
+            self.assertTrue(n['name'], n['id'])
+            self.assertTrue(n['one_liner'], f'{n["id"]} has no plain-English line')
+            self.assertTrue(n['what'], f'{n["id"]} has no description')
+            self.assertGreater(len(n['what']), 60, f'{n["id"]} is described too thinly to be useful')
+            self.assertIn(n['lane'], LANES)
+            self.assertIn(n['kind'], ('bot', 'store', 'source', 'venue', 'equation', 'paper', 'gate'))
+
+    def test_every_cable_says_what_flows_along_it(self):
+        for e in self.g['edges']:
+            self.assertIn(e['payload'], PAYLOADS)
+
+    def test_all_four_lanes_are_on_the_map(self):
+        names = {n['id'] for n in self.g['nodes']}
+        for lane in ('stocks', 'crypto', 'degen', 'forex'):
+            self.assertIn(f'agent.{lane}', names, f'the {lane} bot is missing')
+
+    def test_the_equations_carry_their_arithmetic(self):
+        eqs = [n for n in self.g['nodes'] if n['kind'] == 'equation']
+        self.assertGreaterEqual(len(eqs), 6)
+        for n in eqs:
+            self.assertTrue(n['eq'] and n['eq']['html'], f'{n["id"]} has no formula')
+            self.assertTrue(n['eq']['subs'], f'{n["id"]} shows a formula with no real numbers in it')
+
+    def test_it_admits_what_is_not_running(self):
+        """A diagram that draws the watchdog as live would be worse than no diagram."""
+        watchdog = next(n for n in self.g['nodes'] if n['id'] == 'ops.watchdog')
+        self.assertIn('not loaded', watchdog['note'].lower())
+
+
+class TheMapRenders(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        self.user = get_user_model().objects.create_user('mapper', password='x', is_staff=True)
+        self.client.force_login(self.user)
+
+    def test_it_renders_with_an_empty_database(self):
+        r = self.client.get('/map/')
+        self.assertEqual(r.status_code, 200)
+        body = r.content.decode()
+        self.assertIn('graph-data', body)
+        self.assertIn('graph-state', body)
+
+    def test_the_live_state_endpoint_answers(self):
+        r = self.client.get('/api/map/state/')
+        self.assertEqual(r.status_code, 200)
+        self.assertIn('state', r.json())
+
+    def test_it_needs_a_login(self):
+        self.client.logout()
+        self.assertIn(self.client.get('/map/').status_code, (301, 302))
+
+    def test_live_state_is_cheap_enough_to_poll(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+        from main_app.services.graph_state import state
+        with CaptureQueriesContext(connection) as q:
+            state()
+        self.assertLess(len(q), 40, 'the map polls this; an N+1 here becomes a stutter')

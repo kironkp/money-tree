@@ -244,6 +244,49 @@ One version per build, two decimals, tagged: **1.33** Phase 0, **1.34** Phase 1,
   property of the query. A regression test runs 40 null histories and requires that
   noise is not promoted.
 
+## v1.38 — The Floor (`/map/`)
+
+An interactive map of every autonomous part of the desk: **52 nodes, 81 cables**.
+Nodes are draggable; cables sag under their own weight and swing when you move
+what they are plugged into. Click anything for what it is, what it costs, what
+feeds it and what it feeds.
+
+- `services/graph_model.py` is the source of truth — every node's plain-English
+  description is written by hand, because the point of the map is to say what a
+  part is FOR and no amount of introspection produces that. `services/graph_state.py`
+  merges live values in at request time (24 queries, ~36 ms). Two measured rules:
+  never touch `Bar` from this endpoint (200 ms+), never call `build_status()` per lane.
+- **Hue is lane, form is payload, and lane colour never touches type.** Lane colour
+  lives only in chrome — a node's spine, a cable's stroke. Green and red keep
+  typography to themselves because they already mean money won and money lost.
+  The seven node kinds have genuinely different silhouettes so the machine reads
+  at a zoom where no text does.
+- **Cable shape is a closed form, not a solved catenary**: `s = L·√k·(0.6124 −
+  0.1124k)` where `k = 1 − d/L`. Within **1.26%** of a Newton-solved catenary
+  across 2%–1900% slack, exact at both physical limits (folded → L/2, taut → 0),
+  one `sqrt`, no transcendentals. The cubic's control points drop by **4s/3**;
+  2s/3 is the classic wrong answer that never hangs enough.
+- **Physics is verlet with projected distance constraints**, not springs: a cable
+  is inextensible, so the stiffness a spring needs is the stiffness that makes
+  explicit integration explode. Seven points, three relaxation passes, fixed
+  1/60 s step with a bounded accumulator. Slack `L` is recomputed only on arrange,
+  so during a drag only the chord changes — which is what makes a cable go taut
+  when pulled and pile up slack when pushed, with no extra state.
+- **Everything sleeps.** A settled cable is removed from the simulation and the
+  RAF loop stops entirely; `awake` reaching zero ends the frame loop.
+- Nodes are divs moved only by `transform`; cables are paths in one world-
+  coordinate SVG; pan/zoom is a single transform on a shared wrapper. No layout
+  reads inside the frame loop.
+- Nine **equation nodes** render the real mathematics in HTML and ~45 lines of CSS
+  — no KaTeX, no MathJax, no build step. Variables are serif italic, literal
+  numbers are mono, so a substituted formula is scannable.
+- Fonts: **Archivo** (display, expanded) and **Source Serif 4** (maths) added to
+  the existing Inter + IBM Plex Mono link — one extra family on the same URL, no
+  new origin. `graph.css` is a second stylesheet loaded only on this route.
+- The map shows what is **actually loaded**, not what is written down: the
+  watchdog's plist exists and has never been loaded on this machine, so nothing
+  would close a position if a lane agent died holding one. That is drawn in red.
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live

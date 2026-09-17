@@ -28,9 +28,10 @@
   <div class="na-stat"><div class="na-stat-n">{{ stats.sessions_7d }}</div><div class="na-stat-l">sittings this week</div></div>
   <div class="na-stat"><div class="na-stat-n">{{ stats.read_7d }}</div><div class="na-stat-l">stories read</div></div>
   <div class="na-stat"><div class="na-stat-n">{{ stats.calls_7d }}</div><div class="na-stat-l">calls made</div></div>
-  <div class="na-stat"><div class="na-stat-n">{{ stats.traded_7d }}</div><div class="na-stat-l">became trades</div></div>
+  <div class="na-stat"><div class="na-stat-n">{{ stats.ordered }}</div><div class="na-stat-l">became orders</div></div>
+  <div class="na-stat"><div class="na-stat-n">{{ stats.traded_7d }}</div><div class="na-stat-l">closed as trades</div></div>
   <div class="na-stat"><div class="na-stat-n">{% if stats.hit_rate != None %}{{ stats.hit_rate|floatformat:0 }}%{% else %}—{% endif %}</div>
-    <div class="na-stat-l">right so far{% if stats.graded %} ({{ stats.graded }} graded){% endif %}</div></div>
+    <div class="na-stat-l">reached target{% if stats.graded %} ({{ stats.graded }} call{{ stats.graded|pluralize }} graded){% else %} (nothing graded yet){% endif %}</div></div>
   <div class="na-stat"><div class="na-stat-n">${{ stats.cost_7d|floatformat:2 }}</div><div class="na-stat-l">cost this week</div></div>
 </div>
 
@@ -81,6 +82,12 @@
       so this table fills in from tomorrow. Until it does, treat every rating as an opinion rather than a track record.</p>
   {% endif %}
 </section>
+
+{% if stats.rebuilt %}
+<p class="small muted">{{ stats.rebuilt }} older verdict{{ stats.rebuilt|pluralize }} graded by rebuilding the outcome from bars after the fact.
+   Kept out of every number above: an outcome reconstructed afterwards is not a forecast recorded before it.
+   <a href="{% url 'news-agent-scoreboard' %}">See them separately</a>.</p>
+{% endif %}
 
 <section class="na-sessions">
   <h3>Sittings</h3>

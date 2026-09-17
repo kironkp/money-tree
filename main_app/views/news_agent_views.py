@@ -33,12 +33,28 @@ def _pulse(sessions) -> dict:
 
 @login_required
 def news_agent(request):
+    from main_app.models import Trade
     sessions = NewsSession.objects.all()
     since = timezone.now() - timedelta(days=7)
     recent = NewsVerdict.objects.filter(created_at__gte=since)
     calls = recent.filter(score__gte=NewsVerdict.ACT_THRESHOLD).exclude(direction='none')
-    graded = recent.filter(outcome_at__isnull=False)
-    right = graded.filter(outcome_pct__gt=0).count()
+    # Contemporaneous only, the same rule the scoreboard uses. Pooling the rebuilt
+    # history here while excluding it there gave two different hit rates for the
+    # same agent on two pages, and the bigger, friendlier number was the wrong one.
+    # Directional calls only. A verdict of "no action" that was later priced is
+    # not a forecast that can be right or wrong, and counting the ones where price
+    # happened to drift up turned a record of two losing calls into a hit rate
+    # over fifty per cent.
+    graded = recent.filter(outcome_at__isnull=False, provenance='contemporaneous',
+                           direction__in=('buy', 'short'), outcome_atr_net__isnull=False)
+    right = graded.filter(outcome_kind='target').count()
+    rebuilt = recent.filter(outcome_at__isnull=False, provenance='reconstructed').count()
+    # A verdict becomes an ORDER when its lease is consumed. Whether that order
+    # becomes a closed trade happens hours later and is counted separately —
+    # the old tile read NewsVerdict.trade, which no code has ever written, so it
+    # showed zero on days the agent traded.
+    ordered = recent.filter(lease_state='consumed').count()
+    traded = Trade.objects.filter(strategy_key='news_catalyst', exit_ts__gte=since).count()
     return render(request, 'news_agent/index.html', {
         'sessions': sessions[:40],
         'pulse': _pulse(sessions),
@@ -48,10 +64,12 @@ def news_agent(request):
             'sessions_7d': sessions.filter(started_at__gte=since).count(),
             'read_7d': recent.count(),
             'calls_7d': calls.count(),
-            'traded_7d': recent.filter(acted=True, trade__isnull=False).count(),
+            'traded_7d': traded,
             'graded': graded.count(),
+            'rebuilt': rebuilt,
             'right': right,
             'hit_rate': (right / graded.count() * 100) if graded.count() else None,
+            'ordered': ordered,
             'avg_score': recent.aggregate(a=Avg('score'))['a'] or 0,
             'cost_7d': sum(float(s.cost_usd) for s in sessions.filter(started_at__gte=since)),
         },

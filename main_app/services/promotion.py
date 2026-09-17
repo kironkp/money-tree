@@ -21,6 +21,11 @@ REQUIREMENTS = {
 }
 
 RESEARCH_REQUIREMENTS = {'trades': 10, 'profit_factor': 1.1, 'pipeline_trades': 30}
+# The lifetime brake. Deliberately a much larger sample than the per-version one:
+# it has to be impossible to trip on a bad fortnight, because nothing but an
+# operator can release it. At 150 trades a profit factor under 1 is a property of
+# the idea, not of the weather.
+LIFETIME_REQUIREMENTS = {'trades': 150, 'profit_factor': 1.0}
 
 
 def research_evidence_passes(metrics: dict, min_trades: int | None = None,
@@ -147,9 +152,43 @@ def live_stats(row: Strategy, account: Account | None, days: int = 60) -> dict:
     }
 
 
+def lifetime_stats(row: Strategy, account: Account | None) -> dict:
+    """Every trade this strategy has ever taken, ignoring `evidence_since`.
+
+    The per-version record answers "do these parameters work". This answers the
+    question that survives a parameter change: "does this idea work at all".
+    """
+    if account is None:
+        return {'trades': 0, 'profit_factor': 0.0, 'net_pnl': 0.0}
+    pnls = [float(t.pnl) for t in
+            Trade.objects.filter(account=account, strategy_key=row.key).only('pnl')]
+    if not pnls:
+        return {'trades': 0, 'profit_factor': 0.0, 'net_pnl': 0.0}
+    gross_win = sum(p for p in pnls if p > 0)
+    gross_loss = -sum(p for p in pnls if p <= 0)
+    return {
+        'trades': len(pnls),
+        'net_pnl': sum(pnls),
+        'profit_factor': (gross_win / gross_loss) if gross_loss else (999.0 if gross_win else 0.0),
+        'expectancy': sum(pnls) / len(pnls),
+    }
+
+
+def lifetime_verdict(row: Strategy, account: Account | None) -> str:
+    """A reason this strategy should be stopped for good, or ''."""
+    life = lifetime_stats(row, account)
+    if life['trades'] < LIFETIME_REQUIREMENTS['trades']:
+        return ''
+    if life['profit_factor'] >= LIFETIME_REQUIREMENTS['profit_factor'] and life['net_pnl'] > 0:
+        return ''
+    return (f'no edge across its whole life: {life["trades"]} trades, '
+            f'PF {life["profit_factor"]:.3f}, net {life["net_pnl"]:+,.2f}')
+
+
 def qualification_assessment(row: Strategy, account: Account | None) -> dict:
     """Explain whether one immutable strategy version earned execution trust."""
     stats = live_stats(row, account)
+    lifetime_record = lifetime_stats(row, account)
     baseline = baseline_metrics(row)
     provenance = baseline_evidence(row)
     research_ok = (
@@ -172,7 +211,13 @@ def qualification_assessment(row: Strategy, account: Account | None) -> dict:
         or stats.get('net_pnl', 0) <= 0
     )
     ready = research_ok and all(forward_checks.values())
-    if row.qualification == Qualification.QUARANTINED:
+    lifetime = row.lifetime_halt_reason if row.lifetime_halt else lifetime_verdict(row, account)
+    if lifetime:
+        # Checked FIRST and on purpose: this is the one verdict a new version
+        # cannot argue its way out of.
+        state = Qualification.QUARANTINED
+        reason = lifetime
+    elif row.qualification == Qualification.QUARANTINED:
         state = Qualification.QUARANTINED
         reason = row.qualification_reason or 'quarantine is sticky until a new version or explicit reset'
     elif no_edge:
@@ -190,6 +235,7 @@ def qualification_assessment(row: Strategy, account: Account | None) -> dict:
         reason = 'still observing — needs ' + ', '.join(missing)
     return {'state': state, 'reason': reason, 'ready': ready, 'no_edge': no_edge,
             'research_ok': research_ok, 'forward': forward_checks, 'stats': stats,
+            'lifetime': lifetime_record, 'lifetime_halt': bool(lifetime),
             'baseline': baseline, 'provenance': provenance}
 
 
@@ -206,6 +252,13 @@ def refresh_qualification(row: Strategy, account: Account | None) -> tuple[dict,
         if assessment['state'] == Qualification.QUARANTINED and row.enabled:
             row.enabled = False
             fields.append('enabled')
+        # Persist the lifetime halt so it survives the next promotion. Without
+        # this the brake would be recomputed from an evidence window that a
+        # version bump has already reset, which is the hole it exists to close.
+        if assessment['lifetime_halt'] and not row.lifetime_halt:
+            row.lifetime_halt = True
+            row.lifetime_halt_reason = assessment['reason'][:300]
+            fields += ['lifetime_halt', 'lifetime_halt_reason']
         row.save(update_fields=fields)
     return assessment, state_changed
 

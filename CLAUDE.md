@@ -342,6 +342,32 @@ funnel on 443 was silently served by FindIt instead.
 - `collectstatic` is required now that DEBUG is off. `WHITENOISE_MANIFEST_STRICT`
   is False, so a missing asset degrades rather than 500s.
 
+## v1.42 — the brakes, found by asking why we missed UNI
+
+The question was "UNI ran 26%, why didn't we trade it". The answer was not a
+missing symbol.
+
+- **The lifetime brake.** `evidence_since` resets on every promotion, which is
+  correct for judging PARAMETERS and was wrong as the only brake: it let a losing
+  IDEA run forever, thirty trades at a time. `burst` earned a quarantine at 165
+  trades and −$2,210; an evidence reset erased it; the lane lost another $1,077.
+  `promotion.lifetime_verdict()` now counts every trade a strategy has ever taken
+  and quarantines at 150+ trades with PF < 1. `Strategy.lifetime_halt` persists it
+  so a version bump cannot release it — only an operator can. It fired on burst
+  immediately (247 trades, PF 0.181, −$3,287.79) and on nothing else.
+- **`burst` is now quarantined and disabled.** It was emitting only blocked
+  signals anyway: its 1.50% target cannot clear 3× the 0.56% crypto round trip,
+  so 219 signals in four days were refused by its own cost gate.
+- **`UnmatchedSymbol`.** `news.ingest` discarded ~70% of stories as "not ours" and
+  kept only a count. The tickers are now recorded — 89 distinct on the first run —
+  so "what are we blind to?" has an answer. It is a ledger, not a trigger: nothing
+  adds an instrument, and the story itself is still discarded.
+- **The measured finding that settles the UNI question**: the news corpus is 369
+  items from ONE source, Benzinga via Alpaca, a US-equities wire. Zero mentions of
+  Uniswap, DeFi, Aave or "decentralized exchange", ever. Adding UNI to the
+  watchlist would not have produced a UNI verdict. 119 of 347 verdicts (34%)
+  already map to no tradable instrument.
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live

@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from django.conf import settings
+from django.db.models import F
 from django.utils import timezone
 
 from main_app.models import Instrument, Market, NewsItem
@@ -196,7 +197,13 @@ def ingest(since: datetime | None = None) -> dict:
         symbols, market = match_symbols(item['symbols'], known)
         if not symbols:
             skipped += 1
-            continue                      # a story about nothing we can trade is not our business
+            # Record WHAT we could not act on. The story is still discarded — this
+            # desk has no business storing news about instruments it cannot
+            # trade — but the tickers are kept, so "what are we blind to?" has an
+            # answer. Without this the only trace was a count in a log line, which
+            # is how a 26% move in UNI passed unnoticed and unmeasured.
+            _note_unmatched(item)
+            continue
 
         digest = content_hash(item['headline'], item.get('content', ''))
         existing = NewsItem.objects.filter(external_id=item['external_id']).first()
@@ -238,6 +245,27 @@ def ingest(since: datetime | None = None) -> dict:
         kept += 1
     return {'fetched': len(raw), 'stored': kept, 'revised': revised,
             'unchanged': unchanged, 'not_ours': skipped}
+
+
+def _note_unmatched(item: dict) -> None:
+    """Count the tickers the news mentions that we cannot express. Never raises."""
+    from main_app.models import UnmatchedSymbol
+    now = timezone.now()
+    for tag in (item.get('symbols') or [])[:8]:
+        tag = str(tag or '').upper().strip()[:24]
+        if not tag:
+            continue
+        try:
+            row, created = UnmatchedSymbol.objects.get_or_create(
+                symbol=tag, defaults={'first_seen': now, 'last_seen': now,
+                                      'headline': item['headline'][:500],
+                                      'url': item.get('url', '')[:500]})
+            if not created:
+                UnmatchedSymbol.objects.filter(pk=row.pk).update(
+                    mentions=F('mentions') + 1, last_seen=now,
+                    headline=item['headline'][:500], url=item.get('url', '')[:500])
+        except Exception:                              # noqa: BLE001
+            log.debug('could not record unmatched symbol %s', tag)
 
 
 def _same_story(headline: str, published_at: datetime, external_id: str):

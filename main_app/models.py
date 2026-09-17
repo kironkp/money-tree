@@ -698,6 +698,16 @@ class Strategy(models.Model):
                                      default=Qualification.UNPROVEN)
     qualification_reason = models.CharField(max_length=300, blank=True)
     qualification_updated_at = models.DateTimeField(null=True, blank=True)
+    # A second brake, and the important thing about it is that a version bump
+    # cannot release it. `evidence_since` is reset on every promotion, which is
+    # correct for judging PARAMETERS — trades taken under old settings say
+    # nothing about new ones. But it also let a losing IDEA run forever thirty
+    # trades at a time: burst earned a quarantine at 165 trades and -$2,210, an
+    # evidence reset erased it, and the lane lost another $1,077 before anyone
+    # noticed. This one counts every trade the strategy has ever taken and only
+    # an operator can clear it.
+    lifetime_halt = models.BooleanField(default=False)
+    lifetime_halt_reason = models.CharField(max_length=300, blank=True)
     # Live evidence only counts from here. A promotion installs new parameters and
     # a lane change installs a new timeframe; trades made under the OLD
     # configuration cannot judge the new one, and without this boundary a
@@ -975,6 +985,37 @@ class NewsItem(models.Model):
         if not self.ingested_at:
             return None
         return (self.ingested_at - self.first_public).total_seconds()
+
+
+class UnmatchedSymbol(models.Model):
+    """A ticker the news keeps mentioning that this desk cannot trade.
+
+    `news.ingest` used to throw these away — `if not symbols: skipped += 1` — so
+    the only trace was an aggregate in a log line: "fetched 50, stored 8, 34 about
+    things we do not trade". A 68% discard rate, and no record of WHAT was
+    discarded.
+
+    That is how UNI was missed. Not because anyone decided against it, but
+    because the question "what are we blind to?" had no answer anywhere in the
+    system. This table is that answer, and it costs one row per ticker per day.
+
+    It is a LEDGER, not a trigger. Nothing here adds an instrument; the whole
+    point is to make the gap measurable before anyone argues about filling it.
+    """
+    symbol = models.CharField(max_length=24)
+    first_seen = models.DateTimeField(default=timezone.now)
+    last_seen = models.DateTimeField(default=timezone.now)
+    mentions = models.PositiveIntegerField(default=1)
+    headline = models.CharField(max_length=500, blank=True)   # the most recent one
+    url = models.URLField(max_length=500, blank=True)
+
+    class Meta:
+        ordering = ['-mentions', '-last_seen']
+        constraints = [models.UniqueConstraint(fields=['symbol'], name='uniq_unmatched_symbol')]
+        indexes = [models.Index(fields=['-last_seen'])]
+
+    def __str__(self):
+        return f'{self.symbol} × {self.mentions}'
 
 
 class Briefing(models.Model):

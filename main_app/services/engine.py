@@ -446,7 +446,8 @@ class Engine:
         )
         # The strategy's own veto runs first and reuses the block path below, so a
         # refusal here is recorded, narrated and released exactly like a risk one.
-        veto = strat.preflight(sig, acct, self.broker.positions)
+        veto = strat.preflight(sig, acct, self.broker.positions,
+                               getattr(self.rec, 'account', None))
         can_short, short_why = (True, '') if sig.action != 'sell' else self.broker.can_short(symbol)
         if not can_short:
             veto = veto or short_why

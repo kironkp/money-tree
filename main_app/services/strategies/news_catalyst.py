@@ -23,10 +23,14 @@ nothing at all, which is the honest result rather than a flattering one.
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from .. import indicators as ind
 from .base import Context, Param, Rule, Signal, Strategy
+
+log = logging.getLogger('moneytree.strategies.news_catalyst')
 
 
 class NewsCatalyst(Strategy):
@@ -93,7 +97,7 @@ class NewsCatalyst(Strategy):
         return [Signal('sell', ctx.symbol, ctx.ts, price, price + risk, price - rr * risk,
                        strength=min(1.0, v.score / 10), reason=reason)]
 
-    def preflight(self, sig: Signal, account, positions: dict) -> str:
+    def preflight(self, sig: Signal, account, positions: dict, ledger_account=None) -> str:
         """The experiment's own limits, checked before the account's.
 
         These are preregistered and frozen: a correlated-exposure cap across names
@@ -103,15 +107,20 @@ class NewsCatalyst(Strategy):
         they protect the experiment, not the account, and because no single model
         prediction may be allowed to create uncapped exposure.
         """
-        if not self.live:
+        if not self.live or ledger_account is None:
             return ''
         try:
             from ..news_risk import check, slippage_breach
-            return check(account, sig.symbol, 'buy' if sig.action == 'buy' else 'short',
-                         positions) or slippage_breach(account)
+            equity = float(getattr(account, 'equity', 0) or 0)
+            return check(ledger_account, sig.symbol,
+                         'buy' if sig.action == 'buy' else 'short', positions,
+                         equity=equity) or slippage_breach(ledger_account)
         except Exception:                              # noqa: BLE001
-            # A limit that cannot be evaluated is a limit that has not passed.
-            return 'news-arm limits could not be evaluated'
+            # A limit that cannot be evaluated is a limit that has not passed —
+            # but it is logged with its traceback, because the first version
+            # swallowed a type error and silently vetoed every signal for a day.
+            log.exception('news-arm limits could not be evaluated for %s', sig.symbol)
+            return 'news-arm limits could not be evaluated (see the log)'
 
     def on_signal_blocked(self, sig: Signal, reason: str) -> None:
         v = self._leases.pop(sig.symbol, None)

@@ -184,13 +184,17 @@ class Strategy:
     def on_bar(self, ctx: Context, bar, df: pd.DataFrame, i: int) -> list[Signal]:
         raise NotImplementedError
 
-    def preflight(self, sig: Signal, account, positions: dict) -> str:
+    def preflight(self, sig: Signal, account, positions: dict, ledger_account=None) -> str:
         """A reason this signal must not become an order, or ''.
 
         Checked before the risk manager, which protects the account and knows
         nothing about which strategy is asking. This is where a strategy enforces
         limits that belong to itself — an experiment's own loss budget, an
         exposure cap across names that move together.
+
+        `account` is the broker's live view (equity, buying power). `ledger_account`
+        is the persisted Account row, or None in a backtest where no such row
+        exists — a limit that needs trade history has to ask for that one.
         """
         return ''
 

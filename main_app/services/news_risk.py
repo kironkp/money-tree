@@ -71,7 +71,8 @@ def _halt(account, reason: str, sticky: bool) -> str:
     return reason
 
 
-def check(account, symbol: str, direction: str, positions: dict, now=None, cfg=None) -> str:
+def check(account, symbol: str, direction: str, positions: dict, now=None, cfg=None,
+          equity: float | None = None) -> str:
     """A reason the news arm may not open this position right now, or ''.
 
     Order matters: the cheapest checks first, and the sticky ones before the
@@ -80,7 +81,13 @@ def check(account, symbol: str, direction: str, positions: dict, now=None, cfg=N
     """
     now = now or timezone.now()
     cfg = cfg or AgentConfig.get()
-    equity = Decimal(str(getattr(account, 'equity', 0) or 0))
+    # `account` must be the persisted Account row — these limits read trade
+    # history. Equity comes from the broker's live view, passed in separately,
+    # because the two are different objects and conflating them is what silently
+    # vetoed every signal on 2026-09-17.
+    if equity is None:
+        equity = float(getattr(account, 'equity', 0) or 0)
+    equity = Decimal(str(equity))
     if equity <= 0:
         return ''
 

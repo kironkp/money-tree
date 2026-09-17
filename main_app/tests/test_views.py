@@ -338,35 +338,48 @@ class PortfolioBacktestRunsAllEnabledStrategies(TestCase):
         self.assertGreaterEqual(len(run.metrics['per_strategy']), 1)
 
 
-class TailnetOriginsAreTrustedWithTheirPort(TestCase):
+class TheOriginThePhoneUsesIsTrusted(TestCase):
     """A wildcard origin is matched against the netloc INCLUDING the port.
 
-    'https://*.ts.net' does not cover 'https://host.ts.net:8446', which is the
-    address the phone actually uses through the TLS proxy — every POST from the
-    phone failed CSRF until the ported form was trusted too.
+    'https://*.ts.net' does not cover 'https://host.ts.net:8446'. That cost a day
+    once, when every POST from the phone through the TLS proxy returned 403 while
+    the same page loaded fine. The Tailscale Funnel reintroduces the same trap on
+    a different port, which is why FUNNEL_PORT is carried explicitly rather than
+    assumed to be 443.
     """
 
-    def test_wildcard_without_a_port_does_not_cover_a_ported_origin(self):
+    def test_a_wildcard_without_a_port_does_not_cover_a_ported_origin(self):
         from django.utils.http import is_same_domain
         netloc = 'kironkps-macbook-pro-2.taildfcf4.ts.net:8446'
         self.assertFalse(is_same_domain(netloc, '.ts.net'))
         self.assertTrue(is_same_domain(netloc, '.ts.net:8446'))
 
-    def test_the_settings_trust_both_forms(self):
+    def test_the_funnel_origin_carries_its_port_unless_it_is_443(self):
         from django.conf import settings
-        origins = settings.CSRF_TRUSTED_ORIGINS
-        self.assertIn('https://*.ts.net', origins)
-        self.assertTrue(any(o.startswith('https://*.ts.net:') for o in origins),
-                        'the ported tailnet origin must be trusted or the phone cannot POST')
+        for host, port, expected in (
+            ('box.ts.net', 10000, 'https://box.ts.net:10000'),
+            ('box.ts.net', 8443, 'https://box.ts.net:8443'),
+            ('box.ts.net', 443, 'https://box.ts.net'),
+        ):
+            origin = f'https://{host}' + ('' if port == 443 else f':{port}')
+            self.assertEqual(origin, expected)
+        if settings.FUNNEL_HOST:
+            self.assertIn(settings.FUNNEL_ORIGIN, settings.CSRF_TRUSTED_ORIGINS,
+                          'the address the phone actually uses must be trusted')
 
-    def test_a_post_from_the_tailnet_origin_is_accepted(self):
+    def test_whatever_origin_is_configured_can_actually_post(self):
+        """Whichever mode the app is in, a POST from its own front door works."""
+        from django.conf import settings
         from django.test import Client
-        host = 'kironkps-macbook-pro-2.taildfcf4.ts.net:8446'
+        origin = (settings.FUNNEL_ORIGIN
+                  or next((o for o in settings.CSRF_TRUSTED_ORIGINS if '*' not in o),
+                          'https://testserver'))
+        host = origin.split('://', 1)[1]
         c = Client(enforce_csrf_checks=True, HTTP_HOST=host)
         page = c.get('/accounts/login/')
         self.assertEqual(page.status_code, 200)
         token = page.cookies['csrftoken'].value
-        r = c.post('/accounts/login/', {'csrfmiddlewaretoken': token, 'login': 'x@example.com',
-                                        'password': 'wrong'},
-                   HTTP_ORIGIN=f'https://{host}', HTTP_REFERER=f'https://{host}/accounts/login/')
-        self.assertNotEqual(r.status_code, 403, 'CSRF rejected a POST from the tailnet origin')
+        r = c.post('/accounts/login/',
+                   {'csrfmiddlewaretoken': token, 'login': 'x@example.com', 'password': 'wrong'},
+                   HTTP_ORIGIN=origin, HTTP_REFERER=f'{origin}/accounts/login/')
+        self.assertNotEqual(r.status_code, 403, f'CSRF rejected a POST from {origin}')

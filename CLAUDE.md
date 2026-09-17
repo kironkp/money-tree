@@ -310,6 +310,38 @@ were the two that keep the desk alive.
   what is running. `graph_state._job()` stats the log and reports live, stale or
   never-run. This is the whole reason the gap went unnoticed for weeks.
 
+## v1.40 — a free permanent public URL, and DEBUG off
+
+**Public link: `https://kironkps-macbook-pro-2.taildfcf4.ts.net:10000/`** — a
+Tailscale Funnel. Free on the personal plan, permanent, a real Let's Encrypt
+certificate, reachable from any device without Tailscale installed. No dyno, no
+bill. `tailscale funnel --bg --https=10000 8003`; the config persists across
+reboots.
+
+Port 10000 because Funnel only offers 443, 8443 and 10000: 443 is FindIt's on
+this machine and 8443 is Secretary's. Note the consequence found the hard way —
+from *inside* the tailnet the hostname resolves to the machine itself, so a
+funnel on 443 was silently served by FindIt instead.
+
+- **Heroku is scaled to zero.** It had been deployed with no config vars and no
+  add-ons at all, so it fell to every development default: `DEBUG=True` and the
+  repo's placeholder `SECRET_KEY`, publicly, plus SQLite on an ephemeral
+  filesystem — the release-phase `migrate` ran into a container that was then
+  discarded, which is why `socialaccount_socialapp` did not exist. Everything
+  keys off `ON_HEROKU`, which was never set.
+- **New funnel mode in settings.** `FUNNEL_HOST` + `FUNNEL_PORT` produce
+  `FUNNEL_ORIGIN`, which feeds `ALLOWED_HOSTS` and `CSRF_TRUSTED_ORIGINS`.
+  Setting `FUNNEL_HOST` is what makes a laptop a deployment: `DEBUG=False`,
+  manifest static storage, `SECURE_PROXY_SSL_HEADER` (the funnel terminates TLS
+  and forwards plain HTTP), and Secure cookies — the last scoped to funnel mode
+  so `http://127.0.0.1:8003` still works locally.
+- **CSRF failures are now logged.** Django explains a rejection only when DEBUG
+  is on, which is exactly when it is least needed; over a public funnel a 403 was
+  a silent wall. `django.security.csrf` at WARNING says which check failed, and
+  said so within a minute of being added.
+- `collectstatic` is required now that DEBUG is off. `WHITENOISE_MANIFEST_STRICT`
+  is False, so a missing asset degrades rather than 500s.
+
 ## Invariants that matter
 
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live

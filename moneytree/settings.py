@@ -23,13 +23,30 @@ env = environ.Env(
     DB_PASSWORD=(str, ''),
     DB_HOST=(str, 'localhost'),
     DB_PORT=(str, '5432'),
+    # The stable public hostname when this machine is exposed by a Tailscale
+    # Funnel. Setting it is what makes a laptop a deployment.
+    FUNNEL_HOST=(str, ''),
+    # Funnel may only use 443, 8443 or 10000. 443 is FindIt's and 8443 is
+    # Secretary's on this machine, so MoneyTree takes 10000 — and Django matches
+    # a wildcard CSRF origin against the netloc INCLUDING the port, so the port
+    # has to be carried here rather than assumed.
+    FUNNEL_PORT=(int, 443),
 )
 environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 
 SECRET_KEY = env('SECRET_KEY')
+# A Tailscale Funnel puts this machine on the public internet at a permanent
+# https://<machine>.<tailnet>.ts.net — no dyno, no bill, a real certificate. That
+# makes it a deployment rather than a convenience, so DEBUG has to be off and the
+# host has to be named: the alternative is exactly the Heroku failure of 2026-09-17,
+# where an unconfigured app served Django's debug page to the open internet.
+FUNNEL_HOST = env('FUNNEL_HOST')
+FUNNEL_PORT = env('FUNNEL_PORT')
+FUNNEL_ORIGIN = (f'https://{FUNNEL_HOST}' + ('' if FUNNEL_PORT == 443 else f':{FUNNEL_PORT}')
+                 if FUNNEL_HOST else '')
 # Bump per release; tagged in git (v1.0, v1.1, …) with a matching
 # backups/db-<tag>.sqlite3 snapshot. Rollback recipe lives in CLAUDE.md.
-VERSION = '1.39'
+VERSION = '1.40'
 
 # Tests must be deterministic even when a developer's local .env selects
 # production behavior. Manifest storage is a deployment concern; requiring
@@ -46,7 +63,7 @@ if DEBUG:
 elif 'ON_HEROKU' in os.environ:
     ALLOWED_HOSTS = ['.herokuapp.com'] + env.list('ALLOWED_HOSTS', default=[])
 else:
-    ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
+    ALLOWED_HOSTS = ([FUNNEL_HOST] if FUNNEL_HOST else []) + env.list('ALLOWED_HOSTS', default=[])
 
 if 'ON_HEROKU' in os.environ:
     CSRF_TRUSTED_ORIGINS = ['https://*.herokuapp.com']
@@ -64,7 +81,8 @@ elif DEBUG:
         'https://*.trycloudflare.com',
     ]
 else:
-    CSRF_TRUSTED_ORIGINS = []
+    # Served over the Funnel on 443, so the origin carries no port.
+    CSRF_TRUSTED_ORIGINS = [FUNNEL_ORIGIN] if FUNNEL_ORIGIN else []
 
 if 'ON_HEROKU' in os.environ:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
@@ -196,6 +214,18 @@ STORAGES = {
 }
 WHITENOISE_MANIFEST_STRICT = False
 
+# Behind a Tailscale Funnel the public edge is HTTPS and the hop to Django is
+# plain HTTP on localhost, so Django has to be told where to look for the real
+# scheme or it will think every request arrived insecurely. Cookies are marked
+# secure only in that mode, because setting them unconditionally would stop a
+# browser sending them back over http://127.0.0.1:8003 and quietly break local
+# login.
+if FUNNEL_HOST and not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SESSION_COOKIE_SAMESITE = 'Lax'
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTHENTICATION_BACKENDS = [
@@ -293,5 +323,11 @@ LOGGING = {
     },
     'loggers': {
         'moneytree': {'handlers': ['console'], 'level': 'INFO', 'propagate': False},
+        # Django explains a CSRF rejection only when DEBUG is on, which is
+        # precisely when it is least needed. Without this a 403 over the public
+        # funnel is a silent wall: the browser says Forbidden and the log says
+        # 403 and neither says which check failed.
+        'django.security.csrf': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+        'django.request': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
     },
 }

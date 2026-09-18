@@ -1,50 +1,52 @@
 MoneyTree data backup
-taken       2026-09-17 02:00:04 PDT
-database    348016640 bytes
-ledger.sql  6653554 bytes
+taken       2026-09-18 02:00:05 PDT
+database    365850624 bytes
+ledger.sql  7629002 bytes
 
 accounts (mode · market · equity · trades)
   paper · crypto · 10000.00 · 0
   replay · crypto · 10000.00 · 0
-  sim · crypto · 9998.22 · 2
+  sim · crypto · 9993.73 · 3
   paper · degen · 10000.00 · 0
   replay · degen · 10000.00 · 0
   sim · degen · 6711.58 · 250
   paper · forex · 10000.00 · 0
   replay · forex · 10000.00 · 0
-  sim · forex · 9369.31 · 77
+  sim · forex · 9337.81 · 92
   paper · stocks · 10000.00 · 0
   replay · stocks · 10000.00 · 0
-  sim · stocks · 9833.58 · 80
+  sim · stocks · 9835.91 · 86
 
 rows backed up
   main_app_account             12
   main_app_agentconfig         1
-  main_app_agentrun            86
-  main_app_apiusage            468
-  main_app_briefing            133
-  main_app_experiment          115
-  main_app_fill                819
+  main_app_agentrun            94
+  main_app_apiusage            557
+  main_app_briefing            149
+  main_app_experiment          128
+  main_app_fill                862
   main_app_instrument          27
-  main_app_journalentry        154
+  main_app_journalentry        171
   main_app_marketsession       0
-  main_app_newsitem            315
-  main_app_newssession         14
-  main_app_newsverdict         310
-  main_app_order               819
-  main_app_position            1
-  main_app_symboldossier       10
-  main_app_riskevent           94
-  main_app_signal              1425
+  main_app_newsitem            379
+  main_app_newssession         20
+  main_app_newsverdict         376
+  main_app_order               862
+  main_app_position            0
+  main_app_symboldossier       19
+  main_app_evaluation          1
+  main_app_unmatchedsymbol     187
+  main_app_riskevent           103
+  main_app_signal              1665
   main_app_signupinvite        0
   main_app_strategy            13
-  main_app_trade               409
-  main_app_tradecard           410
-  main_app_equitysnapshot      4031
+  main_app_trade               431
+  main_app_tradecard           431
+  main_app_equitysnapshot      4279
 
 not in this dump (regenerable)
-  main_app_bar                 924788
-  main_app_feedevent           168783
+  main_app_bar                 1100076
+  main_app_feedevent           135882
   main_app_symbolstate         36
-  main_app_backtestrun         790
+  main_app_backtestrun         852
   main_app_backtesttrade       4707

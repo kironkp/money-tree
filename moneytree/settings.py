@@ -46,7 +46,7 @@ FUNNEL_ORIGIN = (f'https://{FUNNEL_HOST}' + ('' if FUNNEL_PORT == 443 else f':{F
                  if FUNNEL_HOST else '')
 # Bump per release; tagged in git (v1.0, v1.1, …) with a matching
 # backups/db-<tag>.sqlite3 snapshot. Rollback recipe lives in CLAUDE.md.
-VERSION = '1.43'
+VERSION = '1.44'
 
 # Tests must be deterministic even when a developer's local .env selects
 # production behavior. Manifest storage is a deployment concern; requiring

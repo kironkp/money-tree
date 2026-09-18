@@ -370,6 +370,15 @@ missing symbol.
 
 ## Invariants that matter
 
+- **A bar that agrees with itself can still be nonsense.** The quality gate's
+  OHLC checks only ask whether a bar is internally consistent; they cannot see a
+  feed returning the right number in the wrong units. `quality_gate` now compares
+  every price on the bar against a centred rolling median and drops anything more
+  than `OUTLIER_FACTOR` (10x) away. Deliberately generous — a real +37% gap and a
+  genuine 5x trend both have to survive — and it is checked on all four prices,
+  because the bar that prompted it had a correct open and low and a corrupted
+  high and close, and ATR is computed from the high and the low.
+
 - **A code change does not reach a running agent until the agent restarts.**
   Each lane loads its strategy classes once, at startup. A fix to `risk.py`,
   `news_risk.py` or anything under `strategies/` sits on disk doing nothing until

@@ -18,6 +18,15 @@ from .providers import COLUMNS, BarProvider, empty_frame, normalize_frame
 
 log = logging.getLogger('moneytree.data.store')
 BATCH = 1000
+# A bar this far from its neighbours is not a price, it is a glitch. Deliberately
+# generous: crypto can double in a day and a stock can gap 40% on news, so 10x is
+# far above anything real while still catching the failure that actually happens —
+# a feed returning the right number in the wrong units. PEPE/USD carried one bar
+# at 0.0049 against a true price of 0.0000039, a factor of 1,248, and it passed
+# every existing check because it was internally consistent: high above open and
+# close, low below them, everything positive.
+OUTLIER_FACTOR = 10.0
+OUTLIER_WINDOW = 101        # odd, so the rolling median has a true centre
 
 
 @dataclass
@@ -26,6 +35,7 @@ class QualityReport:
     rows_out: int = 0
     dropped_bad_ohlc: int = 0
     dropped_dupes: int = 0
+    dropped_outliers: int = 0
     gaps: list = field(default_factory=list)      # (ts_before, ts_after, bars_missing)
     split_suspects: list = field(default_factory=list)  # (ts, pct_gap)
 
@@ -36,6 +46,9 @@ class QualityReport:
             out.append(f'{self.dropped_bad_ohlc} bars with high/low outside open/close dropped')
         if self.dropped_dupes:
             out.append(f'{self.dropped_dupes} duplicate timestamps dropped')
+        if self.dropped_outliers:
+            out.append(f'{self.dropped_outliers} bars dropped as impossible '
+                       f'(>{OUTLIER_FACTOR:g}x the surrounding median)')
         if self.gaps:
             out.append(f'{len(self.gaps)} gaps > 3 bars (possible halts)')
         for ts, pct in self.split_suspects:
@@ -55,6 +68,30 @@ def quality_gate(df: pd.DataFrame, timeframe: str, asset_class: str = 'stock') -
     bad |= df[['open', 'high', 'low', 'close']].le(0).any(axis=1)
     rep.dropped_bad_ohlc = int(bad.sum())
     df = df[~bad]
+
+    # Impossible prices. An internally consistent bar can still be nonsense — the
+    # checks above only ask whether a bar agrees with ITSELF, never whether it
+    # agrees with the ones around it. Compared against a centred rolling median so
+    # a genuine trend cannot drag the reference along with the outlier.
+    if len(df) >= 20:
+        ref = df['close'].rolling(OUTLIER_WINDOW, center=True, min_periods=11).median()
+        # Every price on the bar, not just the close. The bar that prompted this
+        # had a correct open and low and a corrupted high and close — the feed
+        # mangled two fields of four — and ATR is computed from the high and the
+        # low, so a bad high poisons risk sizing even when the close looks fine.
+        absurd = ref.notna() & (ref > 0) & False
+        for col in ('open', 'high', 'low', 'close'):
+            ratio = df[col] / ref
+            absurd |= (ratio > OUTLIER_FACTOR) | (ratio < 1 / OUTLIER_FACTOR)
+        absurd &= ref.notna() & (ref > 0)
+        rep.dropped_outliers = int(absurd.sum())
+        if rep.dropped_outliers:
+            for ts, hi, c, r in zip(df.index[absurd.to_numpy()], df['high'][absurd],
+                                     df['close'][absurd], ref[absurd]):
+                worst = max(hi, c)
+                log.warning('dropping impossible bar %s high=%.6g close=%.6g vs median %.6g (%.0fx)',
+                            ts, hi, c, r, (worst / r) if r else 0)
+        df = df[~absurd]
     if len(df) > 1:
         step = tf_delta(timeframe)
         diffs = df.index.to_series().diff()

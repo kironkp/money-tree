@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
 from main_app.models import Instrument, NewsItem, NewsVerdict, SymbolDossier
@@ -145,7 +145,13 @@ class ConvictionOnlyShrinks(TestCase):
         self.assertEqual(self._size('lots'), 1.0)
 
 
+@override_settings(OPENAI_API_KEY='test-key-not-used')
 class ItFailsClosed(TestCase):
+    """The key is overridden because `build` refuses without one BEFORE it reaches
+    the budget check. Without this the tests pass on a laptop that has a key in
+    .env and silently assert nothing in CI, which is the failure mode CLAUDE.md
+    warns about: tests must not depend on a developer's environment."""
+
     def setUp(self):
         Instrument.objects.create(symbol='AAPL', asset_class='stock', market='stocks')
 
@@ -163,6 +169,13 @@ class ItFailsClosed(TestCase):
             with patch('openai.OpenAI') as client:
                 d = dz.build('AAPL')
         self.assertIn('refusing to spend', d.error)
+        client.assert_not_called()
+
+    def test_no_api_key_is_its_own_refusal(self):
+        with override_settings(OPENAI_API_KEY=''):
+            with patch('openai.OpenAI') as client:
+                d = dz.build('AAPL')
+        self.assertIn('OPENAI_API_KEY', d.error)
         client.assert_not_called()
 
     def test_a_name_we_do_not_research_is_refused_before_any_work(self):

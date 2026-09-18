@@ -115,9 +115,17 @@ def current(kind: str = 'promotion') -> Evaluation:
 def open_evaluation(kind: str = 'promotion', predecessor=None) -> Evaluation:
     fingerprint, frozen = current_fingerprint()
     stamp = timezone.now()
-    n = Evaluation.objects.filter(opened_at__date=stamp.date()).count() + 1
+    # Counting today's rows is not a sequence: a superseded evaluation, a decay
+    # epoch and a promotion can all open on one day, and the count does not track
+    # the names already taken. Ask for the next free name instead.
+    base = f'{kind[:4]}-{stamp:%Y%m%d}'
+    taken = set(Evaluation.objects.filter(identifier__startswith=base)
+                .values_list('identifier', flat=True))
+    n = 1
+    while f'{base}-{n}' in taken:
+        n += 1
     return Evaluation.objects.create(
-        identifier=f'{kind[:4]}-{stamp:%Y%m%d}-{n}', kind=kind, fingerprint=fingerprint,
+        identifier=f'{base}-{n}', kind=kind, fingerprint=fingerprint,
         frozen=frozen, delta_min=DELTA_MIN_ATR_PER_DAY, alpha=ALPHA, beta=BETA,
         checkpoints=list(CHECKPOINTS), method=METHOD, kill_rule=KILL_RULE,
         predecessor=predecessor)

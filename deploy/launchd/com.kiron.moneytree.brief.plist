@@ -5,7 +5,14 @@
   <!-- One web-searching prompt per lane, every four hours: "what is going on
        out there?" Measured at about $0.011 a lane including the search fee, so
        four lanes six times a day is roughly $0.27/day, about $8 a month.
-       StartInterval 3600 would make it hourly at roughly $33 a month. -->
+       StartInterval 3600 would make it hourly at roughly $33 a month.
+
+       Cut from every 4 hours to every 12 on 2026-09-17. Measured over the prior
+       week: 149 briefings costing $1.69 ($7.24/month), of which 97 — nearly two
+       thirds — reported that nothing was happening. The briefing is explicitly
+       not a trading signal (see the docstring in services/briefing.py: "Nothing
+       here reaches the risk manager"), so paying six times a day to be told the
+       world is quiet was the weakest dollar in the stack. -->
   <key>Label</key><string>com.kiron.moneytree.brief</string>
   <key>ProgramArguments</key>
   <array>
@@ -14,7 +21,7 @@
     <string>run</string><string>python</string><string>manage.py</string><string>brief</string>
   </array>
   <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
-  <key>StartInterval</key><integer>14400</integer>
+  <key>StartInterval</key><integer>43200</integer>
   <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/brief.log</string>
   <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/brief.log</string>
   <key>EnvironmentVariables</key>

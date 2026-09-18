@@ -370,6 +370,23 @@ missing symbol.
 
 ## Invariants that matter
 
+- **A code change does not reach a running agent until the agent restarts.**
+  Each lane loads its strategy classes once, at startup. A fix to `risk.py`,
+  `news_risk.py` or anything under `strategies/` sits on disk doing nothing until
+  `manage.py restart_agents` runs — positions survive, it is a SIGTERM rather than
+  an operator stop. This has now caused two silent outages in one day: a veto bug
+  fixed at 10:40 kept blocking every signal until 11:25 because the processes
+  predated the fix. Restart, then verify in `run/agent-sim-<lane>.log` that the
+  lane came back up, before believing a fix has landed.
+- **`best_source` prefers SIP, and SIP is only as fresh as the last `sync_bars`.**
+  The live loop writes IEX continuously; SIP only arrives when history is synced.
+  On 2026-09-17 the SIP copy had stopped on 09-01, so backtests and every nightly
+  walk-forward had been fitting to a window ending 16 days earlier while the
+  dashboard looked current. `store.covering_frame` picks the freshest feed that
+  covers the window and is the right call for anything asking about now; a
+  backtest still wants SIP, which means SIP has to be kept current. Sync stock
+  history at least weekly.
+
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live
   loop only acts on bars whose end + grace has passed
   (`store.complete_bars_only`), and never twice on one bar (`Engine.last_acted`).

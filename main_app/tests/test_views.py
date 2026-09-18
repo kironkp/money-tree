@@ -1,6 +1,6 @@
 from datetime import UTC, date, datetime, timedelta
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from allauth.account.models import EmailAddress
@@ -367,19 +367,25 @@ class TheOriginThePhoneUsesIsTrusted(TestCase):
             self.assertIn(settings.FUNNEL_ORIGIN, settings.CSRF_TRUSTED_ORIGINS,
                           'the address the phone actually uses must be trusted')
 
-    def test_whatever_origin_is_configured_can_actually_post(self):
-        """Whichever mode the app is in, a POST from its own front door works."""
-        from django.conf import settings
+    def test_a_post_from_the_configured_funnel_origin_is_accepted(self):
+        """A POST from the app's own front door works.
+
+        The origin and the host are fixed here rather than read from settings:
+        reading them made the test assert something different on a laptop with a
+        FUNNEL_HOST in .env than it did in CI with none, which is how a test
+        quietly stops testing anything.
+        """
         from django.test import Client
-        origin = (settings.FUNNEL_ORIGIN
-                  or next((o for o in settings.CSRF_TRUSTED_ORIGINS if '*' not in o),
-                          'https://testserver'))
-        host = origin.split('://', 1)[1]
-        c = Client(enforce_csrf_checks=True, HTTP_HOST=host)
-        page = c.get('/accounts/login/')
-        self.assertEqual(page.status_code, 200)
-        token = page.cookies['csrftoken'].value
-        r = c.post('/accounts/login/',
-                   {'csrfmiddlewaretoken': token, 'login': 'x@example.com', 'password': 'wrong'},
-                   HTTP_ORIGIN=origin, HTTP_REFERER=f'{origin}/accounts/login/')
+        host = 'box.ts.net:10000'
+        origin = f'https://{host}'
+        with override_settings(ALLOWED_HOSTS=['box.ts.net'], CSRF_TRUSTED_ORIGINS=[origin]):
+            c = Client(enforce_csrf_checks=True, HTTP_HOST=host)
+            page = c.get('/accounts/login/', secure=True)
+            self.assertEqual(page.status_code, 200)
+            token = page.cookies['csrftoken'].value
+            r = c.post('/accounts/login/',
+                       {'csrfmiddlewaretoken': token, 'login': 'x@example.com',
+                        'password': 'wrong'},
+                       secure=True, HTTP_ORIGIN=origin,
+                       HTTP_REFERER=f'{origin}/accounts/login/')
         self.assertNotEqual(r.status_code, 403, f'CSRF rejected a POST from {origin}')

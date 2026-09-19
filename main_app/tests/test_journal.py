@@ -164,3 +164,78 @@ class EachBotCarriesItsOwnFees(TestCase):
         c = lane_costs(self.account)
         self.assertEqual(c['trades'], 0)
         self.assertEqual(c['fee_bps'], 0.0)
+
+
+class AResetMovesTheStartingLineNotTheMemory(TestCase):
+    """The money resets; the record does not.
+
+    Deleting trades would do exactly what `evidence_since` did — erase a
+    strategy's earned quarantine and let a losing idea run again. That mistake
+    cost $1,077.52 the first time. A reset must never be able to buy a failed
+    strategy a second life.
+    """
+
+    def setUp(self):
+        from decimal import Decimal
+
+        from django.utils import timezone
+
+        from main_app.models import Account, Instrument, Trade
+        self.inst = Instrument.objects.create(symbol='SOL/USD', asset_class='crypto', market='degen')
+        self.account = Account.objects.create(mode='sim', market='degen',
+                                              starting_cash=10000, cash=6000, equity=6000)
+        now = timezone.now()
+        for i in range(160):
+            Trade.objects.create(
+                account=self.account, instrument=self.inst, strategy_key='burst', side='long',
+                qty=1, entry_ts=now, exit_ts=now, entry_price=Decimal('100'),
+                exit_price=Decimal('99'), pnl=Decimal('-25'), pnl_pct=Decimal('-1'),
+                fees=Decimal('1'), bars_held=2, exit_reason='stop')
+
+    def _reset(self):
+        from django.core.management import call_command
+        call_command('reset_epoch', '--apply', '--markets', 'degen', '--note', 'test', verbosity=0)
+        self.account.refresh_from_db()
+
+    def test_the_balance_returns_to_seed_capital(self):
+        self._reset()
+        self.assertEqual(self.account.equity, self.account.starting_cash)
+        self.assertIsNotNone(self.account.epoch_started_at)
+
+    def test_not_one_trade_is_deleted(self):
+        from main_app.models import Trade
+        self._reset()
+        self.assertEqual(Trade.objects.count(), 160)
+
+    def test_the_lifetime_brake_still_sees_everything(self):
+        from main_app.models import Strategy
+        from main_app.services.promotion import lifetime_verdict
+        row = Strategy.objects.create(key='burst', name='Burst', market='degen', params={})
+        self._reset()
+        verdict = lifetime_verdict(row, self.account)
+        self.assertIn('no edge across its whole life', verdict,
+                      'a reset must not buy a failed strategy a second life')
+        self.assertIn('160 trades', verdict)
+
+    def test_the_report_counts_only_the_new_epoch(self):
+        from main_app.services.report import lane_costs
+        self._reset()
+        self.assertEqual(lane_costs(self.account)['trades'], 0)
+        self.assertEqual(lane_costs(self.account, all_time=True)['trades'], 160,
+                         'all_time must still see the whole record')
+
+    def test_it_refuses_while_a_position_is_open(self):
+        from decimal import Decimal
+
+        from django.core.management import call_command
+        from django.utils import timezone
+
+        from main_app.models import Position
+        Position.objects.create(account=self.account, instrument=self.inst, qty=Decimal('1'),
+                                avg_price=Decimal('100'), opened_at=timezone.now())
+        before = self.account.equity
+        call_command('reset_epoch', '--apply', '--markets', 'degen', verbosity=0)
+        self.account.refresh_from_db()
+        self.assertEqual(self.account.equity, before,
+                         'resetting mid-trade books the rest of it against a balance it never '
+                         'opened from')

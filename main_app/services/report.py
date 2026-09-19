@@ -46,7 +46,7 @@ def _pct(n, d):
 
 # --- the three sections ----------------------------------------------------
 
-def lane_costs(account: Account) -> dict:
+def lane_costs(account: Account, all_time: bool = False) -> dict:
     """Every trade this lane has ever taken, and what the tolls cost it.
 
     Kept per lane rather than as one desk-wide number on purpose: the four bots
@@ -57,10 +57,18 @@ def lane_costs(account: Account) -> dict:
     a lane that is actually working can be promoted on its own while another
     keeps bleeding in the simulator.
     """
-    rows = list(Trade.objects.filter(account=account).values_list('pnl', 'fees', 'entry_price', 'qty'))
+    qs = Trade.objects.filter(account=account)
+    # Since the current scoring epoch by default. A reset moves the starting line
+    # so the present setup can be judged on its own results; `all_time=True` is
+    # what the lifetime brake and the history view ask for, and it always sees
+    # everything.
+    if not all_time and account.epoch_started_at:
+        qs = qs.filter(exit_ts__gte=account.epoch_started_at)
+    rows = list(qs.values_list('pnl', 'fees', 'entry_price', 'qty'))
     if not rows:
         return {'trades': 0, 'net': 0.0, 'fees': 0.0, 'moved': 0.0,
-                'fee_bps': 0.0, 'net_before_fees': 0.0, 'fee_share': 0.0}
+                'fee_bps': 0.0, 'net_before_fees': 0.0, 'fee_share': 0.0,
+                'epoch_started_at': account.epoch_started_at, 'all_time': all_time}
     net = sum(float(r[0]) for r in rows)
     fees = sum(float(r[1]) for r in rows)
     moved = sum(float(r[2]) * float(r[3]) for r in rows)
@@ -71,6 +79,8 @@ def lane_costs(account: Account) -> dict:
         # How much of the loss is the toll rather than the trading. Only
         # meaningful when the lane is down.
         'fee_share': (fees / abs(net) * 100) if net < 0 else 0.0,
+        'epoch_started_at': account.epoch_started_at,
+        'all_time': all_time,
     }
 
 
@@ -390,7 +400,16 @@ def build_report(d: date | None = None, mode: str = Mode.SIM) -> dict:
     spend = day_spend(d)
     spend['month_to_date'] = range_spend(30)
     spend['projected_monthly'] = projected_monthly(30)
+    # If every lane shares a scoring epoch, say so rather than calling a two-day
+    # number "lifetime". The word is doing real work: it is the difference between
+    # "this is what the desk has ever done" and "this is what the current setup
+    # has done since we stopped measuring a machine that was broken".
+    epochs = {ln['pnl']['lifetime'].get('epoch_started_at') for ln in lanes}
+    since = 'lifetime'
+    if len(epochs) == 1 and (start := epochs.pop()):
+        since = f'since the reset on {timezone.localtime(start):%b %-d}'
     return {'date': d, 'mode': mode, 'lanes': lanes, 'generated_at': timezone.now(), 'spend': spend,
+            'since': since,
             'total': {'net': total_net, 'trades': total_trades, 'equity': total_equity,
                       'starting_cash': total_start, 'total_pnl': total_equity - total_start}}
 
@@ -401,7 +420,8 @@ def render_text(rep: dict) -> str:
     L.append(f"MoneyTree — {rep['date']:%A %B %-d, %Y}")
     L.append('=' * 60)
     L.append(f"Today across all four lanes: {t['net']:+,.2f} on {t['trades']} trades")
-    L.append(f"Equity {t['equity']:,.2f} of {t['starting_cash']:,.2f} seeded ({t['total_pnl']:+,.2f} lifetime)")
+    L.append(f"Equity {t['equity']:,.2f} of {t['starting_cash']:,.2f} seeded "
+              f"({t['total_pnl']:+,.2f} {rep.get('since', 'lifetime')})")
     L.append('')
     L.append('  ' + '  '.join(f"{lane['title'].upper():<9}" for lane in rep['lanes']))
     L.append('  ' + '  '.join(f"{lane['pnl']['net']:>+9,.2f}" for lane in rep['lanes']))
@@ -417,13 +437,15 @@ def render_text(rep: dict) -> str:
         L.append(f"P&L today {p['net']:+,.2f} on {p['trades']} trades"
                  + (f" ({p['win_rate']:.0f}% won, fees {p['fees']:,.2f}, expectancy {p['expectancy']:+.2f}/trade)"
                     if p['trades'] else '')
-                 + f" · equity {p['equity']:,.2f} ({p['total_pnl']:+,.2f} lifetime)")
+                 + f" · equity {p['equity']:,.2f} ({p['total_pnl']:+,.2f} "
+                 + f"{rep.get('since', 'lifetime')})")
         if p['trades']:
             L.append(f"  Cost of running it today: moved {p['moved']:,.0f}, paid {p['fees']:,.2f} "
                      f"({p['fee_bps']:.1f} bps) — {p['net_before_fees']:+,.2f} before fees")
         lc = p['lifetime']
         if lc['trades']:
-            line = (f"  Lifetime: {lc['trades']} trades, moved {lc['moved']:,.0f}, "
+            span = 'Since the reset' if lc.get('epoch_started_at') else 'Lifetime'
+            line = (f"  {span}: {lc['trades']} trades, moved {lc['moved']:,.0f}, "
                     f"paid {lc['fees']:,.2f} ({lc['fee_bps']:.1f} bps), net {lc['net']:+,.2f}")
             if lc['net_before_fees'] > 0 and lc['net'] < 0:
                 # The most useful sentence the report can say about a lane: the

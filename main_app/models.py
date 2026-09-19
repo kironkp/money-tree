@@ -275,6 +275,19 @@ class Account(models.Model):
     market = models.CharField(max_length=8, choices=Market.choices, default=Market.STOCKS)
     name = models.CharField(max_length=40)
     starting_cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))
+    # A scoring epoch. The money resets; the memory does not.
+    #
+    # An account can be given a clean slate — after a strategy that dominated the
+    # record is switched off, say — without deleting a single trade. Reports show
+    # the epoch by default so the current setup can be judged on its own results,
+    # while `promotion.lifetime_verdict` keeps counting EVERY trade ever taken.
+    #
+    # That split is deliberate and it is the lesson from `evidence_since`: resetting
+    # the clock on a losing strategy is how burst's earned quarantine was erased,
+    # after which the lane lost another $1,077. A reset must never be able to buy
+    # a failed idea a second life.
+    epoch_started_at = models.DateTimeField(null=True, blank=True)
+    epoch_note = models.CharField(max_length=200, blank=True)
     cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))
     # For broker-backed accounts these mirror the broker; for sim they equal
     # the computed values at the last mark-to-market.

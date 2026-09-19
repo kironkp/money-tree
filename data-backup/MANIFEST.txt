@@ -1,7 +1,7 @@
 MoneyTree data backup
-taken       2026-09-19 02:00:04 PDT
+taken       2026-09-19 11:49:32 PDT
 database    367583232 bytes
-ledger.sql  8487747 bytes
+ledger.sql  8918419 bytes
 
 accounts (mode · market · equity · trades)
   paper · crypto · 10000.00 · 0
@@ -20,33 +20,33 @@ accounts (mode · market · equity · trades)
 rows backed up
   main_app_account             12
   main_app_agentconfig         1
-  main_app_agentrun            98
-  main_app_apiusage            627
-  main_app_briefing            157
-  main_app_experiment          141
+  main_app_agentrun            102
+  main_app_apiusage            645
+  main_app_briefing            161
+  main_app_experiment          154
   main_app_fill                900
   main_app_instrument          27
-  main_app_journalentry        188
+  main_app_journalentry        201
   main_app_marketsession       0
-  main_app_newsitem            432
-  main_app_newssession         26
-  main_app_newsverdict         430
+  main_app_newsitem            444
+  main_app_newssession         28
+  main_app_newsverdict         437
   main_app_order               900
   main_app_position            0
-  main_app_symboldossier       28
+  main_app_symboldossier       30
   main_app_evaluation          1
-  main_app_unmatchedsymbol     595
-  main_app_riskevent           108
-  main_app_signal              1718
+  main_app_unmatchedsymbol     598
+  main_app_riskevent           112
+  main_app_signal              1719
   main_app_signupinvite        0
   main_app_strategy            13
   main_app_trade               450
   main_app_tradecard           450
-  main_app_equitysnapshot      4477
+  main_app_equitysnapshot      4519
 
 not in this dump (regenerable)
-  main_app_bar                 1102137
-  main_app_feedevent           133126
+  main_app_bar                 1102621
+  main_app_feedevent           100617
   main_app_symbolstate         36
-  main_app_backtestrun         904
+  main_app_backtestrun         964
   main_app_backtesttrade       4707

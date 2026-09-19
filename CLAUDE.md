@@ -385,6 +385,26 @@ complete answer and the most common correct one — because a daily job told to 
 improvements will find some every day, which is overfitting with extra steps. The
 seventh is the only open-ended one.
 
+## Scoring epochs
+
+`manage.py reset_epoch` returns lane balances to seed capital and stamps
+`Account.epoch_started_at`. Reports and `report.lane_costs()` show the epoch by
+default; `lane_costs(all_time=True)` and `promotion.lifetime_verdict()` always see
+every trade ever taken. **No trade is ever deleted.** That split is the whole
+design: deleting them would repeat what `evidence_since` did, which erased burst's
+earned quarantine and cost another $1,077.52. A reset moves the starting line; it
+must never buy a failed strategy a second life.
+
+The command STOPS the agents, resets, then restarts them, in that order, because
+a running agent holds its broker in memory and its shutdown path persists that
+state. Resetting underneath one — or using `restart_agents`, which stops and
+starts in a single call — writes the old balance straight back. That happened
+twice before the command owned the sequence. It also refuses while any position is
+open, since the rest of that trade would book against a balance it never opened
+from.
+
+First epoch: 2026-09-19, closing -$4,086.24 over 450 trades.
+
 ## Invariants that matter
 
 - **A bar that agrees with itself can still be nonsense.** The quality gate's

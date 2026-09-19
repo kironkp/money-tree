@@ -46,6 +46,34 @@ def _pct(n, d):
 
 # --- the three sections ----------------------------------------------------
 
+def lane_costs(account: Account) -> dict:
+    """Every trade this lane has ever taken, and what the tolls cost it.
+
+    Kept per lane rather than as one desk-wide number on purpose: the four bots
+    have wildly different economics, and averaging them hides it. Crypto and degen
+    pay 50 bps a round trip; stocks and forex pay 1. Degen's fees alone are
+    two thirds of its entire loss, while forex's are a fifth of its. One number
+    for "fees" would make both look like the same problem, and they are not — so
+    a lane that is actually working can be promoted on its own while another
+    keeps bleeding in the simulator.
+    """
+    rows = list(Trade.objects.filter(account=account).values_list('pnl', 'fees', 'entry_price', 'qty'))
+    if not rows:
+        return {'trades': 0, 'net': 0.0, 'fees': 0.0, 'moved': 0.0,
+                'fee_bps': 0.0, 'net_before_fees': 0.0, 'fee_share': 0.0}
+    net = sum(float(r[0]) for r in rows)
+    fees = sum(float(r[1]) for r in rows)
+    moved = sum(float(r[2]) * float(r[3]) for r in rows)
+    return {
+        'trades': len(rows), 'net': net, 'fees': fees, 'moved': moved,
+        'fee_bps': (fees / moved * 10000) if moved else 0.0,
+        'net_before_fees': net + fees,
+        # How much of the loss is the toll rather than the trading. Only
+        # meaningful when the lane is down.
+        'fee_share': (fees / abs(net) * 100) if net < 0 else 0.0,
+    }
+
+
 def lane_pnl(account: Account, d: date) -> dict:
     a, b = _bounds(d)
     trades = list(Trade.objects.filter(account=account, exit_ts__gte=a, exit_ts__lt=b).select_related('instrument'))
@@ -53,8 +81,17 @@ def lane_pnl(account: Account, d: date) -> dict:
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p <= 0]
     positions = list(account.positions.select_related('instrument'))
+    fees = sum(float(t.fees) for t in trades)
+    # What the lane MOVED, not what it owns. Forex runs at 10x leverage, so it can
+    # push $373,000 through a $9,400 account in a day; that number is the only one
+    # a fee rate means anything against.
+    moved = sum(float(t.entry_price) * float(t.qty) for t in trades)
     return {
-        'trades': len(trades), 'net': sum(pnls), 'fees': sum(float(t.fees) for t in trades),
+        'trades': len(trades), 'net': sum(pnls), 'fees': fees,
+        'moved': moved,
+        'fee_bps': (fees / moved * 10000) if moved else 0.0,
+        'net_before_fees': sum(pnls) + fees,
+        'lifetime': lane_costs(account),
         'wins': len(wins), 'losses': len(losses), 'win_rate': _pct(len(wins), len(trades)),
         'gross_win': sum(wins), 'gross_loss': -sum(losses),
         'profit_factor': (sum(wins) / -sum(losses)) if losses and sum(losses) < 0 else (sum(wins) if wins else 0.0),
@@ -371,6 +408,8 @@ def render_text(rep: dict) -> str:
     L.append('  ' + '  '.join(
         f"{str(lane['pnl']['trades']) + (' trade' if lane['pnl']['trades'] == 1 else ' trades'):<9}"
         for lane in rep['lanes']))
+    L.append('  ' + '  '.join(f"{'fees ' + format(lane['pnl']['fees'], ',.2f'):<9}"
+                              for lane in rep['lanes']))
     L.append('')
     for lane in rep['lanes']:
         p = lane['pnl']
@@ -379,6 +418,21 @@ def render_text(rep: dict) -> str:
                  + (f" ({p['win_rate']:.0f}% won, fees {p['fees']:,.2f}, expectancy {p['expectancy']:+.2f}/trade)"
                     if p['trades'] else '')
                  + f" · equity {p['equity']:,.2f} ({p['total_pnl']:+,.2f} lifetime)")
+        if p['trades']:
+            L.append(f"  Cost of running it today: moved {p['moved']:,.0f}, paid {p['fees']:,.2f} "
+                     f"({p['fee_bps']:.1f} bps) — {p['net_before_fees']:+,.2f} before fees")
+        lc = p['lifetime']
+        if lc['trades']:
+            line = (f"  Lifetime: {lc['trades']} trades, moved {lc['moved']:,.0f}, "
+                    f"paid {lc['fees']:,.2f} ({lc['fee_bps']:.1f} bps), net {lc['net']:+,.2f}")
+            if lc['net_before_fees'] > 0 and lc['net'] < 0:
+                # The most useful sentence the report can say about a lane: the
+                # trading works and the tolls are eating it.
+                line += (f" — it makes {lc['net_before_fees']:+,.2f} before fees, "
+                         f"so the tolls are what sink it")
+            elif lc['fee_share']:
+                line += f" — fees are {lc['fee_share']:.0f}% of the loss"
+            L.append(line)
         if p['open_positions']:
             L.append(f"  {p['open_positions']} position(s) still open, {p['unrealized']:+,.2f} unrealized")
         L.append('')
@@ -466,6 +520,14 @@ def render_html(rep: dict) -> str:
                 f'font-variant-numeric:tabular-nums">{pn["net"]:+,.2f}</div>'
                 f'<div style="color:{FAINT};font-size:11px;margin-top:3px;font-variant-numeric:tabular-nums">'
                 f'{note} · equity {pn["equity"]:,.0f}</div>'
+                # Each lane carries its OWN fee line. One desk-wide number would
+                # hide that degen pays 50 bps a round trip while forex pays 1,
+                # which is exactly the difference that decides whether a lane is
+                # worth promoting on its own.
+                f'<div style="color:{FAINT};font-size:11px;margin-top:2px;'
+                f'font-variant-numeric:tabular-nums">fees {pn["fees"]:,.2f}'
+                + (f' ({pn["fee_bps"]:.1f} bps)' if pn['trades'] else '')
+                + f' · {pn["net_before_fees"]:+,.2f} before fees</div>'
                 f'</td></tr></table></td>')
         P.append('</tr>')
     P.append('</table></td></tr>')
@@ -481,7 +543,7 @@ def render_html(rep: dict) -> str:
                  f'lifetime {pn["total_pnl"]:+,.2f}</span></div>')
         if pn['trades']:
             P.append(f'<div style="color:{DIM};font-size:12px;margin-top:6px">'
-                     f'{pn["win_rate"]:.0f}% won · fees {pn["fees"]:,.2f} · '
+                     f'{pn["win_rate"]:.0f}% won · fees {pn["fees"]:,.2f} ({pn["fee_bps"]:.1f} bps) · '
                      f'expectancy {pn["expectancy"]:+.2f}/trade · exits: '
                      + ', '.join(f'{k} {v}' for k, v in pn['exit_reasons'].most_common()) + '</div>')
         if pn['open_positions']:

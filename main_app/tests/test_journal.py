@@ -95,3 +95,72 @@ class ProfitableEvidenceCanQualify(TestCase):
         self.assertTrue(changed)
         self.assertEqual(persisted['state'], Qualification.QUALIFIED)
         self.assertEqual(row.qualification, Qualification.QUALIFIED)
+
+
+class EachBotCarriesItsOwnFees(TestCase):
+    """One desk-wide fee number hides the only thing that matters here.
+
+    Degen and crypto pay 50 bps a round trip; stocks and forex pay 1. Averaging
+    them makes every lane look like the same problem, when in fact one lane can be
+    ready to promote while another bleeds tolls in the simulator.
+    """
+
+    def setUp(self):
+        from decimal import Decimal
+
+        from main_app.models import Account, Instrument, Trade
+        from django.utils import timezone
+        self.inst = Instrument.objects.create(symbol='EUR/USD', asset_class='forex', market='forex')
+        self.account = Account.objects.create(mode='sim', market='forex',
+                                              starting_cash=10000, cash=10000)
+        now = timezone.now()
+        for pnl, fee in ((Decimal('40'), Decimal('12')), (Decimal('-30'), Decimal('12'))):
+            Trade.objects.create(
+                account=self.account, instrument=self.inst, strategy_key='ema_momentum',
+                side='long', qty=1000, entry_ts=now, exit_ts=now,
+                entry_price=Decimal('1.05'), exit_price=Decimal('1.06'), pnl=pnl,
+                pnl_pct=Decimal('0.9'), fees=fee, bars_held=3, exit_reason='target')
+
+    def test_it_reports_what_the_lane_moved_not_what_it_holds(self):
+        from main_app.services.report import lane_costs
+        c = lane_costs(self.account)
+        self.assertEqual(c['trades'], 2)
+        self.assertAlmostEqual(c['moved'], 2100.0)      # 2 x 1000 x 1.05
+        self.assertAlmostEqual(c['fees'], 24.0)
+
+    def test_the_fee_rate_is_measured_against_what_moved(self):
+        from main_app.services.report import lane_costs
+        c = lane_costs(self.account)
+        self.assertAlmostEqual(c['fee_bps'], 24.0 / 2100.0 * 10000, places=4)
+
+    def test_it_separates_the_trading_from_the_tolls(self):
+        """+10 after fees, +34 before them. That gap is the whole point."""
+        from main_app.services.report import lane_costs
+        c = lane_costs(self.account)
+        self.assertAlmostEqual(c['net'], 10.0)
+        self.assertAlmostEqual(c['net_before_fees'], 34.0)
+
+    def test_a_lane_that_only_loses_to_fees_is_identifiable(self):
+        from decimal import Decimal
+
+        from main_app.models import Trade
+        from django.utils import timezone
+        Trade.objects.filter(account=self.account).delete()
+        now = timezone.now()
+        Trade.objects.create(
+            account=self.account, instrument=self.inst, strategy_key='x', side='long', qty=1000,
+            entry_ts=now, exit_ts=now, entry_price=Decimal('1.05'), exit_price=Decimal('1.05'),
+            pnl=Decimal('-5'), pnl_pct=Decimal('0'), fees=Decimal('8'), bars_held=1,
+            exit_reason='target')
+        from main_app.services.report import lane_costs
+        c = lane_costs(self.account)
+        self.assertLess(c['net'], 0)
+        self.assertGreater(c['net_before_fees'], 0, 'profitable before fees')
+
+    def test_a_lane_with_no_trades_reports_zeroes_not_an_error(self):
+        from main_app.models import Account, Trade
+        from main_app.services.report import lane_costs
+        Trade.objects.filter(account=self.account).delete()
+        c = lane_costs(self.account)
+        self.assertEqual(c['trades'], 0)
+        self.assertEqual(c['fee_bps'], 0.0)

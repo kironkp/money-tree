@@ -71,6 +71,12 @@ def state() -> dict:
               for row in Trade.objects.filter(exit_ts__gte=day_start)
               .values('account__market').annotate(n=Count('id'))}
 
+    # Each lane's own tolls. Kept per lane on purpose: degen and crypto pay 50 bps
+    # a round trip while stocks and forex pay 1, so a single desk-wide fee number
+    # would hide the only distinction that decides which bot is worth promoting.
+    from .report import lane_costs
+    costs = {lane: lane_costs(a) for lane, a in accounts.items()}
+
     for lane in LANES:
         acct, run = accounts.get(lane), runs.get(lane)
         health = 'idle'
@@ -81,12 +87,24 @@ def state() -> dict:
         equity = float(acct.equity) if acct else 0.0
         day = float(pnl.get(lane) or 0)
         halted = bool(acct and getattr(acct, 'day_halted', False))
+        c = costs.get(lane) or {}
+        if c.get('trades'):
+            toll = (f'lifetime: {c["trades"]} trades moved ${c["moved"]:,.0f}, paid '
+                    f'${c["fees"]:,.2f} in fees ({c["fee_bps"]:.1f} bps) — '
+                    f'${c["net_before_fees"]:+,.2f} before fees, ${c["net"]:+,.2f} after')
+            if c['net_before_fees'] > 0 and c['net'] < 0:
+                toll += '. The trading works; the tolls sink it.'
+            elif c.get('fee_share'):
+                toll += f'. Fees are {c["fee_share"]:.0f}% of the loss.'
+        else:
+            toll = ''
         out[f'agent.{lane}'] = {
             'status': 'halted' if halted else ('ok' if health in ('healthy', 'running', 'waiting')
                                                else 'warn' if run else 'idle'),
             'headline': f'${equity:,.0f}',
             'sub': f'{_money(day)} today · {counts.get(lane, 0)} trades',
-            'detail': (acct.day_halted_reason if halted else detail)[:140],
+            'detail': ((acct.day_halted_reason if halted else detail)[:140]
+                       + ('  ·  ' + toll if toll else '')),
         }
 
     # --- strategies: one grouped query --------------------------------------

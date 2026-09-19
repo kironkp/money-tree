@@ -176,8 +176,11 @@ class Agent:
                 log.info('hydrated %d positions, canceled %d stale orders', n, stale)
         else:
             from .broker.alpaca import AlpacaBroker
+            # Same fee table the simulator uses, so a promoted lane and its sim
+            # twin stay measurable against each other.
             self.broker = AlpacaBroker(paper=(self.mode == Mode.PAPER), asset_classes=self.asset_classes,
-                                       qty_increments=self.qty_increments, mode_is_live=(self.cfg.mode == Mode.LIVE))
+                                       qty_increments=self.qty_increments, mode_is_live=(self.cfg.mode == Mode.LIVE),
+                                       fee_bps=self.cfg.fee_bps())
             hydrate_broker(self.account, self.broker)
         self.recorder = DBRecorder(self.account, self.instruments)
         self.engine = Engine(self.strategies, self.broker, engine_cfg, self.recorder, self.risk, narrator=self.narrator)

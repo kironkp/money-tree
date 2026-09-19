@@ -270,3 +270,47 @@ class AlpacaHistoryIsRegularSessionOnly(SimpleTestCase):
         w = list(windows(datetime(2025, 1, 1, tzinfo=UTC), datetime(2026, 1, 1, tzinfo=UTC), '5Min', 'stock'))
         self.assertGreater(len(w), 5)
         self.assertLessEqual((w[0][1] - w[0][0]).days * 16 * 12, 10000)
+
+
+class ThePaperLaneReportsItsFeesLikeTheSimulator(SimpleTestCase):
+    """The two accounts have to answer the same question to be comparable.
+
+    This adapter recorded fees=0.0 and a GROSS pnl where the simulator records
+    fees and a NET one. The moment a lane left the simulator, the per-lane report
+    built to judge it would have read "fees 0.00 (0.0 bps), net before fees equals
+    net" — a confident, silent lie in exactly the artifact used to decide whether
+    promoting it had worked.
+    """
+
+    def _broker(self):
+        from main_app.services.broker.alpaca import AlpacaBroker
+        b = AlpacaBroker.__new__(AlpacaBroker)
+        b.asset_classes = {'BTC/USD': 'crypto', 'AAPL': 'stock'}
+        b.fee_bps = {'stock': 0.0, 'etf': 0.0, 'crypto': 25.0, 'forex': 0.5}
+        return b
+
+    def test_crypto_commission_is_charged_not_zeroed(self):
+        b = self._broker()
+        self.assertAlmostEqual(b._fee('BTC/USD', 10_000, 'buy'), 25.0)
+
+    def test_a_stock_sale_pays_the_regulatory_fee_a_purchase_does_not(self):
+        b = self._broker()
+        self.assertAlmostEqual(b._fee('AAPL', 10_000, 'buy'), 0.0)
+        self.assertAlmostEqual(b._fee('AAPL', 10_000, 'sell'), 0.3)
+
+    def test_a_recorded_trade_carries_both_legs_and_a_net_pnl(self):
+        from datetime import UTC, datetime
+
+        from main_app.services.broker.base import OrderReq, Position
+        b = self._broker()
+        b._positions = {'BTC/USD': Position(symbol='BTC/USD', qty=1.0, avg_price=100.0,
+                                            entry_ts=datetime.now(UTC), strategy_key='x',
+                                            entry_fees=0.25)}
+        b.trades, b._events = [], []
+        order = OrderReq(id='x-exit', symbol='BTC/USD', side='sell', qty=1.0, leg='exit',
+                         strategy_key='x', exit_reason='target')
+        b._record_trade(order, 110.0, 1.0, datetime.now(UTC), exit_fee=0.275)
+        tr = b.trades[-1]
+        self.assertAlmostEqual(tr.fees, 0.525)
+        self.assertAlmostEqual(tr.pnl, 10.0 - 0.525,
+                               msg='pnl must be net of fees, as the simulator records it')

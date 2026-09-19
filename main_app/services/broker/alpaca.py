@@ -36,7 +36,8 @@ class AlpacaBroker(Broker):
     immediate_fills = True
 
     def __init__(self, paper: bool = True, asset_classes: dict | None = None, qty_increments: dict | None = None,
-                 mode_is_live: bool = False, client=None, poll_s: float = 8.0):
+                 mode_is_live: bool = False, client=None, poll_s: float = 8.0,
+                 fee_bps: dict | None = None):
         if client is None:
             if not paper:
                 if not (settings.LIVE_TRADING_ARMED and mode_is_live):
@@ -53,6 +54,14 @@ class AlpacaBroker(Broker):
         self.poll_s = poll_s
         self.asset_classes = asset_classes or {}
         self.qty_increments = qty_increments or {}
+        # The venue charges commission and this adapter used to record fees=0.0 and
+        # a GROSS pnl, where the simulator records fees and a NET one. The moment a
+        # lane left the simulator its report would have read "fees 0.00 (0.0 bps),
+        # net_before_fees == net" — a confident, silent lie in exactly the artifact
+        # used to decide whether promoting it worked. Modelled from the same table
+        # the simulator uses, so the two accounts stay comparable; that is the whole
+        # point of running them side by side.
+        self.fee_bps = {'stock': 0.0, 'etf': 0.0, 'crypto': 25.0, 'forex': 0.5, **(fee_bps or {})}
         self._positions: dict[str, Position] = {}
         self._cash = 0.0
         self._equity = 0.0
@@ -241,20 +250,46 @@ class AlpacaBroker(Broker):
         if local.decision_price:
             signed = (price - local.decision_price) / local.decision_price * 1e4
             slip = signed if local.side == 'buy' else -signed
-        self._events.append(('fill', Fill(local.id, local.symbol, ts, local.side, qty, price, 0.0, slip), local))
+        fee = self._fee(local.symbol, qty * price, local.side)
+        self._events.append(('fill', Fill(local.id, local.symbol, ts, local.side, qty, price, fee, slip), local))
         if local.leg == 'exit':
-            self._record_trade(local, price, qty, ts)
+            self._record_trade(local, price, qty, ts, fee)
+        else:
+            pos = self._positions.get(local.symbol)
+            if pos is not None:
+                pos.entry_fees += fee
         return 1
 
-    def _record_trade(self, order: OrderReq, price: float, qty: float, ts: datetime) -> None:
+    def _fee(self, symbol: str, notional: float, side: str) -> float:
+        """Commission as the venue charges it, plus the fees only a sale pays.
+
+        Modelled rather than read back: Alpaca's order object does not carry the
+        commission. Modelled and RECORDED beats reported-as-zero, because zero is
+        the one value guaranteed to be wrong.
+        """
+        from .sim import SELL_REGULATORY_BPS
+        asset_class = self.asset_classes.get(symbol, 'stock')
+        fee = abs(notional) * self.fee_bps.get(asset_class, 0.0) / 1e4
+        if side == 'sell' and asset_class in ('stock', 'etf'):
+            fee += abs(notional) * SELL_REGULATORY_BPS / 1e4
+        return fee
+
+    def _record_trade(self, order: OrderReq, price: float, qty: float, ts: datetime,
+                      exit_fee: float = 0.0) -> None:
         pos = self._positions.get(order.symbol)
         if pos is None:
             return
-        pnl = (price - pos.avg_price) * qty * (1 if pos.qty > 0 else -1)
+        gross = (price - pos.avg_price) * qty * (1 if pos.qty > 0 else -1)
+        # Both legs, and pnl NET of them — the same convention the simulator uses.
+        # A paper lane and its sim twin are only comparable if they answer the same
+        # question, and "did it make money" means after costs in both.
+        fees = float(pos.entry_fees) + float(exit_fee)
+        pnl = gross - fees
         cost = pos.avg_price * qty
         tr = TradeRecord(symbol=order.symbol, strategy_key=pos.strategy_key, side=pos.side, qty=qty,
                          entry_ts=pos.entry_ts, exit_ts=ts, entry_price=pos.avg_price, exit_price=price,
-                         pnl=pnl, pnl_pct=(pnl / cost * 100) if cost else 0.0, fees=0.0, bars_held=pos.bars_held,
+                         pnl=pnl, pnl_pct=(pnl / cost * 100) if cost else 0.0, fees=fees,
+                         bars_held=pos.bars_held,
                          exit_reason=order.exit_reason, entry_order_id=pos.entry_order_id, exit_order_id=order.id)
         self.trades.append(tr)
         self._events.append(('trade', tr, order))

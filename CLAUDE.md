@@ -368,6 +368,23 @@ missing symbol.
   watchlist would not have produced a UNI verdict. 119 of 347 verdicts (34%)
   already map to no tradable instrument.
 
+## Daily diagnosis (06:30)
+
+`.claude/workflows/daily-diagnosis.js` — a seven-agent Claude Code workflow run
+headlessly by `deploy/daily-diagnosis.sh` and `com.kiron.moneytree.diagnosis.plist`.
+Findings land as a `JournalEntry(kind='diagnosis')` via `manage.py record_diagnosis`.
+
+06:30 because yesterday's numbers are settled by then (a mid-session reading once
+showed +$35.29 on a day that finished −$5.68), the 02:00 backup and 02:10 research
+have finished, and it is three hours before the open so a finding can still be
+acted on. The 17:30 report is the evening counterpart.
+
+It is READ-ONLY by design: it diagnoses, it never fixes. Six agents check a FIXED
+list of known failure modes and report only what CHANGED — "nothing new" is a
+complete answer and the most common correct one — because a daily job told to find
+improvements will find some every day, which is overfitting with extra steps. The
+seventh is the only open-ended one.
+
 ## Invariants that matter
 
 - **A bar that agrees with itself can still be nonsense.** The quality gate's

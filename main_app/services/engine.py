@@ -154,6 +154,19 @@ class EngineConfig:
     data_source: str = ''
 
 
+@dataclass(eq=False)
+class _Candidate:
+    """An entry signal waiting for every symbol's bar to be swept before it is judged."""
+    sig: Signal
+    strat: Strategy
+    ctx: Context
+    bar: object
+    rules: list
+    # The risk manager's block map as it stood when the signal was raised. The
+    # catch-up guard sets these before the tick and they must survive the defer.
+    blocks: dict
+
+
 class Engine:
     def __init__(self, strategies: list[Strategy], broker: Broker, cfg: EngineConfig,
                  recorder: Recorder | None = None, risk: RiskManager | None = None, narrator=None):
@@ -169,6 +182,8 @@ class Engine:
         self.bars_seen = 0
         self.last_acted: dict[tuple[str, str], datetime] = {}  # (strategy, symbol) -> bar ts
         self.cards: dict[str, CardState] = {}
+        # Entries waiting for the whole bar to be swept. See handle_signal.
+        self.queued: list[_Candidate] = []
         self.card_by_symbol: dict[str, str] = {}
         self.names = {s.key: getattr(s, 'name', s.key) for s in strategies}
 
@@ -406,6 +421,22 @@ class Engine:
                                   'proximity': 1.0 if holding else best})
 
     # --- signals ---------------------------------------------------------------
+    #
+    # ENTRIES ARE DEFERRED; EXITS ARE NOT. `process_bar` runs once per symbol and
+    # sweeps that symbol's stops and targets as it goes, so the position count the
+    # risk manager sees depends on where in the loop it is asked. The loop is
+    # alphabetical (Instrument.Meta.ordering), which meant a slot freed by a
+    # late-alphabet symbol was invisible to every earlier one on the same bar.
+    #
+    # Measured: six of the twelve slot refusals this desk has ever written were
+    # against a slot that was already free on that bar. On 2026-09-21 the feed
+    # records AMD, AMZN and META all refused for "max open positions (4)", then
+    # SPY's stop filling and freeing the fourth slot, then TSLA — eighth in the
+    # alphabet — taking it. The three refusals were simply wrong.
+    #
+    # So an entry becomes a Candidate and is decided in `settle()`, once every
+    # symbol's bar has been swept. Exits stay immediate: deferring one would leave
+    # a position unprotected for the rest of the tick, which is the worse bug.
     def handle_signal(self, sig: Signal, strat: Strategy, ctx: Context, bar, rules: list | None = None) -> None:
         symbol = sig.symbol
         pos = self.broker.positions.get(symbol)
@@ -437,6 +468,39 @@ class Engine:
                 self._card_event(card, 'closing')
             self._emit_broker_events()
             return
+        # Queue it. The risk manager's answer would be wrong right now — the book
+        # is only half swept.
+        self.queued.append(_Candidate(sig=sig, strat=strat, ctx=ctx, bar=bar, rules=rules or [],
+                                      blocks=dict(getattr(self.risk, 'blocks', {}) or {})))
+
+    def settle(self, upto_ts: datetime | None = None) -> int:
+        """Decide every entry queued this bar, now that the whole book is swept.
+
+        Ordered by timestamp then symbol, which is what the loop did before — the
+        point of this change is WHEN the decision is made, not in what order.
+        Ranking the queue by conviction was measured and rejected: across every
+        signal this desk has ever refused for a full book, the refused set
+        performed no better than the taken set (stocks -0.673R vs -0.240R,
+        degen -0.914R vs -0.676R, both intervals straddling zero).
+        """
+        if not self.queued:
+            return 0
+        due = [c for c in self.queued if upto_ts is None or c.sig.ts <= upto_ts]
+        held = {id(c) for c in due}
+        self.queued = [c for c in self.queued if id(c) not in held]
+        due.sort(key=lambda c: (c.sig.ts, c.sig.symbol))
+        for c in due:
+            self._decide_entry(c)
+        return len(due)
+
+    def _decide_entry(self, c: '_Candidate') -> None:
+        sig, strat, ctx, bar, rules = c.sig, c.strat, c.ctx, c.bar, c.rules
+        symbol = sig.symbol
+        # A position opened by an earlier candidate in this same settle.
+        pos = self.broker.positions.get(symbol)
+        if pos is not None and pos.qty != 0:
+            self.rec.on_signal(sig, strat.key, Decision(False, reason='already in a position'), None)
+            return
         acct = self.broker.account()
         pending = self.pending_entry_cards()
         entry_side = 'long' if sig.action == 'buy' else 'short'
@@ -451,16 +515,26 @@ class Engine:
         can_short, short_why = (True, '') if sig.action != 'sell' else self.broker.can_short(symbol)
         if not can_short:
             veto = veto or short_why
-        decision = Decision(False, reason=veto) if veto else self.risk.evaluate(
-            sig, ctx, acct, self.broker.positions, ctx.asset_class,
-            strategy_supports=strat.supports(ctx.asset_class),
-            allocation_pct=float(self.cfg.allocations.get(strat.key, 100.0)),
-            strategy_exposure=self.strategy_exposure(strat.key),
-            pending_positions=pending_slots,
-            # Submitted broker orders are already reflected in buying power.
-            pending_exposure=self.pending_entry_exposure(states={'awaiting_approval', 'approved'}),
-            pending_directional_exposure=self.pending_entry_exposure(side=entry_side),
-            pending_symbols={card.symbol for card in pending})
+        # `catchup` is set around one process_bar call and popped in its `finally`,
+        # so by settle() it is gone. Restore the blocks as they stood when the
+        # signal was raised — otherwise deferring the decision would quietly let a
+        # stale-data entry through, which is the opposite of the point.
+        live_blocks = dict(self.risk.blocks)
+        self.risk.blocks.update(c.blocks)
+        try:
+            decision = Decision(False, reason=veto) if veto else self.risk.evaluate(
+                sig, ctx, acct, self.broker.positions, ctx.asset_class,
+                strategy_supports=strat.supports(ctx.asset_class),
+                allocation_pct=float(self.cfg.allocations.get(strat.key, 100.0)),
+                strategy_exposure=self.strategy_exposure(strat.key),
+                pending_positions=pending_slots,
+                # Submitted broker orders are already reflected in buying power.
+                pending_exposure=self.pending_entry_exposure(states={'awaiting_approval', 'approved'}),
+                pending_directional_exposure=self.pending_entry_exposure(side=entry_side),
+                pending_symbols={card.symbol for card in pending})
+        finally:
+            self.risk.blocks.clear()
+            self.risk.blocks.update(live_blocks)
         if not decision.allowed:
             strat.on_signal_blocked(sig, decision.reason)
             self.rec.on_signal(sig, strat.key, decision, None)
@@ -670,11 +744,21 @@ class Engine:
             prev_session[symbol] = sess
             per_strat_rows = rows[symbol]
             bar = next(iter(per_strat_rows.values()))[i]
+            # The driver walks events in (ts, symbol) order, so everything for a
+            # timestamp has been swept once the timestamp advances. Settling on
+            # that boundary gives the backtest the same sequencing as live —
+            # which matters because engine.py's own tie-break is alphabetical
+            # too, so a backtest would otherwise REPRODUCE the bias rather than
+            # expose it. It runs before process_bar because a session rollover
+            # in there flattens, and the queue belongs to the session that ended.
+            if last_ts is not None and ts != last_ts:
+                self.settle(upto_ts=last_ts)
             self.process_bar(symbol, ts, bar, {k: r[i] for k, r in per_strat_rows.items()}, prepared[symbol], i, mtc[symbol][i],
                              act=(act_from is None or ts >= act_from))
             if equity_every_bar and ts != last_ts:
                 self.record_equity(ts)
             last_ts = ts
         if last_ts is not None:
+            self.settle()
             self.flatten_all(last_ts, 'end')
             self.record_equity(last_ts)

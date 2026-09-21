@@ -93,6 +93,7 @@ def run_engine(strategies, cfg=None, bars=None):
     for i, r in enumerate(rows):
         r.bar_pos = i
         engine.process_bar('X', T(5 * i), r, {s.key: r for s in strategies}, {s.key: None for s in strategies}, i, 200.0)
+        engine.settle(upto_ts=T(5 * i))
     return engine, broker, rec
 
 
@@ -179,3 +180,60 @@ class CardsFollowTheTrade(SimpleTestCase):
         engine.submit_card(card.id, T(1))
         self.assertEqual(card.status, 'protected')
         self.assertIn('X', broker.positions)
+
+
+class EntersAtBar(Strategy):
+    """Buys one named symbol on one named bar. Nothing else."""
+    key = 'enters'
+    name = 'Enters'
+    warmup_bars = 0
+
+    def __init__(self, at):
+        super().__init__()
+        self.at = at                     # symbol -> bar index to enter on
+
+    def prepare(self, df, asset_class='stock', timeframe='5Min'):
+        return df
+
+    def on_bar(self, ctx, bar, df, i):
+        if ctx.position is None and i == self.at.get(ctx.symbol):
+            return [Signal('buy', ctx.symbol, ctx.ts, float(bar.close), float(bar.close) - 2, float(bar.close) + 8)]
+        return []
+
+
+class AFreedSlotIsVisibleToEverySymbol(SimpleTestCase):
+    """The book is swept for every symbol before any entry is judged.
+
+    Instruments are iterated alphabetically, so before this a slot freed by a
+    late-alphabet symbol's stop was invisible to every symbol ahead of it. Six of
+    the twelve stock refusals this desk had ever recorded were against a slot
+    that was already free by the end of the tick.
+    """
+    def _run(self):
+        strat = EntersAtBar({'ZZ': 0, 'AA': 1})
+        broker = SimBroker(10000, immediate_fills=True, slippage_bps=0, fee_bps={'stock': 0})
+        rec = MemoryRecorder()
+        cfg = EngineConfig(mode='t', risk=RiskConfig(max_open_positions=1, risk_per_trade_pct=1, max_position_pct=50))
+        engine = Engine([strat], broker, cfg, rec, RiskManager(cfg.risk))
+        bars = {
+            'AA': [bar(100, 101, 99, 100), bar(100, 101, 99, 100)],
+            'ZZ': [bar(100, 101, 99, 100), bar(100, 101, 90, 91)],   # bar 1 takes out the 98 stop
+        }
+        for i in range(2):
+            for symbol in sorted(bars):                              # the live loop's own order
+                r = bars[symbol][i]
+                r.bar_pos = i
+                engine.process_bar(symbol, T(5 * i), r, {strat.key: r}, {strat.key: None}, i, 200.0)
+            engine.settle(upto_ts=T(5 * i))
+        return engine, broker, rec
+
+    def test_the_slot_a_late_symbol_frees_goes_to_the_early_one(self):
+        engine, broker, rec = self._run()
+        self.assertNotIn('ZZ', broker.positions)                     # stopped out on bar 1
+        self.assertIn('AA', broker.positions)                        # and AA got the slot it freed
+        self.assertEqual(len(engine.queued), 0)
+
+    def test_no_signal_is_refused_for_a_slot_that_is_free_by_the_end_of_the_tick(self):
+        _, _, rec = self._run()
+        refused = [s for s in rec.signals if s[2] is not None and not s[2].allowed]
+        self.assertEqual([s[2].reason for s in refused], [])

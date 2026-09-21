@@ -654,6 +654,9 @@ class Agent:
                     self.engine.process_bar(s, ts, base_rows[i], {k: r[i] for k, r in rows.items()}, prepared, i, mtc[i])
                 self.last_processed[s] = ts
                 processed += 1
+        # Every symbol's bar is swept; now judge the entries. Before this, a slot
+        # freed by a late-alphabet symbol was invisible to every earlier one.
+        self.engine.settle()
         if self.mode in (Mode.PAPER, Mode.LIVE):
             self.reconcile(now)
         persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
@@ -766,8 +769,12 @@ class Agent:
                 self.heartbeat(f'replay {ts.astimezone(cal.ET):%H:%M} ET — equity {acct.equity:,.2f}', state='ticking')
                 self._sleep(min(pause, 10.0))
             self.engine.process_bar(s, ts, base_rows[s][i], {k: r[i] for k, r in rows[s].items()}, prepared[s], i, mtc[s][i])
+            # Replay walks one (symbol, ts) at a time already ordered by ts, so
+            # settling up to this bar keeps the same semantics as live.
+            self.engine.settle(upto_ts=ts)
             last_ts = ts
         if last_ts is not None:
+            self.engine.settle()
             self.engine.flatten_all(last_ts, 'end')
             persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
             self.engine.record_equity(last_ts)

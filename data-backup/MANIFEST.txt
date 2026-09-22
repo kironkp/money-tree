@@ -1,7 +1,7 @@
 MoneyTree data backup
-taken       2026-09-21 02:00:04 PDT
+taken       2026-09-22 02:00:08 PDT
 database    367583232 bytes
-ledger.sql  9586383 bytes
+ledger.sql  10545250 bytes
 
 accounts (mode · market · equity · trades)
   paper · crypto · 10000.00 · 0
@@ -12,41 +12,41 @@ accounts (mode · market · equity · trades)
   sim · degen · 9999.89 · 253
   paper · forex · 10000.00 · 0
   replay · forex · 10000.00 · 0
-  sim · forex · 9907.39 · 106
+  sim · forex · 10059.28 · 122
   paper · stocks · 10000.00 · 0
   replay · stocks · 10000.00 · 0
-  sim · stocks · 10000.00 · 97
+  sim · stocks · 9990.09 · 104
 
 rows backed up
   main_app_account             12
   main_app_agentconfig         1
-  main_app_agentrun            114
-  main_app_apiusage            696
-  main_app_briefing            173
-  main_app_experiment          167
-  main_app_fill                924
+  main_app_agentrun            122
+  main_app_apiusage            785
+  main_app_briefing            181
+  main_app_experiment          180
+  main_app_fill                969
   main_app_instrument          27
-  main_app_journalentry        225
+  main_app_journalentry        242
   main_app_marketsession       0
-  main_app_newsitem            468
-  main_app_newssession         38
-  main_app_newsverdict         464
-  main_app_order               924
-  main_app_position            2
-  main_app_symboldossier       46
+  main_app_newsitem            538
+  main_app_newssession         44
+  main_app_newsverdict         533
+  main_app_order               969
+  main_app_position            1
+  main_app_symboldossier       55
   main_app_evaluation          1
-  main_app_unmatchedsymbol     648
-  main_app_riskevent           124
-  main_app_signal              1744
+  main_app_unmatchedsymbol     902
+  main_app_riskevent           136
+  main_app_signal              1818
   main_app_signupinvite        0
   main_app_strategy            13
-  main_app_trade               461
-  main_app_tradecard           463
-  main_app_equitysnapshot      4728
+  main_app_trade               484
+  main_app_tradecard           485
+  main_app_equitysnapshot      4974
 
 not in this dump (regenerable)
-  main_app_bar                 1104629
-  main_app_feedevent           93904
+  main_app_bar                 1106879
+  main_app_feedevent           80604
   main_app_symbolstate         36
-  main_app_backtestrun         1018
+  main_app_backtestrun         1070
   main_app_backtesttrade       4707

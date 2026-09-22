@@ -28,6 +28,10 @@ class OpeningRangeBreakout(Strategy):
         Param('rr', 'float', 2.0, 1.0, 4.0, 0.5, help='Target as a multiple of risk'),
         Param('min_relvol', 'float', 1.0, 0.0, 2.0, 0.5, help='Minimum relative volume on the breakout bar'),
         Param('entry_window_minutes', 'int', 120, 60, 240, 60, help='Only enter this long after the open'),
+        # Declared so the knob actually does something. The stocks row has carried
+        # trade_short=False since it was created and the code never read it —
+        # Strategy.__init__ drops any key with no Param, so the config was lying.
+        Param('trade_short', 'bool', True, help='Take breakdowns below the range, not just breakouts above'),
     )
     warmup_bars = 20
 
@@ -63,7 +67,7 @@ class OpeningRangeBreakout(Strategy):
             st['traded_session'] = bar.session
             return [Signal('buy', ctx.symbol, ctx.ts, float(bar.close), float(stop), float(target),
                            reason=f'ORB↑ close {bar.close:.2f} > range high {bar.or_high:.2f}')]
-        if ctx.asset_class != 'crypto' and bar.close < bar.or_low:
+        if self.p['trade_short'] and ctx.asset_class != 'crypto' and bar.close < bar.or_low:
             stop = bar.close + risk
             target = bar.close - self.p['rr'] * risk
             st['traded_session'] = bar.session
@@ -83,7 +87,7 @@ class OpeningRangeBreakout(Strategy):
         if range_ok:
             out.append(Rule('range', True, f'opening range {bar.or_low:,.2f}–{bar.or_high:,.2f} is set'))
             broke_up = bar.close > bar.or_high
-            broke_down = bar.close < bar.or_low and ctx.asset_class != 'crypto'
+            broke_down = bool(self.p['trade_short']) and bar.close < bar.or_low and ctx.asset_class != 'crypto'
             if broke_up:
                 text = f'close {bar.close:,.2f} broke above the range high {bar.or_high:,.2f} (long)'
             elif broke_down:

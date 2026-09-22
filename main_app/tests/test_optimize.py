@@ -32,7 +32,9 @@ class WalkForwardWindowsRollWithoutLeaking(SimpleTestCase):
 class GridsAreBoundedAndOverridable(SimpleTestCase):
     def test_grid_from_schema_uses_ranges_and_keeps_bools_fixed(self):
         g = grid_from_schema('orb')
-        self.assertNotIn('trade_short', g)
+        # trade_short is the bool. Pinned to its default, never swept — the
+        # optimizer tunes numbers, it does not decide whether to short.
+        self.assertEqual(g['trade_short'], [True])
         self.assertEqual(g['range_minutes'], [5, 15, 30])
         self.assertTrue(all(0.5 <= v <= 2.0 for v in g['stop_atr_mult']))
         g2 = grid_from_schema('orb', {'rr': [1.5, 3]})

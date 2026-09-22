@@ -123,11 +123,13 @@ class PagesRenderWithData(TestCase):
     def test_strategy_form_saves_params(self):
         r = self.client.post(reverse('strategy-detail', args=['stocks', 'orb']), {
             'action': 'save', 'range_minutes': '30', 'stop_atr_mult': '1.5', 'rr': '3', 'min_relvol': '0.5',
-            'entry_window_minutes': '120', 'symbols': ['QQQ'], 'allocation_pct': '100', 'notes': 'n'})
+            'entry_window_minutes': '120', 'trade_short': 'on', 'not_a_param': '7',
+            'symbols': ['QQQ'], 'allocation_pct': '100', 'notes': 'n'})
         self.assertEqual(r.status_code, 302)
         self.row.refresh_from_db()
         self.assertEqual(self.row.params['range_minutes'], 30)
-        self.assertNotIn('trade_short', self.row.params)
+        self.assertIs(self.row.params['trade_short'], True)      # a declared param is saved
+        self.assertNotIn('not_a_param', self.row.params)         # an undeclared one is dropped
         self.assertEqual(self.row.symbols, ['QQQ'])
 
     def test_settings_saves_and_live_mode_needs_the_phrase(self):

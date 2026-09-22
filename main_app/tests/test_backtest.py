@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from django.test import SimpleTestCase
@@ -6,7 +7,7 @@ from django.test import SimpleTestCase
 from main_app.services.backtest import BacktestSpec, run_backtest
 from main_app.services.metrics import compute_metrics, downsample_equity
 from main_app.services.risk import RiskConfig
-from main_app.services.strategies import STRATEGIES
+from main_app.services.strategies import STRATEGIES, Context
 from main_app.tests.helpers import frames_for
 
 ET = ZoneInfo('America/New_York')
@@ -117,3 +118,30 @@ class MetricsMatchAKnownTradeList(SimpleTestCase):
         # Drawdown is measured on daily closes (110 → 105 → 96), not on intraday marks.
         self.assertAlmostEqual(m['max_drawdown_pct'], (96 / 110 - 1) * 100)
         self.assertEqual(len(downsample_equity(eq, 3)), 4)
+
+
+class OrbHonoursItsConfig(SimpleTestCase):
+    """trade_short sat in the stocks config and was read by nothing.
+
+    Strategy.__init__ drops any key with no matching Param, so the row said
+    "no shorts" while the strategy shorted anyway — AMZN was sold short on
+    2026-09-21 under a config that forbade it.
+    """
+    @staticmethod
+    def _breakdown_bar():
+        return SimpleNamespace(session='S', or_high=105.0, or_low=100.0, atr=1.0, close=99.0,
+                               minutes_since_open=30, relvol=2.0, bar_pos=6)
+
+    def _signals(self, trade_short):
+        orb = STRATEGIES['orb']({'trade_short': trade_short, 'min_relvol': 0})
+        ctx = Context('X', 'stock', '5Min', datetime(2026, 9, 21, 14, 0, tzinfo=UTC))
+        return orb.on_bar(ctx, self._breakdown_bar(), None, 6)
+
+    def test_the_flag_reaches_the_params_at_all(self):
+        self.assertIs(STRATEGIES['orb']({'trade_short': False}).p['trade_short'], False)
+
+    def test_breakdown_is_shorted_when_the_flag_is_on(self):
+        self.assertEqual([s.action for s in self._signals(True)], ['sell'])
+
+    def test_breakdown_is_left_alone_when_the_flag_is_off(self):
+        self.assertEqual(self._signals(False), [])

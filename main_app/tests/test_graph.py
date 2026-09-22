@@ -1,6 +1,10 @@
 """The map. Mostly tests that it cannot lie about the machine it draws."""
-from django.test import TestCase
+from types import SimpleNamespace
+from unittest.mock import patch
 
+from django.test import SimpleTestCase, TestCase
+
+from main_app.services.agent import Agent
 from main_app.services.graph_model import LANES, PAYLOADS, graph
 
 
@@ -92,3 +96,39 @@ class TheMapRenders(TestCase):
         with CaptureQueriesContext(connection) as q:
             state()
         self.assertLess(len(q), 40, 'the map polls this; an N+1 here becomes a stutter')
+
+
+class TheFeedDoesNotAdvertiseADisabledStrategy(SimpleTestCase):
+    """SymbolState.rules persist until the next bar overwrites them.
+
+    Disable a strategy after the close and the pulse kept naming its trigger
+    until the next session — ORB was still shown as "nearest trigger" minutes
+    after it was switched off.
+    """
+    def test_a_rule_from_an_unloaded_strategy_is_ignored(self):
+        agent = Agent.__new__(Agent)
+        agent.account = SimpleNamespace(pk=1)
+        agent.engine = SimpleNamespace(strategies=[SimpleNamespace(key='ema_momentum')])
+        rows = [SimpleNamespace(symbol='META', rules=[
+            {'strategy': 'orb', 'rule': 'breakout', 'ok': False, 'value': 737.9, 'threshold': 757.1},
+            {'strategy': 'ema_momentum', 'rule': 'move', 'ok': False, 'value': 1.0, 'threshold': 2.0},
+        ])]
+        with patch('main_app.models.SymbolState.objects') as objs:
+            objs.filter.return_value = rows
+            out = agent._nearest_trigger({'META': 737.9})
+        self.assertIn('ema_momentum', out)
+        self.assertNotIn('orb', out)
+
+
+class TheMapSaysWhyAStrategyIsOff(TestCase):
+    """"unproven" on something that was measured and stopped reads as
+    "not looked at yet" — the opposite of what happened to ORB."""
+    def test_a_quarantined_strategy_is_not_called_unproven(self):
+        from main_app.models import Strategy
+        from main_app.services.graph_state import state
+        Strategy.objects.create(key='orb', market='stocks', enabled=False,
+                                qualification='quarantine', params={}, symbols=['SPY'])
+        s = state()['strat.orb']
+        self.assertEqual(s['headline'], '0/1 on')
+        self.assertEqual(s['sub'], 'quarantined')
+        self.assertIn('stopped', s['detail'])

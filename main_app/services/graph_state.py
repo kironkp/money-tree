@@ -114,11 +114,16 @@ def state() -> dict:
         rows = list(Strategy.objects.filter(key=key).values('enabled', 'qualification', 'market'))
         live = sum(1 for r in rows if r['enabled'])
         proven = sum(1 for r in rows if r['qualification'] == 'qualified')
+        walled = sum(1 for r in rows if r['qualification'] == 'quarantine')
+        # 'unproven' for something that was measured and switched off reads as
+        # "not looked at yet", which is the opposite of what happened.
+        sub = f'{proven} proven' if proven else ('quarantined' if walled == len(rows) else 'unproven')
         out[f'strat.{key}'] = {
             'status': 'ok' if proven else ('warn' if live else 'idle'),
             'headline': f'{live}/{len(rows)} on',
-            'sub': f'{proven} proven' if proven else 'unproven',
-            'detail': 'enabled means permission to observe, not proof that it works',
+            'sub': sub,
+            'detail': ('measured, and stopped — see the journal' if walled == len(rows)
+                       else 'enabled means permission to observe, not proof that it works'),
         }
     out['ops.promotion'] = {
         'status': 'warn' if not quals.get('qualified') else 'ok',

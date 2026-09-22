@@ -369,9 +369,15 @@ class Agent:
         """The symbol closest to firing, from the latest rule evaluation."""
         try:
             from main_app.models import SymbolState
+            # Rules persist until the next bar overwrites them, so a strategy
+            # disabled outside market hours would keep advertising a trigger it
+            # can no longer take, all night.
+            live = {st.key for st in self.engine.strategies}
             best, best_gap = None, None
             for st in SymbolState.objects.filter(account=self.account, symbol__in=list(prices)):
                 for r in st.rules or []:
+                    if r.get('strategy') and r['strategy'] not in live:
+                        continue
                     if r.get('ok') or r.get('value') is None or r.get('threshold') is None:
                         continue
                     if r['rule'] in ('move', 'breakout', 'stretch'):

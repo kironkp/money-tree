@@ -214,9 +214,55 @@ established rather than guessed:
   strategy research.
 - **The monthly FX reversion that survived one window does not survive two.**
 
+## H12 — the news verdicts, tested properly
+
+H1 established that the verdicts do not cover forex and stopped there. That was
+too early: it answered "do they cover forex" and not "do they predict anything",
+which is the question actually asked.
+
+The grader had completed 54 rows, and that is not the constraint — the outcome
+can be computed straight from bars for every verdict that named a symbol and took
+a side. Entry at the next bar OPEN after `created_at`, so nothing is used that did
+not exist at decision time. 131 such verdicts; 48 with bars covering the horizon.
+
+Raw forward returns were negative at 1h and 4h. Subtracting the market over the
+identical window (SPY for stocks, BTC/USD for crypto) flips them positive:
+
+| horizon | n | market-adjusted | t |
+|---|---:|---:|---:|
+| 1h | 48 | **+9.98 bps** | 0.87 |
+| 4h | 48 | **+13.05 bps** | 1.28 |
+| 1d | 48 | **+23.26 bps** | 1.06 |
+
+An eight-day rally had been hiding the signal, and the earlier score-vs-outcome
+table that looked uniformly bad was reading market drift.
+
+**The score ranks it backwards.** Market-adjusted 1d return by score:
+
+| score | n | return |
+|---|---:|---:|
+| 3 | 18 | **+48.13 bps** |
+| 4 | 16 | +21.01 |
+| 5 | 8 | −19.36 |
+| 6 | 4 | **−58.53** |
+
+Correlation −0.269, monotone across all four levels. **The agent acts at score ≥ 5
+— exactly the half with negative market-adjusted returns.**
+
+Caveats that matter: n=48 over eight calendar days, no held-out window exists
+because the corpus is eight days old, and no t-statistic reaches 1.3. The short
+side is negative market-adjusted (−75 bps) and the long side carries everything.
+
+Recorded as `forward_testing`, the first hypothesis this session not rejected.
+The actionable part is a REDUCTION rather than an edge: the acting threshold
+selects the losing half. Changing it is the owner's call.
+
 ## Next
 
-1. Re-read every equity result here against a benchmark; several were scored
+1. **Re-run H12 when the corpus reaches a few hundred verdicts.** The news agent
+   and the new macro_fx channel reach that in weeks, and it is the only line of
+   enquiry that has produced a positive market-adjusted number.
+2. Re-read every equity result here against a benchmark; several were scored
    against zero before `REQUIRE_BENCHMARK` existed.
 2. The equity universe now has 66 names and 10 years but was only tested at
    daily-and-longer horizons on the cross-section. The move/toll table says

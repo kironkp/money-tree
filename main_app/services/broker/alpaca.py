@@ -252,6 +252,7 @@ class AlpacaBroker(Broker):
             slip = signed if local.side == 'buy' else -signed
         fee = self._fee(local.symbol, qty * price, local.side)
         self._events.append(('fill', Fill(local.id, local.symbol, ts, local.side, qty, price, fee, slip), local))
+        self.fills_seen += 1
         if local.leg == 'exit':
             self._record_trade(local, price, qty, ts, fee)
         else:
@@ -377,6 +378,7 @@ class AlpacaBroker(Broker):
             signed = (price - order.decision_price) / order.decision_price * 1e4
             slip = signed if order.side == 'buy' else -signed
         self._events.append(('fill', Fill(order.id, order.symbol, ts, order.side, new_qty, price, 0.0, slip), order))
+        self.fills_seen += 1
         self._apply_fill(order, new_qty, price, ts)
 
     def _apply_fill(self, order: OrderReq, qty: float, price: float, ts: datetime) -> None:

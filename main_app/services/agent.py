@@ -498,17 +498,25 @@ class Agent:
         Never raises into the trading loop. A reviewer that can stop the executor
         is a reviewer that has become part of the executor.
         """
-        fills = len(getattr(self.broker, 'fills', ()) or ())
+        fills = int(getattr(self.broker, 'fills_seen', 0) or 0)
         if fills == self._review_fill_mark:
             return
-        self._review_fill_mark = fills
+        # The throttle is checked BEFORE the mark moves. Advancing it first meant
+        # a fill landing inside the window was marked as seen and then never
+        # reviewed, because the next tick found nothing new — and a burst of
+        # fills inside one window is exactly the shape of the duplicate-order
+        # fault this runs for.
         if self._last_review and (now - self._last_review) < REVIEW_EVERY:
             return
+        self._review_fill_mark = fills
         self._last_review = now
         try:
             from .review.runner import run_operational
+            # notify=False: the scheduled job does the emailing. Sending mail
+            # from here would put a synchronous SMTP round trip inside the tick
+            # that manages live stops.
             run_operational(accounts=[self.account], trigger='event', broker=self.broker,
-                            now=now, next_due_at=now + REVIEW_EVERY)
+                            now=now, next_due_at=now + REVIEW_EVERY, notify=False)
         except Exception:
             log.exception('post-fill operational review failed')
 

@@ -15,6 +15,12 @@ version lacks.
 
 Deliberately NOT protected: the review models themselves, JournalEntry, and
 FeedEvent. The reviewer has to be able to record what it found.
+
+What this cannot reach: raw SQL. `connection.cursor().execute(...)` bypasses the
+ORM entirely and no monkeypatch can see it. Every ORM path a check could
+plausibly use is covered — save, delete, create, get_or_create, update_or_create,
+F() updates, update, bulk_update, bulk_create — but the guarantee is "the ORM
+will not let a reviewer do this", not "this is impossible".
 """
 from __future__ import annotations
 
@@ -43,12 +49,8 @@ def readonly_config():
     from django.db.models import QuerySet
 
     saved = []
-    for name in PROTECTED:
-        model = getattr(M, name)
-        saved.append((model, model.save, model.delete))
-        model.save = _blocked(name, 'save')
-        model.delete = _blocked(name, 'delete')
-    qs_saved = (QuerySet.update, QuerySet.delete, QuerySet.bulk_update)
+    qs_names = ('update', 'delete', 'bulk_update', 'bulk_create')
+    qs_saved = {n: getattr(QuerySet, n) for n in qs_names}
 
     def guarded(original, op):
         def inner(self, *a, **k):
@@ -57,12 +59,21 @@ def readonly_config():
             return original(self, *a, **k)
         return inner
 
-    QuerySet.update = guarded(qs_saved[0], 'update')
-    QuerySet.delete = guarded(qs_saved[1], 'delete')
-    QuerySet.bulk_update = guarded(qs_saved[2], 'bulk_update')
+    # Patching happens INSIDE the try. Doing it before meant that if anything
+    # here raised — a renamed model, a Django version without one of these
+    # methods — the models already patched stayed blocked for the life of the
+    # process with no finally to restore them.
     try:
+        for name in PROTECTED:
+            model = getattr(M, name)
+            saved.append((model, model.save, model.delete))
+            model.save = _blocked(name, 'save')
+            model.delete = _blocked(name, 'delete')
+        for n in qs_names:
+            setattr(QuerySet, n, guarded(qs_saved[n], n))
         yield
     finally:
         for model, save, delete in saved:
             model.save, model.delete = save, delete
-        QuerySet.update, QuerySet.delete, QuerySet.bulk_update = qs_saved
+        for n, fn in qs_saved.items():
+            setattr(QuerySet, n, fn)

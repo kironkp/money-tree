@@ -143,6 +143,14 @@ class Broker:
     """What the engine needs from any broker."""
     name = 'abstract'
     immediate_fills = True  # False → market orders fill on the next bar's open
+    # Monotonic count of fill EVENTS emitted, incremented wherever one is
+    # appended to the event stream. Callers need to know "did anything trade
+    # since I last looked" without depending on how a particular adapter stores
+    # fills: SimBroker keeps a list, the Alpaca adapter learns about them partly
+    # on submit and partly by polling and keeps none. A caller reading `.fills`
+    # therefore saw zero forever against Alpaca, and the post-fill reviewer never
+    # ran once in paper or live — the two modes it exists for.
+    fills_seen = 0
 
     @property
     def cash(self) -> float:

@@ -22,7 +22,8 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument('cycle', choices=[ReviewRun.OPERATIONAL, ReviewRun.IMPROVEMENT])
-        parser.add_argument('--market', default='', help='one lane only (default: all sim lanes)')
+        parser.add_argument('--market', default='', help='one lane only (default: every lane that can hold a position)')
+        parser.add_argument('--mode', default='', help='one mode only (sim/paper/live)')
         parser.add_argument('--no-email', action='store_true')
         parser.add_argument('--quiet', action='store_true')
 
@@ -31,11 +32,17 @@ class Command(BaseCommand):
         from main_app.services.review.runner import run_improvement, run_operational
 
         cycle = o['cycle']
+        from main_app.services.review.runner import reviewable_accounts
         accounts = None
-        if o['market']:
-            accounts = list(Account.objects.filter(mode='sim', market=o['market']))
+        if o['market'] or o['mode']:
+            q = reviewable_accounts()
+            if o['market']:
+                q = q.filter(market=o['market'])
+            if o['mode']:
+                q = q.filter(mode=o['mode'])
+            accounts = list(q)
             if not accounts:
-                self.stderr.write(f'no sim account for market {o["market"]!r}')
+                self.stderr.write(f'no account matches market={o["market"]!r} mode={o["mode"]!r}')
                 return
         now = timezone.now()
         fn = run_operational if cycle == ReviewRun.OPERATIONAL else run_improvement

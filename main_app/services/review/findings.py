@@ -103,14 +103,26 @@ class Recorder:
         account.save(update_fields=['review_halt', 'review_halt_reason', 'review_halt_at'])
         self.actions.append(f'cleared the halt on {account.market}: {why}')
 
-    def sweep_resolved(self, checks_run: list[str]) -> list[ReviewFinding]:
-        """Close open findings whose check ran this time and did not re-raise.
+    def sweep_resolved(self, checks_run: list[str], accounts=None) -> list[ReviewFinding]:
+        """Close open findings whose check looked this time and did not re-raise.
 
-        Scoped to the checks that actually ran: a check that crashed must not be
-        allowed to close the findings it was supposed to re-confirm.
+        Scoped two ways, and both matter.
+
+        By check: one that crashed or returned early must not be allowed to close
+        the findings it was supposed to re-confirm.
+
+        By ACCOUNT: the caller reviews a subset of lanes — the in-process
+        reviewer passes exactly one — and without this every lane's review
+        erased the other three lanes' open findings, because their checks had
+        'run' in this pass and not re-raised for lanes they never looked at.
+        Four agents reviewing themselves every five minutes meant the desk
+        continuously deleted its own evidence.
         """
         stale = ReviewFinding.objects.filter(cycle=self.run.cycle, check_key__in=checks_run,
                                              status=ReviewFinding.OPEN)
+        if accounts is not None:
+            ids = [a.pk for a in accounts]
+            stale = stale.filter(account_id__in=ids)
         closed = []
         for row in stale:
             if (self.run.cycle, row.check_key, row.fingerprint) in self.seen_keys:

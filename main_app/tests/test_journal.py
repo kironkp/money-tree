@@ -260,7 +260,8 @@ class SlippageIsACostAndIsReportedAsOne(TestCase):
                              bars_held=3, exit_reason='target')
         self.order = Order.objects.create(
             account=self.account, instrument=self.inst, side='buy', qty=1000,
-            client_order_id='mt-sim-ema-EURUSD-1-entry', status='filled')
+            strategy_key='ema_momentum', client_order_id='mt-sim-ema-EURUSD-1-entry',
+            status='filled')
         self.now = now
 
     def _fill(self, bps):
@@ -287,20 +288,32 @@ class SlippageIsACostAndIsReportedAsOne(TestCase):
         self.assertAlmostEqual(c['slippage'], -1.0, places=6)
         self.assertAlmostEqual(c['gross'], 19.0, places=6)
 
-    def test_slippage_is_scoped_to_the_epoch_like_the_trades_beside_it(self):
-        """A reset moves the starting line for trades; fills have to move with
-        them or the cost stack compares this epoch's profit with all of history's
-        friction."""
+    def test_slippage_follows_the_trades_it_is_reported_beside(self):
+        """Scoping both by date looked equivalent and is not. A fill belonging to
+        a position that has not closed has no trade in `net`, so its cost joined
+        the stack while its P&L did not and gross silently inflated — enough, with
+        one large open position, to push a lane whose closed trades cost 25% of
+        gross to a reported 98%, over the line that raises a critical finding."""
         from main_app.services.report import lane_costs
-        old = self._fill(100.0)
-        old.ts = self.now - timedelta(days=30)
-        old.save(update_fields=['ts'])
-        self.account.epoch_started_at = self.now - timedelta(days=1)
-        self.account.save(update_fields=['epoch_started_at'])
-        self._fill(10.0)
+        stray = self._fill(100.0)                       # a fill outside every trade's span
+        stray.ts = self.now - timedelta(days=30)
+        stray.save(update_fields=['ts'])
+        self._fill(10.0)                                # this one sits inside the trade
         c = lane_costs(self.account)
-        self.assertAlmostEqual(c['slippage'], 1.0, places=6)          # only the in-epoch fill
-        self.assertAlmostEqual(lane_costs(self.account, all_time=True)['slippage'], 11.0, places=6)
+        self.assertAlmostEqual(c['slippage'], 1.0, places=6)
+        self.assertTrue(c['slippage_measured'])
+
+    def test_a_trade_missing_a_leg_measurement_is_reported_as_incomplete(self):
+        """Two fills per round trip is the shape. Short of that the number is a
+        floor, and saying so is the difference between a measurement and a
+        guess wearing a measurement's clothes."""
+        from main_app.services.report import lane_costs
+        self._fill(10.0)                                # one leg only
+        c = lane_costs(self.account)
+        self.assertTrue(c['slippage_measured'])
+        self.assertFalse(c['slippage_complete'])
+        self._fill(10.0)
+        self.assertTrue(lane_costs(self.account)['slippage_complete'])
 
     def test_an_assumed_cost_is_never_reported_as_a_measured_one(self):
         from main_app.services.report import lane_costs

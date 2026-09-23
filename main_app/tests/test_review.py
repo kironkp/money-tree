@@ -501,3 +501,116 @@ class AStrategyTheDeskHasAlreadyFailedIsNotLeftTrading(ReviewCase):
         row.refresh_from_db()
         self.assertEqual(row.qualification, 'unproven')
         self.assertTrue(row.enabled)
+
+
+class ACheckThatDidNotLookMayNotCloseAnything(ReviewCase):
+    """The worst bug in the first version of this module.
+
+    The scheduled job runs out of process with no broker handle, so
+    position_vs_broker returns immediately. That silence was read as a clean
+    pass: it closed the divergence finding the in-process reviewer had just
+    raised — with a resolution line claiming the check "ran clean" — and then
+    lifted the halt. The lane resumed entering trades against books that still
+    disagreed with the venue.
+    """
+    class Broker:
+        def __init__(self, qty):
+            self.positions = {'EUR/USD': SimpleNamespaceQty(qty)}
+
+    def setUp(self):
+        super().setUp()
+        Position.objects.create(account=self.account, instrument=self.inst, strategy_key='ema',
+                                qty=Decimal('1000'), avg_price=Decimal('1.08'),
+                                stop_price=Decimal('1.07'), opened_at=self.now)
+
+    def test_a_divergence_found_with_a_broker_survives_a_review_run_without_one(self):
+        self.run_ops(broker=self.Broker(900.0))
+        self.assertTrue(self.findings('position_divergence').exists())
+        self.assertTrue(Account.objects.get(pk=self.account.pk).review_halt)
+
+        self.run_ops()                       # the scheduled job: broker=None
+        self.assertTrue(self.findings('position_divergence').exists(),
+                        'a check that never looked closed the finding it never confirmed')
+        self.assertTrue(Account.objects.get(pk=self.account.pk).review_halt,
+                        'and then lifted the halt, letting the lane trade against wrong books')
+
+    def test_the_run_records_which_checks_declined_to_look(self):
+        run = self.run_ops()
+        self.assertIn('position_vs_broker', run.summary['skipped'])
+
+    def test_a_real_agreement_still_closes_it(self):
+        self.run_ops(broker=self.Broker(900.0))
+        self.run_ops(broker=self.Broker(1000.0))          # now they agree
+        self.assertFalse(self.findings('position_divergence').exists())
+        self.assertFalse(Account.objects.get(pk=self.account.pk).review_halt)
+
+
+class OneLanesReviewDoesNotEraseAnothersEvidence(ReviewCase):
+    """The in-process reviewer passes exactly one account. Without account
+    scoping, every lane's review closed the other three lanes' open findings,
+    so four agents reviewing themselves every five minutes meant the desk
+    continuously deleted its own evidence."""
+
+    def setUp(self):
+        super().setUp()
+        self.other_inst = Instrument.objects.create(symbol='BTC/USD', asset_class='crypto',
+                                                    market='crypto')
+        self.other = Account.objects.create(mode='sim', market='crypto', name='Crypto (sim)',
+                                            starting_cash=10000, cash=10000, equity=10000)
+        self.fresh_bar(inst=self.other_inst, timeframe='4Hour')
+        Position.objects.create(account=self.other, instrument=self.other_inst, strategy_key='ema',
+                                qty=Decimal('1'), avg_price=Decimal('80000'), opened_at=self.now)
+
+    def test_reviewing_forex_leaves_cryptos_finding_and_halt_alone(self):
+        run_operational(accounts=[self.other], notify=False, now=self.now)
+        self.assertTrue(self.findings('position_without_stop').exists())
+        self.assertTrue(Account.objects.get(pk=self.other.pk).review_halt)
+
+        self.run_ops()                       # forex only
+        self.assertTrue(self.findings('position_without_stop').exists(),
+                        "forex's review closed crypto's finding")
+        self.assertTrue(Account.objects.get(pk=self.other.pk).review_halt)
+        self.assertEqual(Position.objects.filter(account=self.other).exclude(qty=0).count(), 1)
+
+
+class SimpleNamespaceQty:
+    def __init__(self, qty):
+        self.qty = qty
+
+
+class TheGuardCoversEveryOrmPathAChecKCouldReachFor(ReviewCase):
+    def test_bulk_create_is_blocked(self):
+        with self.assertRaises(ReviewerWroteToConfig):
+            with readonly_config():
+                Strategy.objects.bulk_create([Strategy(key='x', market='forex', params={}, symbols=[])])
+        self.assertFalse(Strategy.objects.filter(key='x').exists())
+
+    def test_get_or_create_and_update_or_create_are_blocked(self):
+        for fn in ('get_or_create', 'update_or_create'):
+            with self.assertRaises(ReviewerWroteToConfig):
+                with readonly_config():
+                    getattr(Strategy.objects, fn)(key='y', market='forex',
+                                                  defaults={'params': {}, 'symbols': []})
+        self.assertFalse(Strategy.objects.filter(key='y').exists())
+
+    def test_an_f_expression_update_is_blocked(self):
+        from django.db.models import F
+        AgentConfig.get()
+        with self.assertRaises(ReviewerWroteToConfig):
+            with readonly_config():
+                AgentConfig.objects.update(forex_max_open_positions=F('forex_max_open_positions') + 10)
+
+    def test_a_failure_while_patching_does_not_leave_models_blocked(self):
+        """Patching used to run before the try, so a raise there left every
+        model already patched blocked for the life of the process."""
+        import main_app.services.review.guard as G
+        orig = G.PROTECTED
+        G.PROTECTED = ('Strategy', 'NoSuchModel')
+        try:
+            with self.assertRaises(AttributeError):
+                with readonly_config():
+                    pass
+        finally:
+            G.PROTECTED = orig
+        Strategy.objects.create(key='z', market='forex', params={}, symbols=[])   # must not raise
+        self.assertTrue(Strategy.objects.filter(key='z').exists())

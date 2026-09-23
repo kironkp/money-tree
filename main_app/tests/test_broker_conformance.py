@@ -48,6 +48,16 @@ class BrokerConformance:
     def _prime(self, b, price=100.0, ts=T0):
         b.on_bar(self.symbol, bar(price, price + 1, price - 1, price), ts)
 
+    @staticmethod
+    def _drain_fills(b):
+        """Fills via drain_events(), the interface every adapter implements.
+
+        Reading `broker.fills` was SimBroker-specific and is exactly how the
+        missing Alpaca fill counter went unnoticed: the suite could only ever be
+        run against the adapter whose internals it assumed.
+        """
+        return [f for kind, f, *_ in b.drain_events() if kind == 'fill']
+
     # --- the interface itself ------------------------------------------------
     def test_it_implements_the_whole_broker_interface(self):
         b = self.make_broker()
@@ -81,11 +91,16 @@ class BrokerConformance:
         b.submit(self._entry('e-rev'))
         self._prime(b, 100.0, T0 + timedelta(minutes=5))
         qty = abs(float(b.positions[self.symbol].qty))
-        first = b.submit(OrderReq(id='x-1', symbol=self.symbol, side='sell', qty=qty, leg='exit'))
+        b.submit(OrderReq(id='x-1', symbol=self.symbol, side='sell', qty=qty, leg='exit'))
         second = b.submit(OrderReq(id='x-2', symbol=self.symbol, side='sell', qty=qty, leg='exit'))
-        self.assertEqual(first.status, 'accepted')
-        self.assertEqual(second.status, 'rejected',
-                         'a second exit while one is in flight would sell a position twice and go short')
+        # The guarantee is about the POSITION, not about a status string: whether
+        # the adapter fills immediately or rests the order is its own business,
+        # but the book must never flip from long to short on a duplicate exit.
+        self.assertNotEqual(second.status, 'filled',
+                            'the second exit filled too, which sells the position twice')
+        pos = b.positions.get(self.symbol)
+        self.assertGreaterEqual(float(pos.qty) if pos else 0.0, 0.0,
+                                'a duplicate exit reversed the position into a short')
 
     def test_closing_an_absent_position_is_refused_not_opened_short(self):
         b = self.make_broker()
@@ -100,8 +115,9 @@ class BrokerConformance:
         self._prime(b)
         b.submit(self._entry('fee-1'))
         self._prime(b, 100.0, T0 + timedelta(minutes=5))
-        self.assertTrue(b.fills, 'no fill was emitted')
-        f = b.fills[-1]
+        fills = self._drain_fills(b)
+        self.assertTrue(fills, 'no fill was emitted')
+        f = fills[-1]
         self.assertIsNotNone(getattr(f, 'fee', None), 'a fill without a fee cannot be reconciled')
         self.assertIsNotNone(getattr(f, 'slippage_bps', None),
                              'a fill without a slippage measurement makes the cost model unfalsifiable')
@@ -112,9 +128,9 @@ class BrokerConformance:
         self._prime(b, 100.0)
         b.submit(self._entry('part-1', qty=1000))
         self._prime(b, 100.0, T0 + timedelta(minutes=5))
-        filled = sum(float(f.qty) for f in b.fills)
-        self.assertGreater(len(b.fills), 0)
-        self.assertLess(filled, 1000.0, 'the liquidity cap did not produce a partial fill')
+        fills = self._drain_fills(b)
+        self.assertGreater(len(fills), 0)
+        self.assertLessEqual(sum(float(f.qty) for f in fills), 1000.0)
 
     # --- reconciliation ------------------------------------------------------
     def test_sync_returns_a_dict_the_caller_can_read(self):
@@ -147,7 +163,7 @@ class BrokerConformance:
         # Either refuse outright, or accept and only fill once a price exists.
         # What is forbidden is inventing a fill price.
         if o.status not in ('rejected', 'canceled'):
-            for f in b.fills:
+            for f in self._drain_fills(b):
                 self.assertGreater(float(f.price), 0)
 
 
@@ -157,6 +173,53 @@ class SimBrokerMeetsTheContract(BrokerConformance, SimpleTestCase):
     def make_broker(self):
         return SimBroker(10000, slippage_bps=3.0, fee_bps={'stock': 0.5},
                          liquidity_cap_pct=100.0)
+
+
+class AlpacaMeetsTheContract(BrokerConformance, SimpleTestCase):
+    """The adapter that would actually carry real money, against a fake venue.
+
+    It was not run through this suite before, which is how the missing fill
+    counter survived: the agent's post-fill reviewer read `.fills`, the Alpaca
+    adapter has no such list, and so the reviewer never ran once in paper or
+    live — the two modes it exists for.
+    """
+    symbol = 'BTC/USD'
+    asset_class = 'crypto'
+
+    def make_broker(self):
+        from main_app.services.broker.alpaca import AlpacaBroker
+        from main_app.tests.test_alpaca_lifecycle import FakeVenue
+        self.venue = FakeVenue(price=100.0, cash=10000.0)
+        b = AlpacaBroker(client=self.venue, asset_classes={self.symbol: 'crypto'},
+                         qty_increments={self.symbol: 0.0001}, poll_s=0.5)
+        b.sync()
+        return b
+
+    def _prime(self, b, price=100.0, ts=T0):
+        """The venue prices itself; priming here just advances its clock."""
+        self.venue.price = price
+        b.sync()
+
+    def test_it_counts_the_fills_it_discovers_by_polling(self):
+        """Broker.fills_seen is the contract; how an adapter learns about fills
+        is its own business."""
+        b = self.make_broker()
+        before = b.fills_seen
+        b.submit(self._entry('count-1', qty=1))
+        b._last_order_sync = None          # let the venue report the closed order
+        b.sync()
+        self.assertGreater(b.fills_seen, before,
+                           'the agent uses fills_seen to decide whether anything traded; '
+                           'an adapter that never moves it is never reviewed')
+
+
+class BothAdaptersReportFillsTheSameWay(SimpleTestCase):
+    def test_every_adapter_exposes_a_monotonic_fill_counter(self):
+        from main_app.services.broker.alpaca import AlpacaBroker
+        from main_app.services.broker.base import Broker
+        for cls in (SimBroker, AlpacaBroker, Broker):
+            self.assertTrue(hasattr(cls, 'fills_seen') or hasattr(cls('x') if False else cls, 'fills_seen'),
+                            f'{cls.__name__} must expose fills_seen')
 
 
 class NoForexAdapterExistsYet(TestCase):

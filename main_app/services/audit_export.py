@@ -51,9 +51,21 @@ COSTS
   account: positive means the fill was worse than the price the decision was
   made at.
 
-MONEY IS SIMULATED
-  This account traded on the simulator. No real order was ever submitted.
+PROVENANCE
+{provenance}
 """
+
+PROVENANCE = {
+    'sim': '  SIMULATED. This account traded against the built-in simulator. No order of any\n'
+           '  kind reached a venue and no money, real or paper, changed hands.',
+    'replay': '  REPLAY. These rows were produced by re-running stored history. They are not a\n'
+              '  record of anything that happened at a venue.',
+    'paper': '  PAPER. Orders reached the broker\'s paper venue and were filled there against\n'
+             '  real market data with fake money. Fills are the venue\'s, not a simulation,\n'
+             '  but no real money moved.',
+    'live': '  LIVE. These are real orders, real fills and real money. Agree every figure\n'
+            '  against the broker\'s own statement before relying on it for anything.',
+}
 
 
 def _rows(w, header, qs, fn):
@@ -73,7 +85,10 @@ def write_bundle(account: Account, fh, generated) -> None:
         z.writestr('README.txt', README.format(
             account=account.name, mode=account.mode, generated=generated.isoformat(),
             epoch=(f'scoring epoch from {account.epoch_started_at:%Y-%m-%d}'
-                   if account.epoch_started_at else 'all time')))
+                   if account.epoch_started_at else 'all time'),
+            provenance=PROVENANCE.get(account.mode,
+                                      f'  UNKNOWN MODE {account.mode!r}. Treat the provenance of these '
+                                      f'rows as unestablished.')))
 
         sheet('signals.csv',
               ['ts', 'symbol', 'strategy', 'action', 'price', 'stop', 'target', 'acted',

@@ -68,13 +68,13 @@ def lane_costs(account: Account, all_time: bool = False) -> dict:
     empty = {'trades': 0, 'net': 0.0, 'fees': 0.0, 'slippage': 0.0, 'costs': 0.0, 'moved': 0.0,
              'fee_bps': 0.0, 'slippage_bps': 0.0, 'cost_bps': 0.0,
              'gross': 0.0, 'net_before_fees': 0.0, 'fee_share': 0.0, 'cost_share': 0.0,
-             'slippage_measured': False, 'epoch_started_at': account.epoch_started_at, 'all_time': all_time}
+             'slippage_measured': False, 'slippage_complete': False, 'epoch_started_at': account.epoch_started_at, 'all_time': all_time}
     if not rows:
         return empty
     net = sum(float(r[1]) for r in rows)
     fees = sum(float(r[2]) for r in rows)
     moved = sum(float(r[3]) * float(r[4]) for r in rows)
-    slippage, measured = _slippage_cost(account, moved, all_time)
+    slippage, measured, complete = _slippage_cost(account, qs, moved)
     # Gross is what the trades would have earned paying nothing at all. Fees come
     # out of pnl already; slippage never did — it is inside the fill price, so
     # `pnl` is net of it and it has to be added back to get the raw edge. A lane
@@ -96,38 +96,69 @@ def lane_costs(account: Account, all_time: bool = False) -> dict:
         # How much of the raw edge the tolls take. Meaningful in both directions,
         # which is the point: a lane can be up and still be handing over most of
         # what it earns.
-        'cost_share': (costs / abs(gross) * 100) if gross else 0.0,
+        # A lane whose costs consumed the edge exactly has gross 0, and a plain
+        # `if gross` reported that as the healthiest number on the page.
+        'cost_share': (costs / abs(gross) * 100) if gross else (100.0 if costs else 0.0),
         'slippage_measured': measured,
+        # False when some legs of the counted trades carry no measurement, so the
+        # slippage figure is a floor rather than a total.
+        'slippage_complete': complete,
         'epoch_started_at': account.epoch_started_at,
         'all_time': all_time,
     }
 
 
-def _slippage_cost(account: Account, moved: float, all_time: bool = False) -> tuple[float, bool]:
+def _slippage_cost(account: Account, trade_qs, moved: float) -> tuple[float, bool, bool]:
     """Dollars lost to the gap between the decision price and the fill.
 
     Measured from `Fill.realized_slippage_bps`, stamped per fill against the price
     the strategy actually decided at, and already SIGNED against us: positive is a
-    worse fill than we asked for, negative is a better one. It is summed signed,
-    not absolute — a fill that came in better is money the desk kept, and counting
-    it as a cost would overstate the toll and understate the edge.
+    worse fill than we asked for, negative is a better one. Summed signed, not
+    absolute — a fill that came in better is money the desk kept, and counting it
+    as a cost would overstate the toll and understate the edge.
 
-    Scoped to the same epoch as the trades it sits beside. Falls back to the
-    configured assumption only when no fill carries a measurement, and says which
-    of the two it used: an assumed cost reported as a measured one is how a desk
-    talks itself into trusting a model it never checked.
+    Counted over the fills of the SAME closed round trips that produced `net`.
+    Scoping both by date instead looked equivalent and is not: a position still
+    open has entry fills inside the window and no trade, so its slippage joined
+    the cost stack while its P&L did not, and `gross = net + costs` silently
+    inflated. With one open position that is small; with a large one it pushed a
+    lane whose closed trades cost 25% of gross to a reported 98%, which is over
+    the threshold that raises a critical finding.
+
+    Falls back to the configured assumption only when no fill carries a
+    measurement, and says which of the two it used: an assumed cost reported as a
+    measured one is how a desk talks itself into trusting a model it never
+    checked. It also reports whether the measurement was complete.
     """
     from main_app.models import Fill
-    q = Fill.objects.filter(order__account=account, realized_slippage_bps__isnull=False)
-    if not all_time and account.epoch_started_at:
-        q = q.filter(ts__gte=account.epoch_started_at)
-    fills = list(q.values_list('realized_slippage_bps', 'qty', 'price'))
-    if fills:
-        return sum(float(bps) / 1e4 * float(qty) * float(px) for bps, qty, px in fills), True
+    trades = list(trade_qs.values_list('instrument_id', 'strategy_key', 'entry_ts', 'exit_ts'))
+    total, matched = 0.0, 0
+    if trades:
+        first = min(t[2] for t in trades)
+        last = max(t[3] for t in trades)
+        fills = list(Fill.objects
+                     .filter(order__account=account, realized_slippage_bps__isnull=False,
+                             ts__gte=first, ts__lte=last)
+                     .values_list('order__instrument_id', 'order__strategy_key', 'ts',
+                                  'realized_slippage_bps', 'qty', 'price'))
+        spans = {}
+        for inst, strat, a, b in trades:
+            spans.setdefault((inst, strat), []).append((a, b))
+        for inst, strat, ts, bps, qty, px in fills:
+            for a, b in spans.get((inst, strat), ()):
+                if a <= ts <= b:
+                    total += float(bps) / 1e4 * float(qty) * float(px)
+                    matched += 1
+                    break
+    if matched:
+        # Two fills per round trip is the shape; short of that, some legs are
+        # missing their measurement and the number is a floor, not a total.
+        return total, True, matched >= 2 * len(trades)
     from main_app.models import AgentConfig
     cfg = AgentConfig.get()
-    assumed = float(getattr(cfg, f'{account.market}_slippage_bps', 0.0) or 0.0)
-    return moved * 2 * assumed / 1e4, False
+    # Only forex carries its own override; every other lane uses the desk figure.
+    assumed = float(getattr(cfg, f'{account.market}_slippage_bps', None) or cfg.slippage_bps or 0.0)
+    return moved * 2 * assumed / 1e4, False, False
 
 
 def lane_pnl(account: Account, d: date) -> dict:

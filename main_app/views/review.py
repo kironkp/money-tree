@@ -67,7 +67,7 @@ def clear_halt(request, market):
     The reviewer lifts its own halt when the fault clears, so using this means
     overriding it. Recorded against the operator for exactly that reason.
     """
-    account = get_object_or_404(Account, market=market, mode='sim')
+    account = get_object_or_404(Account, market=market, mode=request.POST.get('mode', 'sim'))
     account.review_halt = False
     account.review_halt_reason = ''
     account.review_halt_at = None

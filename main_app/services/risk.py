@@ -39,8 +39,10 @@ class RiskConfig:
     # Refuse an entry priced off a bar this many bars old. The feed stopping
     # entirely is already fail-closed — process_bar is simply never called — but
     # a provider that keeps answering with an old bar is not, and that is the
-    # shape data faults usually take. Zero disables it (backtests and replay,
-    # where every bar is legitimately historical).
+    # shape data faults usually take. Zero disables it; backtests and replay do
+    # not need that, because the engine reports no age for them and the gate
+    # stands down on its own. Not exposed in Settings — it is a correctness
+    # floor, not a tuning knob.
     max_bar_age_bars: float = 3.0
 
     @classmethod

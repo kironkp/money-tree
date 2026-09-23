@@ -230,6 +230,7 @@ class SimBroker(Broker):
         fill = Fill(order.id, order.symbol, ts, order.side, qty, price, fee, slip)
         self.fills.append(fill)
         self._events.append(('fill', fill, order))
+        self.fills_seen += 1
         if order.filled_qty + 1e-12 >= order.qty:
             order.status = 'filled'
             self.open_orders.pop(order.id, None)

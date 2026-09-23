@@ -50,6 +50,14 @@ class Ctx:
     broker: object = None      # None when the reviewer runs out of process
     lookback_h: int = 24
     notes: list = field(default_factory=list)
+    # Checks that returned without looking. Tracked separately from the ones
+    # that ran, because a check that did not look must never be allowed to
+    # resolve the findings it did not confirm — see runner.run_operational.
+    skipped: set = field(default_factory=set)
+
+    def skip(self, check: str, why: str) -> None:
+        self.skipped.add(check)
+        self.notes.append(f'{check}: {why}')
 
 
 # --------------------------------------------------------------------- checks
@@ -131,7 +139,7 @@ def _check_intent_vs_broker(ctx: Ctx, rec) -> None:
 def _check_position_vs_broker(ctx: Ctx, rec) -> None:
     """Our positions against the broker's. Only meaningful with a broker."""
     if ctx.broker is None:
-        ctx.notes.append('position_vs_broker: skipped, no broker handle in this process')
+        ctx.skip('position_vs_broker', 'no broker handle in this process')
         return
     try:
         theirs = {s: float(p.qty) for s, p in ctx.broker.positions.items()}
@@ -209,7 +217,7 @@ def _check_stale_data(ctx: Ctx, rec) -> None:
     from main_app.services.data import calendar as cal
     ac = ctx.account.lane_asset_class
     if not cal.is_open(ctx.now, ac):
-        ctx.notes.append('stale_data: market closed, not checked')
+        ctx.skip('stale_data', 'market closed')
         return
     newest = (Bar.objects.filter(instrument__market=ctx.account.market)
               .order_by('-ts').values_list('ts', 'instrument__symbol').first())
@@ -241,7 +249,7 @@ def _lane_bar_minutes(account: Account) -> float:
 
 def _check_reconciliation(ctx: Ctx, rec) -> None:
     if ctx.account.mode not in ('paper', 'live'):
-        ctx.notes.append('reconciliation: simulator is its own venue, not checked')
+        ctx.skip('reconciliation', 'the simulator is its own venue')
         return
     if not ctx.account.reconcile_ok:
         rec.record('reconcile_failed', ReviewFinding.CRITICAL, 'books disagree with the broker',
@@ -265,7 +273,7 @@ def _check_costs(ctx: Ctx, rec) -> None:
     """
     c = lane_costs(ctx.account)
     if c['trades'] < 10:
-        ctx.notes.append(f'costs: only {c["trades"]} trades this epoch, not judged')
+        ctx.skip('costs', f'only {c["trades"]} trades this epoch')
         return
     share = c['cost_share']
     if share >= COST_SHARE_CRITICAL:

@@ -190,3 +190,44 @@ class TheAuditExportIsCompleteAndDoesNotOverclaim(AccountingCase):
 
     def test_it_says_the_money_was_simulated(self):
         self.assertIn('simulated', self._bundle().read('README.txt').decode().lower())
+
+
+class AnEpochResetDoesNotBreakTheBooksForever(AccountingCase):
+    """reset_epoch rewrites starting_cash and cash and deliberately keeps every
+    trade. Summing trades over all time against a reset balance left the
+    identity wrong by the whole lifetime P&L, permanently — and on a paper or
+    live lane that check runs every tick, blocks new entries and halts the lane
+    with a finding that can never clear. The first reset after going to paper
+    would have bricked it."""
+
+    def setUp(self):
+        super().setUp()
+        old = self.now - timedelta(days=30)
+        Trade.objects.create(account=self.account, instrument=self.inst, strategy_key='ema',
+                             side='long', qty=1000, entry_ts=old, exit_ts=old,
+                             entry_price=Decimal('1.10'), exit_price=Decimal('1.09'),
+                             pnl=Decimal('-3000'), pnl_pct=Decimal('-1'), fees=Decimal('0'),
+                             bars_held=1, exit_reason='stop')
+        self.account.epoch_started_at = self.now - timedelta(days=1)
+        self.account.starting_cash = Decimal('10000')
+        self.account.cash = Decimal('10000')
+        self.account.equity = Decimal('10000')
+        self.account.save()
+
+    def test_a_reset_account_that_agrees_with_the_broker_reports_clean(self):
+        snap = compare(self.account, FakeBroker(cash=10000.0, equity=10000.0), self.now)
+        self.assertTrue(snap.ok, snap.discrepancies)
+
+    def test_a_real_gap_after_a_reset_is_still_caught(self):
+        snap = compare(self.account, FakeBroker(cash=10400.0, equity=10400.0), self.now)
+        d = [x for x in snap.discrepancies if x['what'] == 'unexplained cash']
+        self.assertTrue(d)
+        self.assertAlmostEqual(d[0]['delta'], 400.0, places=2)
+
+    def test_a_clean_row_says_when_it_could_not_check_provenance(self):
+        """A clean row that cannot distinguish 'agreed' from 'not looked at' is
+        how a gap hides."""
+        Position.objects.create(account=self.account, instrument=self.inst, strategy_key='ema',
+                                qty=Decimal('1000'), avg_price=Decimal('1.08'), opened_at=self.now)
+        snap = compare(self.account, FakeBroker(positions={'EUR/USD': 1000.0}), self.now)
+        self.assertIn('provenance not checked', snap.note)

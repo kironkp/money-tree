@@ -46,7 +46,7 @@ FUNNEL_ORIGIN = (f'https://{FUNNEL_HOST}' + ('' if FUNNEL_PORT == 443 else f':{F
                  if FUNNEL_HOST else '')
 # Bump per release; tagged in git (v1.0, v1.1, …) with a matching
 # backups/db-<tag>.sqlite3 snapshot. Rollback recipe lives in CLAUDE.md.
-VERSION = '1.56'
+VERSION = '1.57'
 
 # Tests must be deterministic even when a developer's local .env selects
 # production behavior. Manifest storage is a deployment concern; requiring
@@ -236,6 +236,9 @@ AUTHENTICATION_BACKENDS = [
 # Email — password reset and verification mail. Console backend by default;
 # Resend SMTP drops in via EMAIL_* (host smtp.resend.com, user "resend",
 # password = API key). The adapter never lets a send failure 500 a flow.
+# Django defaults this to None, which means a hung mail host blocks the caller
+# on a socket with no deadline. The agent tick must never wait on email.
+EMAIL_TIMEOUT = 10
 EMAIL_HOST = os.getenv('EMAIL_HOST', '')
 if EMAIL_HOST:
     EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'

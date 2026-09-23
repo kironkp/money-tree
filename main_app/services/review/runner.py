@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 import traceback
 
+from datetime import timedelta
+
 from django.utils import timezone
 
 from main_app.models import Account, Hypothesis, ReviewFinding, ReviewRun
@@ -33,8 +35,8 @@ def run_operational(accounts=None, trigger: str = 'schedule', broker=None,
     run = ReviewRun.objects.create(cycle=ReviewRun.OPERATIONAL, trigger=trigger,
                                    started_at=now, next_due_at=next_due_at)
     rec = Recorder(run)
-    accounts = list(accounts if accounts is not None else Account.objects.filter(mode='sim'))
-    ran, failed, notes = [], [], []
+    accounts = list(accounts if accounts is not None else reviewable_accounts())
+    ran, failed, notes, skipped = [], [], [], set()
     try:
         with readonly_config():
             for account in accounts:
@@ -53,11 +55,22 @@ def run_operational(accounts=None, trigger: str = 'schedule', broker=None,
                                    account=account, evidence={'check': name, 'error': repr(exc)},
                                    fp_parts=('check_crashed', account.pk, name))
                 notes += [f'{account.market}: {n}' for n in ctx.notes]
+                skipped |= ctx.skipped
 
-            # Only checks that ran everywhere may close findings. A check that
-            # crashed on one lane cannot be trusted to have cleared another.
-            closable = [k for name in ran if name not in failed for k in ops.RAISES.get(name, [])]
-            closed = rec.sweep_resolved(closable)
+            # Only checks that actually LOOKED may close findings.
+            #
+            # Two ways a check can fail to look, and both were being treated as
+            # a clean pass. Crashing was already handled. Returning early was
+            # not: the scheduled job runs with no broker handle, so
+            # position_vs_broker returns immediately, and its silence was closing
+            # the divergence finding the in-process reviewer had just raised —
+            # with a resolution line claiming the check "ran clean" — and then
+            # lifting the halt. The lane resumed trading against books that still
+            # disagreed with the venue. Same shape for stale_data every time the
+            # market closes.
+            looked = [n for n in ran if n not in failed and n not in skipped]
+            closable = [k for name in looked for k in ops.RAISES.get(name, [])]
+            closed = rec.sweep_resolved(closable, accounts)
 
             halting = [f for f in rec.opened + rec.repeated
                        if f.severity == ReviewFinding.CRITICAL and f.check_key in ops.HALTING_CHECKS]
@@ -79,7 +92,8 @@ def run_operational(accounts=None, trigger: str = 'schedule', broker=None,
         run.checks_run = len(ran)
         run.checks_failed = len(failed)
         run.summary = {'accounts': [a.market for a in accounts], 'checks': ran, 'crashed': failed,
-                       'skipped_notes': notes, 'resolved': [f.check_key for f in closed]}
+                       'skipped': sorted(skipped), 'skipped_notes': notes,
+                       'resolved': [f.check_key for f in closed]}
     except Exception as exc:                       # the runner itself broke
         run.status = 'failed'
         run.error = f'{exc!r}\n{traceback.format_exc()[-2000:]}'
@@ -88,8 +102,12 @@ def run_operational(accounts=None, trigger: str = 'schedule', broker=None,
         run.finished_at = timezone.now()
         run.save()
     if notify:
-        alert(run, [f for f in rec.opened + rec.repeated
-                    if f.severity == ReviewFinding.CRITICAL or f in rec.opened])
+        # New findings always, and a standing critical only when it is stale
+        # enough to be worth saying again. Mailing every repeated critical meant
+        # one unfixed fault sent 96 messages a day from the 15-minute job alone,
+        # which is how an operator learns to filter the alerts.
+        alert(run, rec.opened + [f for f in rec.repeated
+                                 if f.severity == ReviewFinding.CRITICAL and _worth_repeating(f, now)])
     return run
 
 
@@ -107,7 +125,7 @@ def run_improvement(accounts=None, trigger: str = 'schedule', now=None,
     run = ReviewRun.objects.create(cycle=ReviewRun.IMPROVEMENT, trigger=trigger,
                                    started_at=now, next_due_at=next_due_at)
     rec = Recorder(run)
-    accounts = list(accounts if accounts is not None else Account.objects.filter(mode='sim'))
+    accounts = list(accounts if accounts is not None else reviewable_accounts())
     reads, ran, failed = {}, [], []
     try:
         with readonly_config():
@@ -122,7 +140,7 @@ def run_improvement(accounts=None, trigger: str = 'schedule', now=None,
                                f'the improvement analysis crashed on {account.market}', repr(exc),
                                account=account, fp_parts=('analysis_crashed', account.pk))
             if not failed:
-                rec.sweep_resolved(['mistake_pattern', 'strategy_losing', 'cost_dominates'])
+                rec.sweep_resolved(['mistake_pattern', 'strategy_losing', 'cost_dominates'], accounts)
         rec.commit()
         run.status = 'failed' if failed else 'ok'
         run.checks_run = len(ran)
@@ -147,6 +165,29 @@ def run_improvement(accounts=None, trigger: str = 'schedule', now=None,
     if notify:
         alert(run, [f for f in rec.opened if f.severity in (ReviewFinding.CRITICAL, ReviewFinding.WARN)])
     return run
+
+
+REMIND_AFTER = timedelta(hours=6)
+
+
+def _worth_repeating(finding, now) -> bool:
+    """A standing critical is worth one reminder every few hours, not every run."""
+    last = finding.first_seen_at
+    elapsed = (now - last).total_seconds()
+    return int(elapsed // REMIND_AFTER.total_seconds()) > int(
+        (elapsed - 1) // REMIND_AFTER.total_seconds()) or finding.seen_count == 2
+
+
+def reviewable_accounts():
+    """Every account that can hold a position, not just the simulated ones.
+
+    Defaulting to mode='sim' meant the scheduled job never looked at a paper or
+    live lane — so the reconciliation checks, which return early for anything
+    that is not paper or live, were unreachable dead code, and the two halting
+    findings they raise could never fire. The review subsystem existed to make
+    live trading safe and was pointed exclusively at the one mode that is not.
+    """
+    return Account.objects.exclude(mode='replay').order_by('mode', 'market')
 
 
 def last_run(cycle: str) -> ReviewRun | None:

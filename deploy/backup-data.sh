@@ -45,7 +45,9 @@ TABLES='main_app_account main_app_agentconfig main_app_agentrun main_app_apiusag
         main_app_newssession main_app_newsverdict main_app_order main_app_position
         main_app_symboldossier main_app_evaluation main_app_unmatchedsymbol
         main_app_riskevent main_app_signal main_app_signupinvite main_app_strategy
-        main_app_trade main_app_tradecard main_app_equitysnapshot'
+        main_app_trade main_app_tradecard main_app_equitysnapshot
+        main_app_cashmovement main_app_reconciliationsnapshot
+        main_app_reviewrun main_app_reviewfinding main_app_hypothesis'
 
 say() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "backup: $*" >> "$LOG"; }
 

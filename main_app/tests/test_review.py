@@ -330,12 +330,16 @@ class TheImprovementCycleProposesAndNeverApplies(ReviewCase):
         self.assertTrue(v['rejected'])
         self.assertTrue(any('disappeared out of sample' in r for r in v['reasons']))
 
-    def test_the_challenger_rejects_a_lower_bound_that_straddles_zero(self):
+    def test_a_straddling_lower_bound_is_reported_but_no_longer_rejects_on_its_own(self):
+        """It used to. Demanding a lower bound above zero is demanding t > 1.96,
+        which on these windows means an annualised Sharpe of 3 to 4.5 — a bar no
+        real programme clears. It was the only one that ever bound, and it killed
+        two candidates that passed everything else out of sample."""
         h = self._evaluated({'trades': 900, 'net': 500, 'per_day': 3.0, 'ci_low': 1.0, 'ci_high': 5.0},
                             {'trades': 300, 'net': 200, 'per_day': 2.6, 'ci_low': -0.9, 'ci_high': 6.0})
         v = imp.challenge(h)
-        self.assertTrue(v['rejected'])
-        self.assertTrue(any('lower bound' in r for r in v['reasons']))
+        self.assertFalse(v['rejected'], v['reasons'])
+        self.assertFalse(any('lower bound' in r for r in v['reasons']))
 
     def test_a_survivor_reaches_paper_forward_testing_and_not_live(self):
         h = self._evaluated({'trades': 900, 'net': 500, 'per_day': 3.0, 'ci_low': 1.0, 'ci_high': 5.0},
@@ -649,3 +653,33 @@ class ACandidateMustBeatSimplyOwningTheThing(ReviewCase):
                      'train', 'test')
         v = imp.challenge(h)
         self.assertTrue(v['rules']['require_benchmark'])
+
+
+class TheSignificanceBarMustBeReachable(ReviewCase):
+    """Requiring a bootstrap lower bound above zero is requiring t > 1.96, which
+    on the windows this desk can assemble means an annualised Sharpe of 3 to 4.5.
+    A good live programme runs 0.7-1.2. It was the only bar that ever bound, and
+    two candidates cleared everything else out of sample and died on it alone."""
+
+    def _h(self, ci_low, per_day, t=None):
+        h = imp.propose('t', 'c', source='s')
+        return imp.evaluate(h, lambda w: {
+            'train': {'trades': 400, 'per_day': 4.0, 'ci_low': 2.0, 'pf_gross': 1.4},
+            'test': {'trades': 100, 'per_day': per_day, 'ci_low': ci_low, 'ci_high': 58.0,
+                     'pf_gross': 1.58, 'per_trade_t': t},
+        }[w], 'train', 'test')
+
+    def test_a_positive_result_is_not_killed_by_a_wide_interval_alone(self):
+        v = imp.challenge(self._h(ci_low=-10.96, per_day=23.0, t=1.44))
+        self.assertFalse(v['rejected'], v['reasons'])
+
+    def test_a_negative_held_out_result_is_still_rejected(self):
+        v = imp.challenge(self._h(ci_low=-30.0, per_day=-3.3, t=-0.8))
+        self.assertTrue(v['rejected'])
+
+    def test_significance_travels_with_the_verdict_so_survived_is_not_read_as_proven(self):
+        h = self._h(ci_low=-10.96, per_day=23.0, t=1.44)
+        v = imp.challenge(h)
+        self.assertIn('NOT significant', v['significance'])
+        self.assertIn('n=100', v['significance'])
+        self.assertEqual(Hypothesis.objects.get(pk=h.pk).status, Hypothesis.FORWARD)

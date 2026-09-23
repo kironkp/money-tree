@@ -409,27 +409,61 @@ Kept in the log because the lesson is the reusable part: an implausibly good
 number is a bug until proven otherwise, and this one would have put a look-ahead
 artifact into production.
 
-## What eighteen hypotheses establish
+## H10 — REVIVED. The rejection was mine and it was wrong.
 
-No credible positive net expectancy is available to this desk from price-based
-strategies on liquid instruments. That is not a failure to search — it is the
-answer, and H13 shows the mechanism: the effects that were real have decayed.
+A second independent reviewer found the same class of bug as the first, half
+fixed. The harness set `act_from` (window start) and never an `act_until`
+(window end) while running on the full panel, so **every TRAIN measurement
+silently carried the whole held-out window**: 230 of 605 fx_trend "train" trades,
+38%, were test trades. H10 was rejected as "an isolated spike" on numbers
+computed from leaked data, and the held-out look was declined on that basis.
 
-The one live thread is H12, and it is live precisely because it is NOT
-price-based: the news verdicts carry positive market-adjusted returns and the
-score ranks them backwards. Its sample grows on its own.
+Capped at both ends, and the held-out window spent properly — fx_trend, entries
+07:00-21:00 UTC, cooldown 168h:
 
-## Next
+| | n | net | $/day | gross PF | captured vs cost |
+|---|---:|---:|---:|---:|---|
+| TRAIN | 176 | +$1,193 | +14.21 | 1.40 | 7.95 vs 1.60 bps |
+| **HELD OUT** | 100 | **+$1,082** | **+23.02** | **1.583** | **10.93 vs 1.60 bps** |
+| held out, 3x cost | 100 | +$727 | +15.46 | 1.60 | 11.17 vs 4.80 |
+| held out, 5x cost | 100 | +$354 | +7.54 | 1.60 | 11.16 vs 8.00 |
 
-1. **Re-run H12 when the corpus reaches a few hundred verdicts.** The news agent
-   and the new macro_fx channel reach that in weeks, and it is the only line of
-   enquiry that has produced a positive market-adjusted number.
-2. Re-read every equity result here against a benchmark; several were scored
-   against zero before `REQUIRE_BENCHMARK` existed.
-2. The equity universe now has 66 names and 10 years but was only tested at
-   daily-and-longer horizons on the cross-section. The move/toll table says
-   equities at multi-day horizons is the best ratio available; H7 and H8 tested
-   that badly (no benchmark, and a survivorship-biased universe) and it deserves
-   one honest attempt.
-3. Nothing here should reach paper until a candidate clears a window it has not
-   been fitted to. None has.
+**It improves out of sample** and captures nearly seven times the toll. And it
+survives the test that killed H4 — real hour-shaped spreads (1x London/NY, 1.5x
+Asia, 3x rollover): held out **+$916.77**, train +$872.08. Only **7%** of its
+entries sit in the rollover window against H4's 76%, so the unmeasured broker
+spread that decided H4 does not decide this one.
+
+**Not accepted.** n=100, per-trade t = +1.44. That is a positive result, not a
+proven one. Status is forward_testing — the first candidate of the session to
+earn a paper test.
+
+## Three corrections the same review forced
+
+**The significance bar was unreachable.** Demanding a bootstrap lower bound above
+zero is demanding t > 1.96, which on these windows means an annualised Sharpe of
+3 to 4.5. A good live systematic programme runs 0.7-1.2. It was the ONLY bar that
+ever bound: H4 and H10 both cleared everything else out of sample and died on it
+alone. Replaced with an honest report of t and n alongside the verdict, so
+"survived" is never read as "proven".
+
+**H13's headline was overstated.** I wrote that "t=4.71 on 1,536 events is not
+something a grid search manufactures". The events are 24 mostly-USD pairs firing
+on the same days with overlapping holds, so they are nothing like independent.
+Clustered by date the train t falls to +1.81 and the held-out to −0.05. The
+rejection stands; the "real effect that decayed" story does not.
+
+**H12 was held to a softer standard than H17.** H17 was rejected at n=255, t=2.42.
+H12 has n=48, eight days, no t above 1.28, and a monotone claim resting on cells
+of 8 and 4. Keeping one and rejecting the other was leniency toward the result I
+wanted. H12 remains in forward_testing only as a sample-accumulation target.
+
+## And the overall claim was overreach
+
+"No credible positive net expectancy is available from price-based strategies"
+is not what these tests show. They show that **no strategy demonstrated positive
+expectancy at 95% confidence on the samples available** — and this log's own power
+analysis says that outcome was near-guaranteed either way. H10 is a positive
+held-out result that survives realistic costs. It is not significant, and that is
+a different statement from "there is nothing here".
+

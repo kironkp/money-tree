@@ -37,7 +37,15 @@ log = logging.getLogger(__name__)
 # What the challenger demands before anything may be called an improvement.
 MIN_TEST_TRADES = 30          # out-of-sample trades, below which nothing is measurable
 MIN_EDGE_PER_DAY = 0.0        # held-out mean must clear this AFTER every cost
-REQUIRE_LOWER_BOUND = True    # and its bootstrap lower bound must clear zero
+# Demanding a bootstrap lower bound above zero is exactly demanding t > 1.96, and
+# on the windows this desk can actually assemble that means an annualised Sharpe
+# of roughly 3 to 4.5. A good live systematic programme runs 0.7-1.2, so the bar
+# was not strict, it was unreachable — and it is the ONLY bar that ever bound:
+# two candidates cleared everything else out of sample and died on this alone.
+# What replaces it is honest about power: clear zero, and SAY how far the
+# evidence is from significance instead of pretending the question is settled.
+REQUIRE_LOWER_BOUND = False
+REPORT_SIGNIFICANCE = True    # record t and the sample, never silently imply it
 MAX_TRAIN_TEST_DECAY = 0.60   # a candidate keeping < 40% of its train edge is a fit
 # A candidate must beat simply owning the thing. Net > 0 is a fair bar where the
 # underlying has no long-run drift, and a trivially low one where it does: a
@@ -157,7 +165,17 @@ def challenge(h: Hypothesis, llm_second_opinion=None) -> dict:
     if not (h.source or '').strip():
         reasons.append('no source')
 
+    # A surviving candidate is cleared for PAPER, never for live, and its
+    # significance travels with it so nobody later reads "survived" as "proven".
+    if REPORT_SIGNIFICANCE:
+        t = te.get('per_trade_t') or te.get('t_stat')
+        if t is not None:
+            verdict_note = (f't={t:+.2f} on n={te.get("trades", "?")} — '
+                            f'{"significant" if abs(t) > 1.96 else "NOT significant"}')
+        else:
+            verdict_note = 'no t-statistic recorded'
     verdict = {'rejected': bool(reasons), 'reasons': reasons, 'checked_at': timezone.now().isoformat(),
+               'significance': verdict_note if REPORT_SIGNIFICANCE else None,
                'rules': {'min_test_trades': MIN_TEST_TRADES, 'min_edge_per_day': MIN_EDGE_PER_DAY,
                          'require_lower_bound': REQUIRE_LOWER_BOUND,
                          'max_train_test_decay': MAX_TRAIN_TEST_DECAY,

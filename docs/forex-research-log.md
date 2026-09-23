@@ -87,12 +87,70 @@ Also visible in H7: 18 of 55 exits were the daily-loss kill switch. A third of t
 trades ended because the risk overlay flattened the account, so what was measured
 was the overlay as much as the strategy.
 
+## H8 — cross-sectional, dollar-neutral, 66 names
+
+Built to remove the drift that made H7 meaningless: long the 5 weakest, short the
+5 strongest, equal dollars. 143,127 daily bars synced for it (66 US large caps,
+10 years). On train the lookback=5 block was positive in all six (hold, k) cells
+while 10/21/63 were mostly negative — a coherent block, and short-term
+cross-sectional reversal is the most documented equity anomaly there is.
+
+Held out: −6.23% annualised, and the whole block mostly negative
+(−7.38, −0.87, −6.23, +1.66, −7.52, +0.56). Rejected.
+
+## The one that matters: is it COST or SIGNAL?
+
+Every candidate re-run at ZERO cost on the held-out window:
+
+| candidate | net/day | gross PF |
+|---|---:|---:|
+| fx_trend | **+10.89** | 1.138 |
+| ema_momentum | +7.97 | 1.135 |
+| vwap lb=150 | +3.00 | 1.074 |
+| vwap + session | +2.71 | 1.049 |
+
+**All four are positive out of sample with a free broker.** The signals carry
+real information. Cost, not signal, is the binding constraint — which is the
+original day-one diagnosis, now confirmed properly on held-out data across four
+independent strategies.
+
+## The strongest candidate, and the single fact that decides it
+
+`fx_trend`, held out, n=340, at flat cost per side:
+
+| bps/side | 0.0 | 0.2 | 0.4 | 0.6 | **0.8 (the desk's model)** | 1.2 |
+|---|---:|---:|---:|---:|---:|---:|
+| net | +1209 | +1070 | +939 | +819 | **+675** | +413 |
+
+Net positive out of sample at every flat cost tested, including 1.5x the desk's
+own model. But 76% of its trades open in the 21:00-01:00 UTC rollover window,
+where real spreads are worst.
+
+**Breakeven rollover spread: 2.91x the London/NY rate.** Below that this is
+profitable out of sample; above it, it is not. Everything else about the
+strategy is settled; that one broker fact decides it, and it is not in hand.
+
+Decomposition by hour, held out, at a uniform London-rate toll:
+
+| entry window | n | gross | net |
+|---|---:|---:|---:|
+| rollover 21-01 | 260 | +441 | **−31** |
+| liquid 07-20 | 58 | +458 | **+345** |
+| Asia mid 02-06 | 22 | +310 | +268 |
+
+The rollover trades are churn. H9 tried to confine the strategy to the liquid
+window and re-searched its parameters there: 0 of 9 cells cleared on train, so
+the held-out window was not spent. The 58-trade liquid slice is a favourable CUT
+of a run, not a strategy — blocking rollover entries frees slots and cooldowns,
+so the restricted version takes 700+ different trades and loses.
+
 ## Next
 
-1. Re-read every equity result in this session against a benchmark; several were
-   evaluated against zero.
-2. Get real per-hour spread data from an actual venue to replace the assumed
-   1x/1.5x/3x multipliers, which currently decide the forex answer.
-3. The measurement points at equities at multi-day horizons. The honest version
-   of that test is excess return over buy-and-hold, on a universe wide enough to
-   be cross-sectional rather than nine names that all went up together.
+1. **Get a real spread schedule from a venue for 21:00-01:00 UTC on the four
+   majors.** One number against 2.91x settles the strongest candidate either way.
+   Nothing else in this queue is worth as much.
+2. Re-read every equity result here against a benchmark; several were scored
+   against zero before `REQUIRE_BENCHMARK` existed.
+3. If the rollover spread comes back above 2.91x, the remaining question is
+   whether a signal exists that trades the liquid window natively rather than as
+   a residue of one that does not.

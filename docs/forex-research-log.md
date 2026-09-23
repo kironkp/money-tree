@@ -291,7 +291,24 @@ grid search manufactured; the effect was real in 2002-2014 and is absent in
 whole log: short-horizon FX overreaction was tradeable before algorithmic
 market-making became ubiquitous, and it has been competed away.
 
-## What thirteen hypotheses establish
+## H14 — the least-competitive instruments, tested properly
+
+If effects decay where competition is fiercest, altcoins are where one should
+survive. 16,075 daily crypto bars synced, 10 coins, 2021-2026. Long-only, because
+risk.py refuses crypto shorts — which means market exposure, which means the
+equal-weight basket is the benchmark. That was the H7 mistake and it is not
+repeated here.
+
+Zero of eight cells beat holding the basket. Excess runs −8.5 to −79.8 points
+annualised, with two cells at t = −2.90 and −4.13. The basket itself returned
+29–82% a year over the window, so the benchmark is the entire story: the
+strategy captured less of it while paying 56 bps a rebalance. Held-out window not
+spent, because nothing was positive in sample.
+
+Even a venue at 10 bps instead of 56 recovers only about 5.5 points a year
+against a gap of 8 to 80.
+
+## What fourteen hypotheses establish
 
 No credible positive net expectancy is available to this desk from price-based
 strategies on liquid instruments. That is not a failure to search — it is the

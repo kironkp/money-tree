@@ -30,8 +30,14 @@ class BacktestsAreIntradayAndBalanced(SimpleTestCase):
     LIVE_ONLY = {'news_catalyst'}
 
     def test_every_strategy_runs_and_keeps_the_equity_identity(self):
-        for key in STRATEGIES:
+        for key, cls in STRATEGIES.items():
             if key in self.LIVE_ONLY:
+                continue
+            # This fixture is QQQ / NVDA / BTC. A strategy that trades none of
+            # those asset classes has nothing to say here, and asserting it
+            # trades anyway would only ever be satisfied by weakening it for
+            # everything else.
+            if not any(cls.supports(ac) for ac in set(self.ac.values())):
                 continue
             r = self._run(key, {'min_relvol': 0.0} if key != 'vwap_reversion' else {})
             self.assertGreater(r.metrics['trades'], 0, key)
@@ -40,6 +46,14 @@ class BacktestsAreIntradayAndBalanced(SimpleTestCase):
                 self.assertGreaterEqual(t.exit_ts, t.entry_ts)
                 if self.ac[t.symbol] != 'crypto':
                     self.assertEqual(t.entry_ts.astimezone(ET).date(), t.exit_ts.astimezone(ET).date(), key)
+
+    def test_a_strategy_declares_the_asset_classes_it_can_trade(self):
+        """The skip above is only safe because this holds: fx_trend is forex-only
+        and must not quietly run on equities if someone points it at them."""
+        for key, cls in STRATEGIES.items():
+            self.assertTrue(cls.asset_classes, key)
+        self.assertEqual(STRATEGIES['fx_trend'].asset_classes, ('forex',))
+        self.assertFalse(STRATEGIES['fx_trend'].supports('stock'))
 
     def test_a_live_only_strategy_is_silent_on_history(self):
         """A backtest that could read today's news verdicts would be reading answers

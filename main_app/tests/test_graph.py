@@ -132,3 +132,35 @@ class TheMapSaysWhyAStrategyIsOff(TestCase):
         self.assertEqual(s['headline'], '0/1 on')
         self.assertEqual(s['sub'], 'quarantined')
         self.assertIn('stopped', s['detail'])
+
+
+class GradedMeansAResultNotATimestamp(TestCase):
+    """The map counted rows with an outcome TIMESTAMP as graded. 374 rows had
+    one; 54 carried an actual outcome. It reported 192 graded verdicts when 54
+    existed, and that number was then quoted as the size of the evidence base."""
+
+    def _verdict(self, **kw):
+        from main_app.models import NewsItem, NewsSession, NewsVerdict
+        from django.utils import timezone
+        sess = getattr(self, '_sess', None) or NewsSession.objects.create(started_at=timezone.now())
+        self._sess = sess
+        n = NewsItem.objects.count()
+        item = NewsItem.objects.create(headline='h', url=f'u{n}', external_id=f'x{n}',
+                                       published_at=timezone.now())
+        return NewsVerdict.objects.create(session=sess, news=item, symbol='AAPL', score=5,
+                                          provenance='contemporaneous', **kw)
+
+    def test_a_timestamp_without_a_result_is_not_graded(self):
+        from django.utils import timezone
+        from main_app.services.graph_state import state
+        self._verdict(outcome_at=timezone.now(), outcome_kind='')      # stamped, no result
+        self._verdict(outcome_at=timezone.now(), outcome_kind='target')  # actually graded
+        s = state()['store.verdicts']
+        self.assertEqual(s['sub'], '1 graded')
+        self.assertIn('1 have an outcome timestamp and no result', s['detail'])
+
+    def test_the_headline_says_it_is_a_seven_day_window_not_a_total(self):
+        from django.utils import timezone
+        from main_app.services.graph_state import state
+        self._verdict(outcome_at=timezone.now(), outcome_kind='stop')
+        self.assertIn('in 7d', state()['store.verdicts']['headline'])

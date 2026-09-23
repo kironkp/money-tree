@@ -248,6 +248,17 @@ def run_session(since=None, model: str = MODEL, act: bool = True) -> NewsSession
         ))
     NewsVerdict.objects.bulk_create(verdicts)
 
+    # The wire tags by equity ticker, so a Federal Reserve decision arrives
+    # labelled QQQ and the currency lane never sees it — 2 of 598 verdicts
+    # concerned any FX instrument. This routes the macro stories to the four
+    # majors as SHADOW rows, so the question becomes answerable on a real sample
+    # instead of on those two. It cannot trade: every row is tradable=False.
+    try:
+        from .macro_fx import route
+        route(session, stories)
+    except Exception:
+        log.exception('macro->fx routing failed (news session itself is unaffected)')
+
     session.narrative = str(data.get('narrative', ''))[:4000]
     session.actionable = sum(1 for v in verdicts if v.actionable)
     session.cost_usd = round(cost, 5)

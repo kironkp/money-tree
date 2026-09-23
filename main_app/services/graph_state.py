@@ -152,11 +152,19 @@ def state() -> dict:
                              'headline': f'{classified}', 'sub': 'classified in 24h', 'detail': ''}
 
     verdicts = NewsVerdict.objects.filter(created_at__gte=now - timedelta(days=7))
-    graded = verdicts.filter(outcome_at__isnull=False, provenance='contemporaneous').count()
+    # "Graded" means the barrier race produced a RESULT, not merely that a
+    # timestamp was stamped on the row. outcome_at is set on 374 rows; only 54
+    # carry an outcome_kind. Counting the former reported 192 graded verdicts
+    # when 54 existed, and a reader — including me — took that as the size of
+    # the evidence base.
+    graded = verdicts.filter(provenance='contemporaneous').exclude(
+        outcome_kind='').exclude(outcome_kind__isnull=True).count()
+    pending = verdicts.filter(outcome_at__isnull=False).filter(outcome_kind='').count()
     out['store.verdicts'] = {
         'status': 'ok' if graded else 'warn',
-        'headline': f'{verdicts.count()}', 'sub': f'{graded} graded this week',
-        'detail': 'rows from before the grader existed are marked rebuilt and never counted',
+        'headline': f'{verdicts.count()} in 7d', 'sub': f'{graded} graded',
+        'detail': (f'{pending} have an outcome timestamp and no result yet. '
+                   'Rows from before the grader existed are marked rebuilt and never counted.'),
     }
 
     # --- the research arm ----------------------------------------------------

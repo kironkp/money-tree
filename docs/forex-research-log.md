@@ -336,7 +336,34 @@ failures. The pipeline works and is rationed:
 That is the one decision that sets how fast the only live hypothesis can be
 tested, and it is the owner's — this reviewer may not change a spend limit.
 
-## What fifteen hypotheses establish
+## H16 — execution, not signal
+
+The last lever that attacks the binding constraint without touching the signal.
+Every candidate is positive at zero cost and negative at the real toll, and every
+one was simulated with MARKET orders that pay the spread on entry. A strategy
+buying weakness should be able to bid passively and let the seller cross to it.
+
+Modelled with the part that makes passive execution expensive rather than free:
+a limit fills only if the next bar actually trades there, so misses are counted
+and the fills are adversely selected by construction.
+
+Held out 2015-2026, same signal, only the execution differs:
+
+| execution | n | fill | mean | t | hit |
+|---|---:|---:|---:|---:|---:|
+| market order | 1,507 | 100% | −5.23 bps | −1.84 | 48% |
+| passive limit at the close | 1,087 | 72% | **−47.23 bps** | **−13.04** | **34%** |
+| passive, 20 bps inside | 921 | 61% | −39.96 | −10.01 | 37% |
+
+Nine times worse, with a t-statistic of −13. Hit rate collapses from 48% to 34%,
+which is the whole story: you fill precisely when price keeps moving against you
+and miss the ones that turn. **Adverse selection costs about 42 bps against the
+3 bps of spread saved — fourteen times the benefit.**
+
+"Use limit orders, they are cheaper" is exactly backwards for this trade, and it
+is the kind of thing that would have been expensive to learn live.
+
+## What sixteen hypotheses establish
 
 No credible positive net expectancy is available to this desk from price-based
 strategies on liquid instruments. That is not a failure to search — it is the

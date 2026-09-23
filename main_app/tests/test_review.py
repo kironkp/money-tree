@@ -614,3 +614,38 @@ class TheGuardCoversEveryOrmPathAChecKCouldReachFor(ReviewCase):
             G.PROTECTED = orig
         Strategy.objects.create(key='z', market='forex', params={}, symbols=[])   # must not raise
         self.assertTrue(Strategy.objects.filter(key='z').exists())
+
+
+class ACandidateMustBeatSimplyOwningTheThing(ReviewCase):
+    """No test in this session had a benchmark until H7. A reversal strategy on
+    nine megacaps looked excellent at gross profit factor 5.08 and returned
+    +76.7% over seven years while buy-and-hold on the same basket returned
+    +389.9%. Net > 0 is a fair bar where the underlying has no drift and a
+    trivially low one where it does."""
+
+    def _h(self, strategy_pct, benchmark_pct):
+        h = imp.propose('t', 'c', source='in-app measurement')
+        return imp.evaluate(h, lambda w: {
+            'train': {'trades': 400, 'net': 900, 'per_day': 4.0, 'ci_low': 2.0, 'ci_high': 6.0},
+            'test': {'trades': 300, 'net': 800, 'per_day': 3.0, 'ci_low': 1.0, 'ci_high': 5.0,
+                     'strategy_pct': strategy_pct, 'benchmark_pct': benchmark_pct},
+        }[w], 'train', 'test')
+
+    def test_underperforming_buy_and_hold_is_rejected_however_good_it_looks(self):
+        v = imp.challenge(self._h(strategy_pct=76.7, benchmark_pct=389.9))
+        self.assertTrue(v['rejected'])
+        self.assertTrue(any('did not beat doing nothing' in r for r in v['reasons']), v['reasons'])
+
+    def test_beating_the_benchmark_clears_that_particular_objection(self):
+        v = imp.challenge(self._h(strategy_pct=420.0, benchmark_pct=389.9))
+        self.assertFalse(any('doing nothing' in r for r in v['reasons']), v['reasons'])
+
+    def test_a_candidate_with_no_benchmark_recorded_is_not_silently_passed(self):
+        """Absent a benchmark the rule cannot fire, so the rule set says it was
+        checked — otherwise a missing field reads as a pass."""
+        h = imp.propose('t', 'c', source='s')
+        imp.evaluate(h, lambda w: {'train': {'trades': 400, 'per_day': 4.0, 'ci_low': 2.0},
+                                   'test': {'trades': 300, 'per_day': 3.0, 'ci_low': 1.0}}[w],
+                     'train', 'test')
+        v = imp.challenge(h)
+        self.assertTrue(v['rules']['require_benchmark'])

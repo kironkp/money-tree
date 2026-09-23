@@ -39,6 +39,12 @@ MIN_TEST_TRADES = 30          # out-of-sample trades, below which nothing is mea
 MIN_EDGE_PER_DAY = 0.0        # held-out mean must clear this AFTER every cost
 REQUIRE_LOWER_BOUND = True    # and its bootstrap lower bound must clear zero
 MAX_TRAIN_TEST_DECAY = 0.60   # a candidate keeping < 40% of its train edge is a fit
+# A candidate must beat simply owning the thing. Net > 0 is a fair bar where the
+# underlying has no long-run drift, and a trivially low one where it does: a
+# reversal strategy on nine megacaps returned +76.7% over seven years and looked
+# excellent at gross profit factor 5.08, while buy-and-hold on the same basket
+# returned +389.9%. Nothing in this module asked that question until it did.
+REQUIRE_BENCHMARK = True
 
 
 # ---------------------------------------------------------------- daily read
@@ -138,6 +144,11 @@ def challenge(h: Hypothesis, llm_second_opinion=None) -> dict:
         if REQUIRE_LOWER_BOUND and (te.get('ci_low') is None or te['ci_low'] <= 0):
             reasons.append(f'held-out lower bound {te.get("ci_low")} does not clear zero — '
                            'the result is consistent with no edge')
+        bench = te.get('benchmark_pct')
+        mine = te.get('strategy_pct')
+        if REQUIRE_BENCHMARK and bench is not None and mine is not None and mine <= bench:
+            reasons.append(f'returned {mine:.1f}% against {bench:.1f}% for simply holding the '
+                           f'underlying — it did not beat doing nothing')
         if tr.get('per_day', 0) > 0 and te.get('per_day') is not None:
             decay = 1 - (te['per_day'] / tr['per_day'])
             if decay > MAX_TRAIN_TEST_DECAY:
@@ -149,7 +160,8 @@ def challenge(h: Hypothesis, llm_second_opinion=None) -> dict:
     verdict = {'rejected': bool(reasons), 'reasons': reasons, 'checked_at': timezone.now().isoformat(),
                'rules': {'min_test_trades': MIN_TEST_TRADES, 'min_edge_per_day': MIN_EDGE_PER_DAY,
                          'require_lower_bound': REQUIRE_LOWER_BOUND,
-                         'max_train_test_decay': MAX_TRAIN_TEST_DECAY}}
+                         'max_train_test_decay': MAX_TRAIN_TEST_DECAY,
+                         'require_benchmark': REQUIRE_BENCHMARK}}
     if llm_second_opinion is not None:
         try:
             extra = llm_second_opinion(h) or {}

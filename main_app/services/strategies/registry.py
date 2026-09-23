@@ -3,10 +3,11 @@ from .ema_momentum import EmaMomentum
 from .fx_trend import FxTrend
 from .news_catalyst import NewsCatalyst
 from .orb import OpeningRangeBreakout
+from .swing_trend import SwingTrend
 from .vwap_reversion import VwapReversion
 
 STRATEGIES = {cls.key: cls for cls in (OpeningRangeBreakout, VwapReversion, EmaMomentum, MomentumBurst,
-                                      NewsCatalyst, FxTrend)}
+                                      NewsCatalyst, FxTrend, SwingTrend)}
 
 
 def get_strategy_class(key: str):

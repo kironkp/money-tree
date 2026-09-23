@@ -363,7 +363,36 @@ and miss the ones that turn. **Adverse selection costs about 42 bps against the
 "Use limit orders, they are cheaper" is exactly backwards for this trade, and it
 is the kind of thing that would have been expensive to learn live.
 
-## What sixteen hypotheses establish
+## H17 — the cheap classifier, on six times the sample
+
+H12 was limited to the 48 scored verdicts. But the cheap classifier ran on
+everything: all 677 stories carry a direction, magnitude and confidence produced
+before any trade. 298 are directional, 255 have bars and a benchmark.
+
+The headline looked like the first real result: market-adjusted **+15.79 bps at
+one hour, t = 2.42**. It even survived the outlier check — winsorising at 1/99%
+RAISED it to t = 2.85, so it was not a few big winners.
+
+Then it failed the two tests that matter:
+
+| cut | n | mean | t |
+|---|---:|---:|---:|
+| headline | 255 | +15.79 | 2.42 |
+| first half | 128 | +2.49 | 0.50 |
+| second half | 127 | +29.21 | 2.44 |
+| **tradeable only (gap < 1h)** | 171 | **+7.29** | **1.02** |
+| bullish | 155 | +31.17 | 3.41 |
+| bearish | 100 | −8.04 | −0.98 |
+
+**Restricting to stories that could actually be traded destroys it.** The headline
+leans on stories that arrived outside market hours, priced at a level nobody
+could have got. And the effect lives entirely in the later window — the exact
+artifact H4 was rejected for.
+
+Applying a softer standard here because the number came out positive would be the
+failure mode, not the exception. Rejected.
+
+## What seventeen hypotheses establish
 
 No credible positive net expectancy is available to this desk from price-based
 strategies on liquid instruments. That is not a failure to search — it is the

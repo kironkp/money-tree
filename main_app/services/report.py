@@ -64,24 +64,70 @@ def lane_costs(account: Account, all_time: bool = False) -> dict:
     # everything.
     if not all_time and account.epoch_started_at:
         qs = qs.filter(exit_ts__gte=account.epoch_started_at)
-    rows = list(qs.values_list('pnl', 'fees', 'entry_price', 'qty'))
+    rows = list(qs.values_list('id', 'pnl', 'fees', 'entry_price', 'qty'))
+    empty = {'trades': 0, 'net': 0.0, 'fees': 0.0, 'slippage': 0.0, 'costs': 0.0, 'moved': 0.0,
+             'fee_bps': 0.0, 'slippage_bps': 0.0, 'cost_bps': 0.0,
+             'gross': 0.0, 'net_before_fees': 0.0, 'fee_share': 0.0, 'cost_share': 0.0,
+             'slippage_measured': False, 'epoch_started_at': account.epoch_started_at, 'all_time': all_time}
     if not rows:
-        return {'trades': 0, 'net': 0.0, 'fees': 0.0, 'moved': 0.0,
-                'fee_bps': 0.0, 'net_before_fees': 0.0, 'fee_share': 0.0,
-                'epoch_started_at': account.epoch_started_at, 'all_time': all_time}
-    net = sum(float(r[0]) for r in rows)
-    fees = sum(float(r[1]) for r in rows)
-    moved = sum(float(r[2]) * float(r[3]) for r in rows)
+        return empty
+    net = sum(float(r[1]) for r in rows)
+    fees = sum(float(r[2]) for r in rows)
+    moved = sum(float(r[3]) * float(r[4]) for r in rows)
+    slippage, measured = _slippage_cost(account, moved, all_time)
+    # Gross is what the trades would have earned paying nothing at all. Fees come
+    # out of pnl already; slippage never did — it is inside the fill price, so
+    # `pnl` is net of it and it has to be added back to get the raw edge. A lane
+    # whose gross is healthy and whose net is thin is an expensive strategy, not
+    # a good one, and that is only visible if both numbers are on the page.
+    gross = net + fees + slippage
+    costs = fees + slippage
     return {
-        'trades': len(rows), 'net': net, 'fees': fees, 'moved': moved,
+        'trades': len(rows), 'net': net, 'fees': fees, 'slippage': slippage, 'costs': costs, 'moved': moved,
         'fee_bps': (fees / moved * 10000) if moved else 0.0,
+        'slippage_bps': (slippage / moved * 10000) if moved else 0.0,
+        'cost_bps': (costs / moved * 10000) if moved else 0.0,
+        'gross': gross,
+        # Kept for callers that predate the slippage line.
         'net_before_fees': net + fees,
         # How much of the loss is the toll rather than the trading. Only
         # meaningful when the lane is down.
         'fee_share': (fees / abs(net) * 100) if net < 0 else 0.0,
+        # How much of the raw edge the tolls take. Meaningful in both directions,
+        # which is the point: a lane can be up and still be handing over most of
+        # what it earns.
+        'cost_share': (costs / abs(gross) * 100) if gross else 0.0,
+        'slippage_measured': measured,
         'epoch_started_at': account.epoch_started_at,
         'all_time': all_time,
     }
+
+
+def _slippage_cost(account: Account, moved: float, all_time: bool = False) -> tuple[float, bool]:
+    """Dollars lost to the gap between the decision price and the fill.
+
+    Measured from `Fill.realized_slippage_bps`, stamped per fill against the price
+    the strategy actually decided at, and already SIGNED against us: positive is a
+    worse fill than we asked for, negative is a better one. It is summed signed,
+    not absolute — a fill that came in better is money the desk kept, and counting
+    it as a cost would overstate the toll and understate the edge.
+
+    Scoped to the same epoch as the trades it sits beside. Falls back to the
+    configured assumption only when no fill carries a measurement, and says which
+    of the two it used: an assumed cost reported as a measured one is how a desk
+    talks itself into trusting a model it never checked.
+    """
+    from main_app.models import Fill
+    q = Fill.objects.filter(order__account=account, realized_slippage_bps__isnull=False)
+    if not all_time and account.epoch_started_at:
+        q = q.filter(ts__gte=account.epoch_started_at)
+    fills = list(q.values_list('realized_slippage_bps', 'qty', 'price'))
+    if fills:
+        return sum(float(bps) / 1e4 * float(qty) * float(px) for bps, qty, px in fills), True
+    from main_app.models import AgentConfig
+    cfg = AgentConfig.get()
+    assumed = float(getattr(cfg, f'{account.market}_slippage_bps', 0.0) or 0.0)
+    return moved * 2 * assumed / 1e4, False
 
 
 def lane_pnl(account: Account, d: date) -> dict:

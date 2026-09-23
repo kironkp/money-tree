@@ -239,3 +239,80 @@ class AResetMovesTheStartingLineNotTheMemory(TestCase):
         self.assertEqual(self.account.equity, before,
                          'resetting mid-trade books the rest of it against a balance it never '
                          'opened from')
+
+
+class SlippageIsACostAndIsReportedAsOne(TestCase):
+    """Fees came out of pnl; slippage never did — it is inside the fill price.
+
+    Reporting only fees let the forex lane describe itself as paying 0.5 bps a
+    side while the measured gap between decision and fill cost it more than the
+    commission did. Gross, every cost, and net now travel together.
+    """
+    def setUp(self):
+        from main_app.models import Account, Fill, Instrument, Order, Trade
+        self.inst = Instrument.objects.create(symbol='EUR/USD', asset_class='forex', market='forex')
+        self.account = Account.objects.create(mode='sim', market='forex', starting_cash=10000, cash=10000)
+        now = timezone.now()
+        Trade.objects.create(account=self.account, instrument=self.inst, strategy_key='ema_momentum',
+                             side='long', qty=1000, entry_ts=now, exit_ts=now,
+                             entry_price=Decimal('1.00'), exit_price=Decimal('1.02'),
+                             pnl=Decimal('18'), pnl_pct=Decimal('1.8'), fees=Decimal('2'),
+                             bars_held=3, exit_reason='target')
+        self.order = Order.objects.create(
+            account=self.account, instrument=self.inst, side='buy', qty=1000,
+            client_order_id='mt-sim-ema-EURUSD-1-entry', status='filled')
+        self.now = now
+
+    def _fill(self, bps):
+        from main_app.models import Fill
+        return Fill.objects.create(order=self.order, ts=self.now, qty=1000, price=Decimal('1.00'),
+                                   fee=Decimal('1'), realized_slippage_bps=bps)
+
+    def test_an_adverse_fill_is_added_to_the_cost_stack(self):
+        from main_app.services.report import lane_costs
+        self._fill(10.0)                                   # 10 bps of 1000 x 1.00 = $1.00
+        c = lane_costs(self.account)
+        self.assertTrue(c['slippage_measured'])
+        self.assertAlmostEqual(c['slippage'], 1.0, places=6)
+        self.assertAlmostEqual(c['costs'], 3.0, places=6)   # $2 fees + $1 slippage
+        self.assertAlmostEqual(c['net'], 18.0, places=6)
+        self.assertAlmostEqual(c['gross'], 21.0, places=6)  # net + every cost
+
+    def test_a_favourable_fill_is_not_counted_as_a_cost(self):
+        """The field is signed against us. abs() would bill the desk for a
+        fill that came in better than it asked for."""
+        from main_app.services.report import lane_costs
+        self._fill(-10.0)
+        c = lane_costs(self.account)
+        self.assertAlmostEqual(c['slippage'], -1.0, places=6)
+        self.assertAlmostEqual(c['gross'], 19.0, places=6)
+
+    def test_slippage_is_scoped_to_the_epoch_like_the_trades_beside_it(self):
+        """A reset moves the starting line for trades; fills have to move with
+        them or the cost stack compares this epoch's profit with all of history's
+        friction."""
+        from main_app.services.report import lane_costs
+        old = self._fill(100.0)
+        old.ts = self.now - timedelta(days=30)
+        old.save(update_fields=['ts'])
+        self.account.epoch_started_at = self.now - timedelta(days=1)
+        self.account.save(update_fields=['epoch_started_at'])
+        self._fill(10.0)
+        c = lane_costs(self.account)
+        self.assertAlmostEqual(c['slippage'], 1.0, places=6)          # only the in-epoch fill
+        self.assertAlmostEqual(lane_costs(self.account, all_time=True)['slippage'], 11.0, places=6)
+
+    def test_an_assumed_cost_is_never_reported_as_a_measured_one(self):
+        from main_app.services.report import lane_costs
+        c = lane_costs(self.account)                                   # no fills at all
+        self.assertFalse(c['slippage_measured'])
+        self.assertGreater(c['slippage'], 0.0)
+
+    def test_cost_share_works_when_the_lane_is_up(self):
+        """fee_share only ever spoke when a lane was losing, so a profitable lane
+        handing over most of what it earned reported a clean 0."""
+        from main_app.services.report import lane_costs
+        self._fill(10.0)
+        c = lane_costs(self.account)
+        self.assertEqual(c['fee_share'], 0.0)                           # up, so the old number is silent
+        self.assertAlmostEqual(c['cost_share'], 3.0 / 21.0 * 100, places=4)

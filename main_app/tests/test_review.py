@@ -400,3 +400,51 @@ class StalenessIsJudgedInBarsNotMinutes(ReviewCase):
         run_operational(accounts=[crypto], notify=False, now=self.now)
         self.assertFalse(ReviewFinding.objects.filter(check_key='stale_data',
                                                       status=ReviewFinding.OPEN).exists())
+
+
+class TheAuditTrailJoinsIntentToExecution(ReviewCase):
+    """ledger.on_signal only linked a signal to its order if the order row
+    already existed, and entries pass through a card, so the order is created
+    afterwards and every entry signal was stored with a null link."""
+
+    def _recorder(self):
+        from main_app.services.ledger import DBRecorder
+        return DBRecorder(self.account, {'EUR/USD': self.inst})
+
+    def _order_req(self, leg='entry', oid='mt-sim-ema-EURUSD-1-entry'):
+        from main_app.services.broker.base import OrderReq
+        return OrderReq(id=oid, symbol='EUR/USD', side='buy', qty=1000, leg=leg,
+                        strategy_key='ema_momentum', decision_price=1.08, bar_ts=self.now,
+                        submitted_ts=self.now, status='filled')
+
+    def test_an_entry_signal_written_before_its_order_is_joined_when_the_order_lands(self):
+        rec = self._recorder()
+        sig = type('S', (), {'symbol': 'EUR/USD', 'ts': self.now, 'price': 1.08, 'stop': 1.07,
+                             'target': 1.10, 'reason': 'x', 'action': 'buy', 'strength': 1.0})()
+        rec.on_signal(sig, 'ema_momentum', type('D', (), {'allowed': True, 'reason': ''})(), None)
+        row = Signal.objects.get()
+        self.assertIsNone(row.order_id)                       # the order does not exist yet
+        rec.on_order(self._order_req())
+        row.refresh_from_db()
+        self.assertIsNotNone(row.order_id)
+        self.assertEqual(row.order.client_order_id, 'mt-sim-ema-EURUSD-1-entry')
+
+    def test_a_protective_stop_does_not_get_joined_to_an_entry_signal(self):
+        rec = self._recorder()
+        sig = type('S', (), {'symbol': 'EUR/USD', 'ts': self.now, 'price': 1.08, 'stop': 1.07,
+                             'target': 1.10, 'reason': 'x', 'action': 'buy', 'strength': 1.0})()
+        rec.on_signal(sig, 'ema_momentum', type('D', (), {'allowed': True, 'reason': ''})(), None)
+        rec.on_order(self._order_req(leg='exit', oid='mt-sim-ema-EURUSD-1-entry-stop-2'))
+        self.assertIsNone(Signal.objects.get().order_id)
+
+    def test_a_stop_sharing_the_bar_cannot_vouch_for_an_entry_that_never_went_out(self):
+        """The reviewer's own version of the same trap: matching any leg would
+        downgrade a genuinely lost order to a bookkeeping note."""
+        Signal.objects.create(account=self.account, instrument=self.inst, strategy_key='ema_momentum',
+                              ts=self.now, action='buy', price=Decimal('1.08'), acted=True)
+        Order.objects.create(account=self.account, instrument=self.inst, strategy_key='ema_momentum',
+                             side='sell', qty=Decimal('1000'), client_order_id='stop-1', leg='exit',
+                             bar_ts=self.now, status='filled', submitted_at=self.now)
+        self.run_ops()
+        self.assertTrue(self.findings('intent_without_order').exists())
+        self.assertFalse(self.findings('signal_order_unlinked').exists())

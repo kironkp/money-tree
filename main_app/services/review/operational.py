@@ -88,8 +88,14 @@ def _check_intent_vs_broker(ctx: Ctx, rec) -> None:
         # missing — bad books, not a lost instruction. If no order exists at all,
         # the desk believed it traded and did not, which is the serious one.
         # Grading both CRITICAL would halt the desk for a bookkeeping gap.
+        # Match the LEG the signal asked for. An exit signal produces an exit
+        # order and an entry signal an entry order, and a protective stop often
+        # carries the same bar_ts as an unrelated entry — matching any leg would
+        # let that stop vouch for an entry that never went out, turning a
+        # critical fault into a bookkeeping note.
+        leg = 'exit' if sg.action == 'close' else 'entry'
         executed = Order.objects.filter(account=ctx.account, instrument=sg.instrument,
-                                        strategy_key=sg.strategy_key, bar_ts=sg.ts).first()
+                                        strategy_key=sg.strategy_key, bar_ts=sg.ts, leg=leg).first()
         if executed is not None:
             rec.record('signal_order_unlinked', ReviewFinding.WARN,
                        f'{sg.instrument.symbol}: signal and its order are not linked',

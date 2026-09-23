@@ -45,6 +45,7 @@
           <li><a href="{% url 'machine' %}" {% if 'machine' in request.resolver_match.url_name %}class="active"{% endif %}>Map</a></li>
           <li><a href="{% url 'news-agent' %}" {% if 'news-agent' in request.resolver_match.url_name %}class="active"{% endif %}>News Agent</a></li>
           <li><a href="{% url 'journal-list' %}" {% if 'journal' in request.resolver_match.url_name %}class="active"{% endif %}>Journal</a></li>
+          <li><a href="{% url 'review-index' %}" {% if 'review' in request.resolver_match.url_name %}class="active"{% endif %}>Review</a></li>
           <li><a href="{% url 'settings' %}" {% if request.resolver_match.url_name == 'settings' %}class="active"{% endif %}>Settings</a></li>
         </ul>
       </nav>

@@ -9,3 +9,4 @@ from .feed import *  # noqa: F401,F403
 from .spend_views import *  # noqa: F401,F403
 from .graph import *  # noqa: F401,F403
 from .news_agent_views import *  # noqa: F401,F403
+from .review import *  # noqa: F401,F403

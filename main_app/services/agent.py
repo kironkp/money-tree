@@ -539,6 +539,20 @@ class Agent:
                      'paused new entries.', phase='alert')
         else:
             self.risk.blocks.pop('reconcile', None)
+        # Positions are only a third of it. Cash, equity and the fees the venue
+        # actually charged are compared too, and every comparison is kept as a
+        # row so "when did this start disagreeing" has an answer.
+        try:
+            from .reconcile import compare
+            snap = compare(self.account, self.broker, now)
+            if not snap.ok:
+                self.risk.blocks['reconcile'] = 'books diverged from the broker — no new entries until reconciled'
+                self.recorder.on_risk_event('reconcile', f'balance check: {snap.note}'[:300], now,
+                                            {'discrepancies': snap.discrepancies})
+                self.say('risk', f'RECONCILIATION: {snap.note}', phase='alert')
+                diverged = diverged or [('balance', 0, 0)]
+        except Exception:
+            log.exception('balance reconciliation failed')
         self.account.last_reconcile_at = now
         self.account.reconcile_ok = not diverged
         self.account.reconcile_note = ('diverged: ' + note)[:300] if diverged else \

@@ -1,0 +1,40 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Findings · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Findings</h1></div>
+<div class="card">
+  <form method="get" class="filters">
+    <label>Status
+      <select name="status" onchange="this.form.submit()">
+        {% for s in statuses %}
+        <option value="{{ s }}" {% if status == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+  {% if page.object_list %}
+  <table><thead><tr><th>Severity</th><th>Finding</th><th>Lane</th><th>Seen</th><th>Last</th><th></th></tr></thead><tbody>
+    {% for f in page.object_list %}
+    <tr>
+      <td><span class="badge {% if f.severity == 'critical' %}bad{% elif f.severity == 'warn' %}warn{% endif %}">{{ f.severity }}</span></td>
+      <td>
+        <strong>{{ f.title }}</strong>
+        <div class="small muted">{{ f.cycle }} · {{ f.check_key }}</div>
+        {% if f.detail %}<div class="small">{{ f.detail|truncatechars:240 }}</div>{% endif %}
+        {% if f.status == 'resolved' %}<div class="small good">{{ f.resolution }}</div>{% endif %}
+      </td>
+      <td class="small">{{ f.account.market|default:'desk' }}</td>
+      <td class="num">{{ f.seen_count }}</td>
+      <td class="small">{{ f.last_seen_at|et:'%b %d %H:%M' }}</td>
+      <td>{% if f.status == 'open' %}
+          <form method="post" action="{% url 'review-finding-ack' f.pk %}">{% csrf_token %}
+            <button class="btn btn-quiet" type="submit">Ack</button></form>
+          {% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody></table>
+  {% include 'partials/pagination.html' %}
+  {% else %}<p class="empty">nothing here</p>{% endif %}
+</div>
+{% endblock %}

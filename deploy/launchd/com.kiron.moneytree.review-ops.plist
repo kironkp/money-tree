@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The operational review, every 15 minutes, around the clock.
+       StartInterval rather than StartCalendarInterval on purpose: this one has
+       no business being at a particular time of day. Crypto and forex trade
+       while the stock lane sleeps, and a fault at 03:00 matters as much as one
+       at noon.
+
+       This is the SCHEDULED pass. The agent also runs the same checks in
+       process after any tick that produced fills, throttled to five minutes,
+       where it can hand over the live broker handle. This job is the safety net
+       for the case that matters most: the agent being dead.
+         cp deploy/launchd/com.kiron.moneytree.review-ops.plist ~/Library/LaunchAgents/
+         launchctl load ~/Library/LaunchAgents/com.kiron.moneytree.review-ops.plist -->
+  <key>Label</key><string>com.kiron.moneytree.review-ops</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/kironkp/.local/bin/pipenv</string>
+    <string>run</string><string>python</string><string>manage.py</string>
+    <string>review</string><string>operational</string><string>--quiet</string>
+  </array>
+  <key>WorkingDirectory</key><string>/Users/kironkp/code/moneytree</string>
+  <key>StartInterval</key><integer>900</integer>
+  <key>StandardOutPath</key><string>/Users/kironkp/code/moneytree/run/review-ops.log</string>
+  <key>StandardErrorPath</key><string>/Users/kironkp/code/moneytree/run/review-ops.log</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>/Users/kironkp/.local/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+</dict>
+</plist>

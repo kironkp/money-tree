@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}{{ h.title }} · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>{{ h.title }}</h1>
+  <p class="sub">{{ h.market }} · recorded {{ h.created_at|et:'%b %d %Y' }} ·
+     <span class="badge {% if h.status == 'rejected' %}bad{% elif h.status == 'accepted' %}good{% endif %}">{{ h.get_status_display }}</span></p>
+</div>
+<div class="card">
+  <h2>Claim</h2><p>{{ h.claim }}</p>
+  <h2>Source</h2><p class="mono small">{{ h.source }}</p>
+  {% if h.rationale %}<h2>Why it might be true</h2><p>{{ h.rationale }}</p>{% endif %}
+</div>
+<div class="card">
+  <h2>Evidence</h2>
+  <table><thead><tr><th>Window</th><th class="num">Trades</th><th class="num">Net</th><th class="num">Per day</th><th class="num">95% CI</th></tr></thead><tbody>
+    {% for label, r in h.evidence_rows %}
+    <tr><td>{{ label }}</td><td class="num">{{ r.trades|default:'—' }}</td><td class="num">{{ r.net|floatformat:2 }}</td>
+        <td class="num">{{ r.per_day|floatformat:3 }}</td>
+        <td class="num small">{% if r.ci_low is not None %}[{{ r.ci_low|floatformat:2 }}, {{ r.ci_high|floatformat:2 }}]{% else %}—{% endif %}</td></tr>
+    {% endfor %}
+  </tbody></table>
+</div>
+<div class="card {% if h.challenge.rejected %}bad-card{% endif %}">
+  <h2>The challenge</h2>
+  {% if h.challenge.rejected %}
+    <p><strong>Rejected.</strong> The burden is on the evidence and it did not carry it.</p>
+    <ul class="tight">{% for r in h.challenge.reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+  {% elif h.challenge %}
+    <p><strong>Survived.</strong> Cleared for paper forward testing only — not for live.</p>
+  {% else %}<p class="empty">not challenged yet</p>{% endif %}
+  {% if h.challenge.second_opinion %}
+    <h3>Second opinion</h3><pre class="small">{{ h.challenge.second_opinion }}</pre>
+    <p class="small muted">A second opinion may add objections. It may never clear one.</p>
+  {% endif %}
+</div>
+{% if h.applied_at %}
+<div class="card"><h2>Applied</h2><p>{{ h.applied_by }} on {{ h.applied_at|et:'%b %d %Y %H:%M' }}</p></div>
+{% else %}
+<div class="card"><p class="small muted">Nothing here has been applied. The improvement cycle proposes; changing
+  a strategy, a risk limit, or the live switch is the owner's.</p></div>
+{% endif %}
+{% endblock %}

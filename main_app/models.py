@@ -1525,6 +1525,89 @@ class TradeCard(models.Model):
         return self.status in self.PENDING
 
 
+class CashMovement(models.Model):
+    """Money entering, leaving, or changing shape inside an account.
+
+    Trades explain what the strategies did. They do not explain the balance:
+    a deposit, a withdrawal, a financing charge, a currency conversion or a
+    broker adjustment all move cash without any trade existing, and without a
+    record of them the books can only ever be reconciled by assuming they never
+    happen. They do happen, and on a margin forex account they happen nightly.
+
+    `broker_ref` is the venue's own identifier. A movement we invented and a
+    movement the broker confirmed must be distinguishable, which is what
+    `source` is for.
+    """
+    DEPOSIT, WITHDRAWAL, CONVERSION = 'deposit', 'withdrawal', 'conversion'
+    FEE, INTEREST, ADJUSTMENT, DIVIDEND = 'fee', 'interest', 'adjustment', 'dividend'
+    KINDS = [(DEPOSIT, 'Deposit'), (WITHDRAWAL, 'Withdrawal'), (CONVERSION, 'Currency conversion'),
+             (FEE, 'Fee'), (INTEREST, 'Interest or financing'), (ADJUSTMENT, 'Broker adjustment'),
+             (DIVIDEND, 'Dividend')]
+
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='cash_movements')
+    ts = models.DateTimeField()
+    kind = models.CharField(max_length=12, choices=KINDS)
+    # Signed against the account: positive adds, negative removes.
+    amount = models.DecimalField(max_digits=16, decimal_places=4)
+    currency = models.CharField(max_length=8, default='USD')
+    # Set only for CONVERSION, where one currency becomes another.
+    from_currency = models.CharField(max_length=8, blank=True)
+    from_amount = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True)
+    rate = models.DecimalField(max_digits=20, decimal_places=10, null=True, blank=True)
+    broker_ref = models.CharField(max_length=120, blank=True)
+    # 'broker' means the venue reported it; 'local' means we recorded it ourselves
+    # and it is unconfirmed.
+    source = models.CharField(max_length=10, default='local')
+    note = models.CharField(max_length=300, blank=True)
+    recorded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-ts']
+        indexes = [models.Index(fields=['account', '-ts'])]
+        constraints = [
+            # One broker reference is one movement. Re-reading a statement must
+            # not double the deposits.
+            models.UniqueConstraint(fields=['account', 'broker_ref'],
+                                    condition=models.Q(broker_ref__gt=''),
+                                    name='uniq_cash_movement_broker_ref'),
+        ]
+
+    def __str__(self):
+        return f'{self.kind} {self.amount:+} {self.currency}'
+
+
+class ReconciliationSnapshot(models.Model):
+    """One comparison of our books against the venue, kept.
+
+    The account carried a single reconcile_ok flag and a note that the next
+    reconciliation overwrote, so there was no way to answer "when did this start
+    disagreeing" — which is the first question anyone asks. Every check is now a
+    row, agreements included: a long run of clean checks is itself the evidence
+    that the books can be trusted.
+    """
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='reconciliations')
+    ts = models.DateTimeField(default=timezone.now)
+    ok = models.BooleanField(default=True)
+    # Ours vs theirs, for the three things that must agree.
+    our_cash = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True)
+    broker_cash = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True)
+    our_equity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True)
+    broker_equity = models.DecimalField(max_digits=16, decimal_places=4, null=True, blank=True)
+    our_fees = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    broker_fees = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    positions_checked = models.PositiveIntegerField(default=0)
+    # [{what, ours, theirs, delta}] — everything that did not match.
+    discrepancies = models.JSONField(default=list, blank=True)
+    note = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ['-ts']
+        indexes = [models.Index(fields=['account', '-ts'])]
+
+    def __str__(self):
+        return f'{self.account.market} {self.ts:%Y-%m-%d %H:%M} {"ok" if self.ok else "DIVERGED"}'
+
+
 class ReviewRun(models.Model):
     """One execution of one review cycle.
 
@@ -1647,6 +1730,18 @@ class Hypothesis(models.Model):
 
     def __str__(self):
         return f'{self.title} ({self.status})'
+
+    @property
+    def evidence_rows(self) -> list:
+        """(label, result) in the order they were allowed to be looked at.
+
+        Search first, held-out second, paper last — the same order the rules
+        require, so a reader cannot accidentally read the held-out number as
+        though it were the one that was optimised.
+        """
+        return [(label, r) for label, r in (('Search (train)', self.train_result),
+                                            ('Held out (once)', self.test_result),
+                                            ('Paper forward', self.paper_result)) if r]
 
 
 class SymbolState(models.Model):

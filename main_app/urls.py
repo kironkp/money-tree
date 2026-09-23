@@ -22,6 +22,13 @@ urlpatterns = [
     path('signals/', views.signals, name='signals'),
     path('risk/', views.risk_events, name='risk-events'),
 
+    path('review/', views.review_index, name='review-index'),
+    path('review/findings/', views.finding_list, name='review-findings'),
+    path('review/findings/<int:pk>/ack/', views.finding_ack, name='review-finding-ack'),
+    path('review/halt/<str:market>/clear/', views.clear_halt, name='review-clear-halt'),
+    path('review/hypothesis/<int:pk>/', views.hypothesis_detail, name='review-hypothesis'),
+    path('review/audit/<str:market>.zip', views.audit_export, name='audit-export'),
+
     path('strategies/', views.strategy_list, name='strategy-list'),
     path('strategies/create-missing/', views.strategy_create_missing, name='strategy-create-missing'),
     path('strategies/<str:market>/portfolio-backtest/', views.portfolio_backtest, name='portfolio-backtest'),

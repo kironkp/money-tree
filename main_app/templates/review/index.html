@@ -1,0 +1,103 @@
+{% extends 'base.html' %}
+{% load mt_tags %}
+{% block title %}Review · MoneyTree{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Review</h1>
+  <p class="sub">Two cycles. One asks whether the machine did what it was told; the other asks whether what it
+     was told is any good. Neither may change a strategy, a risk limit, or the live switch.</p>
+</div>
+
+{% if halts %}
+<div class="card bad-card">
+  <h2>Trading blocked</h2>
+  {% for a in halts %}
+  <div class="halt-row">
+    <div>
+      <strong>{{ a.get_market_display }}</strong> — new entries stopped {{ a.review_halt_at|et:'%b %d %H:%M' }}
+      <div class="small">{{ a.review_halt_reason }}</div>
+      <div class="small muted">Open positions are still managed. Only new entries are blocked.</div>
+    </div>
+    <form method="post" action="{% url 'review-clear-halt' a.market %}">{% csrf_token %}
+      <button class="btn btn-quiet" type="submit">Lift by hand</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="cycle-grid">
+  {% for c in cycles %}
+  <div class="card">
+    <h2>{{ c.cycle|title }}</h2>
+    <dl class="kv">
+      <dt>Last run</dt>
+      <dd>{% if c.last_at %}{{ c.last_at|et:'%b %d %H:%M' }}
+            <span class="badge {% if c.last_status == 'ok' %}good{% else %}bad{% endif %}">{{ c.last_status }}</span>
+          {% else %}<span class="badge bad">never run</span>{% endif %}</dd>
+      <dt>Next run</dt>
+      <dd>{% if c.next_due_at %}{{ c.next_due_at|et:'%b %d %H:%M' }}
+            {% if c.overdue %}<span class="badge bad">overdue</span>{% endif %}
+          {% else %}—{% endif %}</dd>
+      <dt>Checks</dt>
+      <dd>{{ c.checks_run }} ran{% if c.checks_failed %},
+          <span class="badge bad">{{ c.checks_failed }} crashed</span>{% endif %}</dd>
+      <dt>Open findings</dt>
+      <dd>{{ c.open_total }}{% if c.open_critical %}
+            <span class="badge bad">{{ c.open_critical }} critical</span>{% endif %}</dd>
+    </dl>
+    {% if c.actions %}
+    <h3>Actions taken</h3>
+    <ul class="tight">{% for a in c.actions %}<li>{{ a }}</li>{% endfor %}</ul>
+    {% endif %}
+    {% if c.findings %}
+    <h3>What it found</h3>
+    <table><tbody>
+      {% for f in c.findings %}
+      <tr>
+        <td><span class="badge {% if f.severity == 'critical' %}bad{% elif f.severity == 'warn' %}warn{% endif %}">{{ f.severity }}</span></td>
+        <td>{{ f.title }}<div class="small muted">{{ f.check_key }}{% if f.seen_count > 1 %} · seen {{ f.seen_count }}×{% endif %}</div></td>
+      </tr>
+      {% endfor %}
+    </tbody></table>
+    {% else %}<p class="empty">nothing open</p>{% endif %}
+    <p><a href="{% url 'review-findings' %}?cycle={{ c.cycle }}&amp;status=all">All {{ c.cycle }} findings →</a></p>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2>Hypotheses</h2>
+  <p class="small muted">Recorded by the improvement cycle. Every one carries a source; none is ever applied
+     automatically.</p>
+  {% if hypotheses %}
+  <table><thead><tr><th>Idea</th><th>Status</th><th>Held out</th><th>Challenge</th></tr></thead><tbody>
+    {% for h in hypotheses %}
+    <tr>
+      <td><a href="{% url 'review-hypothesis' h.pk %}">{{ h.title }}</a>
+          <div class="small muted">{{ h.market }} · {{ h.created_at|et:'%b %d' }}</div></td>
+      <td><span class="badge {% if h.status == 'rejected' %}bad{% elif h.status == 'accepted' %}good{% endif %}">{{ h.get_status_display }}</span></td>
+      <td class="num">{% if h.test_result.per_day is not None %}{{ h.test_result.per_day|floatformat:3 }}/day{% else %}—{% endif %}</td>
+      <td class="small">{% if h.challenge.rejected %}{{ h.challenge.reasons|length }} objection{{ h.challenge.reasons|length|pluralize }}{% elif h.challenge %}survived{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody></table>
+  {% else %}<p class="empty">none recorded yet</p>{% endif %}
+</div>
+
+<div class="card">
+  <h2>Recent runs</h2>
+  <table><thead><tr><th>Started</th><th>Cycle</th><th>Trigger</th><th>Status</th><th class="num">Checks</th><th class="num">New</th><th class="num">Repeat</th><th class="num">Took</th></tr></thead><tbody>
+    {% for r in runs %}
+    <tr>
+      <td class="small">{{ r.started_at|et:'%b %d %H:%M:%S' }}</td>
+      <td>{{ r.cycle }}</td><td class="small">{{ r.trigger }}</td>
+      <td><span class="badge {% if r.status == 'ok' %}good{% elif r.status == 'failed' %}bad{% endif %}">{{ r.status }}</span></td>
+      <td class="num">{{ r.checks_run }}{% if r.checks_failed %} <span class="bad">({{ r.checks_failed }} crashed)</span>{% endif %}</td>
+      <td class="num">{{ r.findings_opened }}</td><td class="num">{{ r.findings_repeated }}</td>
+      <td class="num small">{{ r.duration_s|floatformat:1 }}s</td>
+    </tr>
+    {% endfor %}
+  </tbody></table>
+</div>
+{% endblock %}

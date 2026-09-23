@@ -392,7 +392,24 @@ artifact H4 was rejected for.
 Applying a softer standard here because the number came out positive would be the
 failure mode, not the exception. Rejected.
 
-## What seventeen hypotheses establish
+## H18 — cross-asset, and a near-miss worth recording
+
+The one structurally different idea left: every earlier hypothesis used a single
+asset's own history, while crypto trades when the stock market is shut, so BTC's
+move before the open is information that genuinely exists beforehand.
+
+The first run reported **t = 17.90, hit rate 62%, +61 bps a trade**. That is not
+an edge, it is a defect — it used BTC's SAME-DAY close-to-close return, which
+contains BTC's move during the equity session it was supposed to predict.
+Shifting to the strictly-prior day removed the look-ahead, and the effect with it:
+held out **−7.50 bps at t = −2.69**, and −14.50 and −21.50 at doubled and tripled
+cost. Negative in both directions.
+
+Kept in the log because the lesson is the reusable part: an implausibly good
+number is a bug until proven otherwise, and this one would have put a look-ahead
+artifact into production.
+
+## What eighteen hypotheses establish
 
 No credible positive net expectancy is available to this desk from price-based
 strategies on liquid instruments. That is not a failure to search — it is the

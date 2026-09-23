@@ -48,6 +48,10 @@ WINDOW_BARS = 420          # trailing bars loaded per symbol each tick
 # simply late.
 GRACE_S = {'alpaca': 10, 'yahoo': 20, 'synthetic': 1}
 REFRESH_BARS = 3           # re-fetch this many recent bars each tick so revisions replace partial ones
+# How often a fill may trigger an operational review. Short enough that a fault
+# is caught inside one bar on every lane, long enough that a busy bar does not
+# turn one review into twenty.
+REVIEW_EVERY = timedelta(minutes=5)
 SNAPSHOT_EVERY = timedelta(minutes=5)
 CONTROL_POLL_S = 2
 STRATEGY_CHECK_S = 60
@@ -182,6 +186,8 @@ class Agent:
                                        qty_increments=self.qty_increments, mode_is_live=(self.cfg.mode == Mode.LIVE),
                                        fee_bps=self.cfg.fee_bps())
             hydrate_broker(self.account, self.broker)
+        self._last_review = None
+        self._review_fill_mark = 0
         self.recorder = DBRecorder(self.account, self.instruments)
         self.engine = Engine(self.strategies, self.broker, engine_cfg, self.recorder, self.risk, narrator=self.narrator)
         # Risk state survives restarts: pick the day up where the last process left it.
@@ -414,6 +420,21 @@ class Agent:
             elif not cfg.kill_switch and self.risk.kill_switch:
                 self.risk.kill_switch = False
                 self.say('system', 'Kill switch reset — entries allowed again.')
+            # The operational reviewer's per-lane halt. Durable and cross-process,
+            # unlike risk.blocks, so it survives the restart that follows almost
+            # every incident. It stops NEW entries only: open positions keep their
+            # stops, because walking away from a live stop is worse than whatever
+            # tripped the check.
+            self.account.refresh_from_db(fields=['review_halt', 'review_halt_reason'])
+            if self.account.review_halt and 'review' not in self.risk.blocks:
+                why = self.account.review_halt_reason or 'a critical review check failed'
+                self.risk.blocks['review'] = f'operational review halted new entries: {why}'
+                self.say('risk', f'REVIEW HALT: {why}. No new entries; open positions stay managed.',
+                         phase='alert')
+                self.recorder.on_risk_event('review_halt', why[:300], now)
+            elif not self.account.review_halt and 'review' in self.risk.blocks:
+                self.risk.blocks.pop('review', None)
+                self.say('system', 'Review halt cleared — entries allowed again.')
             if cfg.trading_enabled != self.risk.trading_enabled:
                 self.risk.trading_enabled = cfg.trading_enabled
                 self.say('system', 'Trading ' + ('enabled' if cfg.trading_enabled else 'disabled') + ' in Settings.')
@@ -462,6 +483,34 @@ class Agent:
                 self.say('order', f'Operator rejected the {card.symbol} entry.', symbol=card.symbol, phase='submit', card_id=card.id)
         if expired or approved or rejected:
             persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
+
+    # --- the operational reviewer, on the executor's own heartbeat ------------
+    def _review_after_fills(self, now: datetime) -> None:
+        """Run the operational checks when something actually traded.
+
+        Event-driven rather than purely scheduled, because the interesting faults
+        — a duplicate order, books diverging, a position with no stop — appear at
+        the moment of a fill, not fifteen minutes later. Throttled, because a
+        busy bar must not turn one review into twenty, and it hands the live
+        broker handle over so the venue-facing checks genuinely run instead of
+        recording themselves as skipped.
+
+        Never raises into the trading loop. A reviewer that can stop the executor
+        is a reviewer that has become part of the executor.
+        """
+        fills = len(getattr(self.broker, 'fills', ()) or ())
+        if fills == self._review_fill_mark:
+            return
+        self._review_fill_mark = fills
+        if self._last_review and (now - self._last_review) < REVIEW_EVERY:
+            return
+        self._last_review = now
+        try:
+            from .review.runner import run_operational
+            run_operational(accounts=[self.account], trigger='event', broker=self.broker,
+                            now=now, next_due_at=now + REVIEW_EVERY)
+        except Exception:
+            log.exception('post-fill operational review failed')
 
     # --- broker reconciliation (paper/live) -----------------------------------
     def reconcile(self, now: datetime, announce: bool = False) -> bool:
@@ -666,6 +715,7 @@ class Agent:
         if self.mode in (Mode.PAPER, Mode.LIVE):
             self.reconcile(now)
         persist_broker(self.account, self.broker, self.instruments, risk=self.risk)
+        self._review_after_fills(now)
         if self.last_snapshot is None or now - self.last_snapshot >= SNAPSHOT_EVERY:
             self.engine.record_equity(now)
             self.last_snapshot = now

@@ -304,6 +304,14 @@ class Account(models.Model):
     last_reconcile_at = models.DateTimeField(null=True, blank=True)
     reconcile_ok = models.BooleanField(default=True)
     reconcile_note = models.CharField(max_length=300, blank=True)
+    # Set by the operational reviewer when a critical check fails. Blocks NEW
+    # entries only — open positions stay managed, because abandoning a live stop
+    # is more dangerous than the problem that tripped the check. Durable and
+    # per-lane, unlike risk.blocks, which lives in one process's memory, and
+    # gentler than AgentConfig.kill_switch, which flattens the whole desk.
+    review_halt = models.BooleanField(default=False)
+    review_halt_reason = models.CharField(max_length=300, blank=True)
+    review_halt_at = models.DateTimeField(null=True, blank=True)
     last_synced_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     reset_at = models.DateTimeField(null=True, blank=True)
@@ -1515,6 +1523,130 @@ class TradeCard(models.Model):
     @property
     def is_pending(self):
         return self.status in self.PENDING
+
+
+class ReviewRun(models.Model):
+    """One execution of one review cycle.
+
+    Two cycles, deliberately separate. The operational one asks "is the machine
+    doing what it was told"; the improvement one asks "is what it was told any
+    good". Mixing them produces a reviewer that quietly retunes a strategy in
+    response to a plumbing fault.
+    """
+    OPERATIONAL, IMPROVEMENT = 'operational', 'improvement'
+    CYCLES = [(OPERATIONAL, 'Operational'), (IMPROVEMENT, 'Improvement')]
+
+    cycle = models.CharField(max_length=12, choices=CYCLES)
+    trigger = models.CharField(max_length=10, default='schedule')   # schedule event manual
+    started_at = models.DateTimeField(default=timezone.now)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=10, default='running')     # running ok failed
+    checks_run = models.PositiveIntegerField(default=0)
+    checks_failed = models.PositiveIntegerField(default=0)
+    findings_opened = models.PositiveIntegerField(default=0)
+    findings_repeated = models.PositiveIntegerField(default=0)
+    actions = models.JSONField(default=list, blank=True)            # what it DID, not what it saw
+    error = models.TextField(blank=True)
+    summary = models.JSONField(default=dict, blank=True)
+    # So the app can show "next run" without knowing the schedule itself.
+    next_due_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-started_at']
+        indexes = [models.Index(fields=['cycle', '-started_at'])]
+
+    def __str__(self):
+        return f'{self.cycle} {self.started_at:%Y-%m-%d %H:%M} {self.status}'
+
+    @property
+    def duration_s(self) -> float:
+        return (self.finished_at - self.started_at).total_seconds() if self.finished_at else 0.0
+
+
+class ReviewFinding(models.Model):
+    """One problem, recorded once.
+
+    `fingerprint` is what makes a restart safe: the same fault seen again bumps
+    seen_count and last_seen_at instead of writing a second row, so a reviewer
+    that runs every fifteen minutes does not bury the operator in duplicates of
+    one unfixed thing — and does not forget it either.
+    """
+    CRITICAL, WARN, INFO = 'critical', 'warn', 'info'
+    SEVERITIES = [(CRITICAL, 'Critical'), (WARN, 'Warning'), (INFO, 'Info')]
+    OPEN, ACKED, RESOLVED = 'open', 'acknowledged', 'resolved'
+    STATUSES = [(OPEN, 'Open'), (ACKED, 'Acknowledged'), (RESOLVED, 'Resolved')]
+
+    cycle = models.CharField(max_length=12, default=ReviewRun.OPERATIONAL)
+    check_key = models.CharField(max_length=40)
+    severity = models.CharField(max_length=8, choices=SEVERITIES, default=WARN)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE, null=True, blank=True,
+                                related_name='review_findings')
+    fingerprint = models.CharField(max_length=120)
+    title = models.CharField(max_length=200)
+    detail = models.TextField(blank=True)
+    evidence = models.JSONField(default=dict, blank=True)
+    action_taken = models.CharField(max_length=60, blank=True)
+    first_seen_at = models.DateTimeField(default=timezone.now)
+    last_seen_at = models.DateTimeField(default=timezone.now)
+    seen_count = models.PositiveIntegerField(default=1)
+    first_run = models.ForeignKey(ReviewRun, on_delete=models.SET_NULL, null=True, blank=True,
+                                  related_name='opened_findings')
+    last_run = models.ForeignKey(ReviewRun, on_delete=models.SET_NULL, null=True, blank=True,
+                                 related_name='seen_findings')
+    status = models.CharField(max_length=14, choices=STATUSES, default=OPEN)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    # Whether the thing that was wrong is now right, checked by the same code
+    # that found it — "did the fix work" rather than "was a fix attempted".
+    resolution = models.CharField(max_length=200, blank=True)
+
+    class Meta:
+        ordering = ['-last_seen_at']
+        constraints = [models.UniqueConstraint(fields=['cycle', 'check_key', 'fingerprint'],
+                                               name='uniq_finding_fingerprint')]
+        indexes = [models.Index(fields=['status', '-last_seen_at'])]
+
+    def __str__(self):
+        return f'[{self.severity}] {self.title}'
+
+
+class Hypothesis(models.Model):
+    """A sourced idea about how to trade better, and everything that happened to it.
+
+    A hypothesis with no source is not recorded. The point of the improvement
+    cycle is to replace "the model suggested" with "this paper claims X, here is
+    the out-of-sample test, here is what an adversarial reviewer said about it".
+    """
+    PROPOSED, BACKTESTED, REJECTED, FORWARD, ACCEPTED = (
+        'proposed', 'backtested', 'rejected', 'forward_testing', 'accepted')
+    STATUSES = [(PROPOSED, 'Proposed'), (BACKTESTED, 'Backtested'), (REJECTED, 'Rejected'),
+                (FORWARD, 'Forward testing'), (ACCEPTED, 'Accepted')]
+
+    created_at = models.DateTimeField(default=timezone.now)
+    run = models.ForeignKey(ReviewRun, on_delete=models.SET_NULL, null=True, blank=True,
+                            related_name='hypotheses')
+    market = models.CharField(max_length=8, choices=Market.choices, default=Market.FOREX)
+    title = models.CharField(max_length=200)
+    claim = models.TextField()
+    # Required. A citation, a URL, or the exact in-app measurement it came from.
+    source = models.TextField()
+    rationale = models.TextField(blank=True)
+    status = models.CharField(max_length=16, choices=STATUSES, default=PROPOSED)
+    train_result = models.JSONField(default=dict, blank=True)
+    test_result = models.JSONField(default=dict, blank=True)     # out of sample
+    paper_result = models.JSONField(default=dict, blank=True)    # forward, paper only
+    challenge = models.JSONField(default=dict, blank=True)       # the adversarial verdict
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_note = models.TextField(blank=True)
+    # Nothing here is ever applied automatically. This records that a human did.
+    applied_at = models.DateTimeField(null=True, blank=True)
+    applied_by = models.CharField(max_length=80, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name_plural = 'hypotheses'
+
+    def __str__(self):
+        return f'{self.title} ({self.status})'
 
 
 class SymbolState(models.Model):

@@ -49,6 +49,26 @@ class DBRecorder(Recorder):
                 'fees': D(order.fees), 'error': order.error or '',
             },
         )
+        self._link_signal(order)
+
+    def _link_signal(self, order) -> None:
+        """Join the entry signal to the order it became.
+
+        Entries pass through a card that may wait for an operator, so the order
+        does not exist when the signal is written and `on_signal` receives None.
+        Nothing ever went back to fill it in, which left every entry in the books
+        as an intent with no execution beside it — 30 of 33 signals in one day.
+        The card id IS the client_order_id and bar_ts IS the signal ts, so this
+        join is exact rather than a guess.
+        """
+        if order is None or order.leg != 'entry' or not order.bar_ts:
+            return
+        row = Order.objects.filter(client_order_id=order.id).first()
+        if row is None:
+            return
+        Signal.objects.filter(account=self.account, instrument=row.instrument,
+                              strategy_key=order.strategy_key, ts=order.bar_ts,
+                              order__isnull=True).update(order=row)
 
     def on_signal(self, sig, strategy_key, decision, order):
         order_row = Order.objects.filter(client_order_id=order.id).first() if order is not None else None

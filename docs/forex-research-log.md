@@ -308,7 +308,35 @@ spent, because nothing was positive in sample.
 Even a venue at 10 bps instead of 56 recovers only about 5.5 points a year
 against a gap of 8 to 80.
 
-## What fourteen hypotheses establish
+## H15 — the dossier arm, and what its silence means
+
+The deep-research arm produces calibrated probabilities rather than a 1-10
+score, and it had never been examined. 66 dossiers exist, 2026-09-16 to 09-22.
+
+**It has never taken a directional position.** All 22 clean dossiers are
+`direction=none`. It is not broken; it is refusing.
+
+**Why it refuses is the finding.** Every dossier puts `p_positive_net` between
+0.23 and 0.37, mean 0.31. It consistently forecasts that a trade will not pay
+after costs. An independent LLM research pipeline, reasoning from headlines and
+filings rather than from price history, has reached the same conclusion as
+fourteen quantitative hypotheses: these trades do not clear the toll. That is
+corroboration, not a dead end.
+
+**The 44 "errors" are not errors.** 42 are the daily research budget running out,
+at $0.00 each because the guard refuses before spending. Two are real API
+failures. The pipeline works and is rationed:
+
+| budget | dossiers/day | days to n=300 | cost/month |
+|---|---:|---:|---:|
+| **$0.20 (current)** | 4.8 | **63** | $6 |
+| $1.00 | 24 | 13 | $30 |
+| $2.00 | 48 | 6 | $60 |
+
+That is the one decision that sets how fast the only live hypothesis can be
+tested, and it is the owner's — this reviewer may not change a spend limit.
+
+## What fifteen hypotheses establish
 
 No credible positive net expectancy is available to this desk from price-based
 strategies on liquid instruments. That is not a failure to search — it is the

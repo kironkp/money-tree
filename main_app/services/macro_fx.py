@@ -87,8 +87,17 @@ def pair_direction(usd: str) -> str:
     return {'up': 'sell', 'down': 'buy'}.get(usd, 'none')
 
 
-def route(session, stories=None, now=None) -> list[NewsVerdict]:
-    """Write one shadow forex verdict per (macro story x pair). Never trades."""
+def route(session, stories=None, now=None, provenance: str = 'contemporaneous') -> list[NewsVerdict]:
+    """Write one shadow forex verdict per (macro story x pair). Never trades.
+
+    `provenance` exists for one reason and must be used honestly. Routing stories
+    that are already in the database produces rows whose label was written by
+    rules I composed while looking at those very headlines — which is look-ahead,
+    however well-intentioned. Those rows are marked 'reconstructed', which the
+    promotion machinery already excludes from every statistic. They are good for
+    proving the plumbing works end to end and worthless as evidence, and the two
+    must never be confused.
+    """
     now = now or timezone.now()
     stories = list(stories if stories is not None else
                    NewsItem.objects.filter(published_at__gte=now - timezone.timedelta(days=1)))
@@ -111,7 +120,7 @@ def route(session, stories=None, now=None) -> list[NewsVerdict]:
                 tradable=False,
                 blocked_reason='shadow: macro->fx routing is collecting a sample, not trading',
                 event_key=event_key(pair, story.headline),
-                provenance='contemporaneous', arm='macro_fx'))
+                provenance=provenance, arm='macro_fx'))
     if rows:
         NewsVerdict.objects.bulk_create(rows, ignore_conflicts=True)
     log.info('macro->fx routed %d stories into %d shadow verdicts', len(rows) // len(PAIRS), len(rows))

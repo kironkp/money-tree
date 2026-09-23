@@ -257,6 +257,50 @@ Recorded as `forward_testing`, the first hypothesis this session not rejected.
 The actionable part is a REDUCTION rather than an edge: the acting threshold
 selects the losing half. Changing it is the owner's call.
 
+## H13 — the clearest result of the thirteen
+
+Conditional rather than always-on: act only when a pair has already moved past
+2.5 standard deviations in a day, then take the other side for three days. 24
+pairs, 24 years, 140,128 daily bars. Net of 3 bps throughout.
+
+**Train 2002-2014**, and the structure is exactly what the mechanism predicts —
+bigger overreaction, bigger reversal:
+
+| z > | hold 1 | hold 3 |
+|---|---:|---:|
+| 2.0 | +7.85 bps, t=4.38 | +9.66, t=3.71 |
+| 2.5 | +16.81, t=4.71 | +19.79, t=3.99 |
+| 3.0 | +28.91, t=4.39 | +28.89, t=3.20 |
+
+t above 4 on thousands of events, after costs.
+
+**Held out 2015-2026**, same parameters, one look:
+
+| cost | events | mean | t |
+|---|---:|---:|---:|
+| 3 bps | 1,609 | **−2.76 bps** | −0.84 |
+| 6 bps | 1,609 | −5.76 | −1.75 |
+| 9 bps | 1,609 | −8.76 | −2.66 |
+
+Gone. And the opposite sign loses too (−3.24 bps), so there is no direction left
+to take — the toll simply exceeds whatever remains.
+
+**This one is not noise-fitting.** t=4.71 on 1,536 events is not a fluke that a
+grid search manufactured; the effect was real in 2002-2014 and is absent in
+2015-2026. That is decay, and it is the most economically coherent result in the
+whole log: short-horizon FX overreaction was tradeable before algorithmic
+market-making became ubiquitous, and it has been competed away.
+
+## What thirteen hypotheses establish
+
+No credible positive net expectancy is available to this desk from price-based
+strategies on liquid instruments. That is not a failure to search — it is the
+answer, and H13 shows the mechanism: the effects that were real have decayed.
+
+The one live thread is H12, and it is live precisely because it is NOT
+price-based: the news verdicts carry positive market-adjusted returns and the
+score ranks them backwards. Its sample grows on its own.
+
 ## Next
 
 1. **Re-run H12 when the corpus reaches a few hundred verdicts.** The news agent

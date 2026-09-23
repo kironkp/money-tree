@@ -174,21 +174,54 @@ USD/NOK, USD/SEK) makes it BETTER, not worse — +1.44% at 3 bps, Sharpe 0.69. S
 it is not an execution artifact. lookback=30 was picked deliberately over the
 argmax at 20.
 
-**And it is not significant.** t = 1.05 against the 2.02 needed at n=43 monthly
-periods. Bootstrap 95% CI on the mean is [−10.23, +32.28] bps, so the lower bound
-does not clear zero and the challenger rejected it on exactly that. At Sharpe
-0.56 reaching t=2 would take roughly 13 years of held-out data.
+It was not significant — t = 1.05 against the 2.02 needed at n=43. So rather than
+defer that, the evidence was extended.
 
-That is the honest position: the first candidate with positive net expectancy out
-of sample after realistic and stressed costs, at a magnitude too small to call
-credible on the evidence available.
+## H11 confirmed dead on 12 years never previously loaded
+
+The Yahoo daily history cap turned out to be **ours, not the provider's**: a
+hardcoded 3650 days in `data/yahoo.py` silently truncated every request for more.
+The intraday caps there are real and were kept; the daily one was a default
+pretending to be a limit. Lifting it loaded FX dailies back to 2002 — 6,419 bars
+a pair instead of 2,600.
+
+Parameters frozen on 2016-2022, nothing searched, applied to 2003-2015:
+
+| window | periods | annualised | Sharpe | t |
+|---|---:|---:|---:|---:|
+| 2003-2015 (never seen) | 138 | **−0.95%** | −0.21 | −0.71 |
+| at 2x cost | 138 | −1.31% | −0.29 | −0.98 |
+| at 3x cost | 138 | −1.66% | −0.37 | −1.25 |
+| 2023-2026 (the earlier look) | 43 | +1.18% | +0.56 | +1.05 |
+| **pooled out-of-sample** | **181** | **−0.45%** | **−0.11** | **−0.43** |
+
+The +1.18% was noise. n=43 could not tell; n=181 can. A well-powered negative is
+worth more than an underpowered positive, and this is the first result all
+session with enough sample to settle anything.
+
+## Where twelve hypotheses leave it
+
+No candidate has credible positive net expectancy after costs. What is
+established rather than guessed:
+
+- **Signals carry real information.** At zero cost, all four hourly forex
+  candidates are positive out of sample (gross PF 1.05-1.14).
+- **Cost is the binding constraint**, confirmed on held-out data across four
+  independent strategies.
+- **Horizon is worth 25-45x** more than any filter or parameter tried.
+- **Crypto and degen cannot work intraday at all** — at one hour the typical move
+  does not pay the toll. That explains the degen lane's -$3,288 without any
+  strategy research.
+- **The monthly FX reversion that survived one window does not survive two.**
 
 ## Next
 
-1. **Forward-test H11 on paper.** It is the only candidate that has earned one.
-   It needs engine support for a cross-sectional, monthly-rebalanced book, which
-   the current per-symbol engine does not have.
-2. Extend the held-out window backwards: 2016-2022 was the search half, but FX
-   daily data exists well before 2016 and would roughly double the evidence.
-3. Re-read every equity result here against a benchmark; several were scored
+1. Re-read every equity result here against a benchmark; several were scored
    against zero before `REQUIRE_BENCHMARK` existed.
+2. The equity universe now has 66 names and 10 years but was only tested at
+   daily-and-longer horizons on the cross-section. The move/toll table says
+   equities at multi-day horizons is the best ratio available; H7 and H8 tested
+   that badly (no benchmark, and a survivorship-biased universe) and it deserves
+   one honest attempt.
+3. Nothing here should reach paper until a candidate clears a window it has not
+   been fitted to. None has.

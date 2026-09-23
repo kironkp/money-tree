@@ -116,3 +116,19 @@ class ImpossiblePricesAreDropped(SimpleTestCase):
         df.iloc[150, df.columns.get_loc('low')] = 0.0001
         _, rep = quality_gate(df, '15Min', 'crypto')
         self.assertEqual(rep.dropped_outliers, 1)
+
+
+class YahooDailyHistoryIsNotCappedAtTenYears(SimpleTestCase):
+    """The intraday caps are Yahoo's and are real. The daily one was ours: a
+    hardcoded 3650-day floor truncated every request for more history, which is
+    the one resource the research is short of."""
+
+    def test_intraday_caps_are_kept(self):
+        from main_app.services.data.yahoo import INTRADAY_LOOKBACK
+        self.assertEqual(INTRADAY_LOOKBACK['1Min'].days, 7)
+        self.assertEqual(INTRADAY_LOOKBACK['1Hour'].days, 729)
+
+    def test_daily_reaches_back_further_than_a_decade(self):
+        from main_app.services.data.yahoo import DAILY_FLOOR, INTRADAY_LOOKBACK
+        self.assertNotIn('1Day', INTRADAY_LOOKBACK)
+        self.assertGreater(DAILY_FLOOR.days, 3650)

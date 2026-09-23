@@ -14,8 +14,15 @@ from .providers import BarProvider, empty_frame, normalize_frame
 
 log = logging.getLogger('moneytree.data.yahoo')
 
+# Yahoo's real limits, and only its real limits. Intraday history is genuinely
+# capped at these windows, so a request past them returns nothing useful.
 INTRADAY_LOOKBACK = {'1Min': timedelta(days=7), '5Min': timedelta(days=59), '15Min': timedelta(days=59),
                      '30Min': timedelta(days=59), '1Hour': timedelta(days=729)}
+# Daily bars have no such cap — yfinance serves FX and equity dailies back two
+# decades. A hardcoded ten-year floor here silently truncated every request for
+# more, which is a different thing from a provider limit and was costing the one
+# resource the research is short of.
+DAILY_FLOOR = timedelta(days=30 * 365)
 
 
 def yahoo_symbol(symbol: str, asset_class: str = 'stock') -> str:
@@ -34,7 +41,7 @@ class YahooProvider(BarProvider):
         import yfinance as yf
 
         now = datetime.now(UTC)
-        floor = now - INTRADAY_LOOKBACK.get(timeframe, timedelta(days=3650))
+        floor = now - INTRADAY_LOOKBACK.get(timeframe, DAILY_FLOOR)
         start = max(start, floor + timedelta(minutes=1))
         if start >= end:
             return empty_frame()

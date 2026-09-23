@@ -36,6 +36,12 @@ class RiskConfig:
     # Do not turn the last scraps of capacity into statistical noise. A trade
     # must receive at least this share of the size implied by risk/allocation.
     min_entry_size_pct: float = 10.0
+    # Refuse an entry priced off a bar this many bars old. The feed stopping
+    # entirely is already fail-closed — process_bar is simply never called — but
+    # a provider that keeps answering with an old bar is not, and that is the
+    # shape data faults usually take. Zero disables it (backtests and replay,
+    # where every bar is legitimately historical).
+    max_bar_age_bars: float = 3.0
 
     @classmethod
     def from_model(cls, cfg, market: str = 'stocks') -> 'RiskConfig':
@@ -173,6 +179,12 @@ class RiskManager:
                 why = ''
             if why:
                 return Decision(False, reason=why)
+        # Stale data, checked before sizing rather than after the fact. The
+        # operational reviewer catches this too, but by then the order is out.
+        age = (ctx.extra or {}).get('bar_age_bars')
+        if c.max_bar_age_bars > 0 and age is not None and age > c.max_bar_age_bars:
+            return Decision(False, reason=f'stale data: the bar is {age:.1f} bars old '
+                                          f'(limit {c.max_bar_age_bars:g})')
         if sig.symbol in (pending_symbols or set()):
             return Decision(False, reason='an entry is already pending for this symbol')
         live = [p for p in positions.values() if p.qty != 0]

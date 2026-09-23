@@ -150,3 +150,32 @@ class RiskManagerCapsSharedDirectionalExposure(SimpleTestCase):
         blocked = self.rm.evaluate(entry, ctx(None, 'EUR/USD', 'forex'), acct(cash=50), {}, 'forex')
         self.assertFalse(blocked.allowed)
         self.assertIn('undersized position', blocked.reason)
+
+
+class StaleDataIsRefusedBeforeSizingNotAfterTheOrder(SimpleTestCase):
+    """A feed that stops is already fail-closed: process_bar is never called. A
+    provider that keeps answering with an OLD bar is not, and that is the shape
+    data faults usually take."""
+
+    def _decide(self, age, limit=3.0):
+        c = ctx()
+        c.extra = {'bar_age_bars': age}
+        return RiskManager(RiskConfig(max_bar_age_bars=limit)).evaluate(sig(), c, acct(), {}, 'stock')
+
+    def test_a_fresh_bar_passes(self):
+        self.assertTrue(self._decide(0.4).allowed)
+
+    def test_a_bar_past_the_limit_is_refused_and_says_why(self):
+        d = self._decide(9.0)
+        self.assertFalse(d.allowed)
+        self.assertIn('stale data', d.reason)
+        self.assertIn('9.0 bars old', d.reason)
+
+    def test_the_gate_can_be_switched_off_for_windows_that_are_meant_to_be_historical(self):
+        self.assertTrue(self._decide(500.0, limit=0).allowed)
+
+    def test_no_measurement_is_not_treated_as_a_failure(self):
+        """A backtest reports None. Refusing on a missing measurement would
+        refuse the entire past."""
+        d = RiskManager(RiskConfig()).evaluate(sig(), ctx(), acct(), {}, 'stock')
+        self.assertTrue(d.allowed)

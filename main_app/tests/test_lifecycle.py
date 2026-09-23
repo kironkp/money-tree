@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 
 from main_app.services.broker.base import OrderReq
 from main_app.services.broker.sim import SimBroker
@@ -85,15 +86,21 @@ class Intruder(Strategy):
         return [Signal('close', ctx.symbol, ctx.ts, float(bar.close), reason='intruder')] if i >= 1 else []
 
 
-def run_engine(strategies, cfg=None, bars=None):
+def run_engine(strategies, cfg=None, bars=None, live_clock=False):
+    """`live_clock` stamps the bars against the wall clock instead of the fixed
+    T0. A live-mode engine refuses entries priced off a stale bar, so a test that
+    exercises the live path has to supply bars a live agent could actually see —
+    fixed timestamps three weeks in the past are exactly what that gate is for."""
     broker = SimBroker(10000, immediate_fills=True, slippage_bps=0, fee_bps={'stock': 0})
     rec = MemoryRecorder()
     engine = Engine(strategies, broker, cfg or EngineConfig(mode='t'), rec, RiskManager(RiskConfig()))
     rows = bars or [bar(100, 101, 99, 100), bar(100, 101, 99, 100.5), bar(100.5, 101, 99.5, 101)]
+    base = timezone.now() - timedelta(minutes=5 * len(rows)) if live_clock else T0
     for i, r in enumerate(rows):
         r.bar_pos = i
-        engine.process_bar('X', T(5 * i), r, {s.key: r for s in strategies}, {s.key: None for s in strategies}, i, 200.0)
-        engine.settle(upto_ts=T(5 * i))
+        ts = base + timedelta(minutes=5 * i)
+        engine.process_bar('X', ts, r, {s.key: r for s in strategies}, {s.key: None for s in strategies}, i, 200.0)
+        engine.settle(upto_ts=ts)
     return engine, broker, rec
 
 
@@ -166,16 +173,18 @@ class CardsFollowTheTrade(SimpleTestCase):
 
     def test_approval_mode_holds_the_entry_then_expires(self):
         cfg = EngineConfig(mode='live', confirm_entries=True, confirm_minutes=3)
-        engine, broker, rec = run_engine([Owner()], cfg, bars=[bar(100, 101, 99, 100)])
+        engine, broker, rec = run_engine([Owner()], cfg, bars=[bar(100, 101, 99, 100)], live_clock=True)
         self.assertNotIn('X', broker.positions)
         card = next(iter(engine.cards.values()))
         self.assertEqual(card.status, 'awaiting_approval')
-        self.assertEqual(engine.expire_cards(T(4)), 1)
+        # The card's clock now runs with the bars', so expiry is checked against
+        # the same wall clock a live agent would use.
+        self.assertEqual(engine.expire_cards(timezone.now()), 1)
         self.assertEqual(card.status, 'expired')
 
     def test_approved_card_submits_and_fills(self):
         cfg = EngineConfig(mode='live', confirm_entries=True, confirm_minutes=3)
-        engine, broker, rec = run_engine([Owner()], cfg, bars=[bar(100, 101, 99, 100)])
+        engine, broker, rec = run_engine([Owner()], cfg, bars=[bar(100, 101, 99, 100)], live_clock=True)
         card = next(iter(engine.cards.values()))
         engine.submit_card(card.id, T(1))
         self.assertEqual(card.status, 'protected')

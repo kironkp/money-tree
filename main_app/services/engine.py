@@ -192,6 +192,18 @@ class Engine:
     def observing(self) -> bool:
         return self.narrator is not None
 
+    def _bar_age_bars(self, ts: datetime) -> float | None:
+        """How many bars behind the wall clock this bar is, or None.
+
+        Only meaningful when the loop is following the market. In a backtest or
+        a replay every bar is deliberately historical, so returning None there
+        keeps the staleness gate from refusing the entire past.
+        """
+        if self.cfg.mode not in ('sim', 'paper', 'live'):
+            return None
+        from django.utils import timezone as _tz
+        return max(0.0, (_tz.now() - ts).total_seconds() / 60.0 / max(1, self.tfm))
+
     def asset_class(self, symbol: str) -> str:
         return self.cfg.asset_classes.get(symbol, 'stock')
 
@@ -363,7 +375,7 @@ class Engine:
             self.last_acted[key] = ts
             ctx = Context(symbol=symbol, asset_class=asset_class, timeframe=self.cfg.timeframe, ts=ts,
                           position=self.position_view(symbol, strat.key), bar_pos=int(getattr(row, 'bar_pos', 0)),
-                          minutes_to_close=mtc_val)
+                          minutes_to_close=mtc_val, extra={'bar_age_bars': self._bar_age_bars(ts)})
             rules: list[Rule] = []
             if self.observing:
                 try:

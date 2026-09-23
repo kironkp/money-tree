@@ -313,6 +313,45 @@ def _check_unfilled_protection(ctx: Ctx, rec) -> None:
                    fp_parts=('position_without_stop', ctx.account.pk, p.instrument.symbol))
 
 
+def _check_missed_quarantine(ctx: Ctx, rec) -> None:
+    """A strategy the desk's own promotion rules have already failed, still trading.
+
+    `qualification_assessment` is the existing verdict machinery. It is consulted
+    when somebody opens a page and when the nightly job runs, so a strategy can
+    sit at "measured no edge" for days while continuing to take positions,
+    because nothing compares that verdict against the stored state.
+
+    The reviewer raises it and stops there. Quarantining a strategy is a change
+    to strategy configuration, which review cycles may not make — readonly_config
+    would crash this run if it tried. Deciding is the owner's.
+    """
+    from main_app.models import Strategy as SModel
+    from main_app.services.promotion import qualification_assessment
+    for row in SModel.objects.filter(market=ctx.account.market):
+        try:
+            a = qualification_assessment(row, ctx.account)
+        except Exception as exc:
+            log.warning('assessment failed for %s/%s: %r', ctx.account.market, row.key, exc)
+            continue
+        if a.get('state') != 'quarantine' or row.qualification == 'quarantine':
+            continue
+        stats = a.get('stats') or {}
+        rec.record('missed_quarantine',
+                   ReviewFinding.CRITICAL if row.enabled else ReviewFinding.WARN,
+                   f'{ctx.account.market}/{row.key} is marked {row.qualification} but assesses as quarantine',
+                   f'{a.get("reason", "")} The strategy is '
+                   f'{"ENABLED and trading" if row.enabled else "disabled"}. The desk\'s own promotion '
+                   f'rules have already failed it and nothing acted on that. Quarantining it is a '
+                   f'configuration change, which this reviewer may not make.',
+                   account=ctx.account,
+                   evidence={'strategy': row.key, 'stored': row.qualification,
+                             'assessed': a.get('state'), 'enabled': row.enabled,
+                             'reason': a.get('reason', ''),
+                             'stats': {k: stats.get(k) for k in
+                                       ('trades', 'profit_factor', 'expectancy', 'net_pnl')}},
+                   fp_parts=('missed_quarantine', ctx.account.pk, row.key))
+
+
 CHECKS = {
     'duplicate_order': _check_duplicate_orders,
     'intent_vs_broker': _check_intent_vs_broker,
@@ -323,6 +362,7 @@ CHECKS = {
     'costs': _check_costs,
     'repeated_errors': _check_repeated_errors,
     'protection': _check_unfilled_protection,
+    'missed_quarantine': _check_missed_quarantine,
 }
 
 # Which critical findings stop new entries.
@@ -352,4 +392,5 @@ RAISES = {
     'costs': ['abnormal_costs'],
     'repeated_errors': ['repeated_errors'],
     'protection': ['position_without_stop'],
+    'missed_quarantine': ['missed_quarantine'],
 }

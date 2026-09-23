@@ -448,3 +448,56 @@ class TheAuditTrailJoinsIntentToExecution(ReviewCase):
         self.run_ops()
         self.assertTrue(self.findings('intent_without_order').exists())
         self.assertFalse(self.findings('signal_order_unlinked').exists())
+
+
+class AStrategyTheDeskHasAlreadyFailedIsNotLeftTrading(ReviewCase):
+    """qualification_assessment is consulted when a page is opened and when the
+    nightly job runs, so a strategy can sit at "measured no edge" for days while
+    still taking positions, because nothing compares the verdict with the stored
+    state. Both forex strategies were in exactly that position."""
+
+    def _strategy(self, enabled=True, qualification='unproven'):
+        return Strategy.objects.create(key='ema_momentum', market='forex', enabled=enabled,
+                                       qualification=qualification, params={}, symbols=['EUR/USD'])
+
+    def _assess_as(self, state, reason='measured no edge after 39 trades: PF 0.65'):
+        from main_app.services.review import operational as O
+        import main_app.services.promotion as P
+        self._orig = P.qualification_assessment
+        P.qualification_assessment = lambda row, acct: {
+            'state': state, 'reason': reason,
+            'stats': {'trades': 39, 'profit_factor': 0.65, 'expectancy': -7.48, 'net_pnl': -292.0}}
+        self.addCleanup(lambda: setattr(P, 'qualification_assessment', self._orig))
+
+    def test_a_failed_strategy_still_enabled_is_critical(self):
+        self._strategy()
+        self._assess_as('quarantine')
+        self.run_ops()
+        f = self.findings('missed_quarantine').get()
+        self.assertEqual(f.severity, ReviewFinding.CRITICAL)
+        self.assertIn('ENABLED and trading', f.detail)
+        self.assertEqual(f.evidence['stats']['profit_factor'], 0.65)
+
+    def test_a_failed_strategy_already_disabled_is_only_a_warning(self):
+        self._strategy(enabled=False)
+        self._assess_as('quarantine')
+        self.run_ops()
+        self.assertEqual(self.findings('missed_quarantine').get().severity, ReviewFinding.WARN)
+
+    def test_a_strategy_already_quarantined_raises_nothing(self):
+        self._strategy(qualification='quarantine', enabled=False)
+        self._assess_as('quarantine')
+        self.run_ops()
+        self.assertFalse(self.findings('missed_quarantine').exists())
+
+    def test_the_reviewer_reports_it_and_does_not_quarantine_it_itself(self):
+        """Changing qualification is a configuration change. The guard would
+        crash the run if the check tried, and the strategy must come out
+        untouched."""
+        row = self._strategy()
+        self._assess_as('quarantine')
+        run = self.run_ops()
+        self.assertEqual(run.status, 'ok')
+        row.refresh_from_db()
+        self.assertEqual(row.qualification, 'unproven')
+        self.assertTrue(row.enabled)

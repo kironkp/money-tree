@@ -84,6 +84,16 @@ class FxTrend(Strategy):
                            reason=f'downtrend {ta:.1f} ATR over {int(self.p["lookback_h"])}h')]
         return []
 
+    def on_session_end(self, symbol: str) -> None:
+        """Keep the cooldown across the day boundary.
+
+        The base class clears a strategy's state at every session end, and a
+        forex session is one day, so `cooldown_h` was wiped nightly and any value
+        above 24 was silently identical to 24. Four different cooldowns produced
+        byte-identical backtests, which is what exposed it. A cooldown that
+        cannot outlive a day is not a cooldown.
+        """
+
     def rules(self, ctx: Context, bar) -> list[Rule]:
         ta = float(getattr(bar, 'trend_atr', float('nan')) or float('nan'))
         need = float(self.p['min_move_atr'])

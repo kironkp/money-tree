@@ -165,3 +165,22 @@ class OrbHonoursItsConfig(SimpleTestCase):
 
     def test_breakdown_is_left_alone_when_the_flag_is_off(self):
         self.assertEqual(self._signals(False), [])
+
+
+class ACooldownMustOutliveTheSession(SimpleTestCase):
+    """Strategy.on_session_end clears state, and a forex session is one day, so a
+    cooldown expressed in hours was wiped nightly: 72h, 168h and 504h all behaved
+    as 24h and produced byte-identical backtests. That identity is what exposed
+    it — a parameter that changes nothing is either useless or broken."""
+
+    def test_fx_trend_keeps_its_cooldown_across_the_day_boundary(self):
+        s = STRATEGIES['fx_trend']({'cooldown_h': 72})
+        s.symbol_state('EUR/USD')['last_entry_bar'] = 5
+        s.on_session_end('EUR/USD')
+        self.assertEqual(s.symbol_state('EUR/USD').get('last_entry_bar'), 5)
+
+    def test_a_strategy_that_wants_state_cleared_still_gets_it(self):
+        s = STRATEGIES['orb']({})
+        s.symbol_state('QQQ')['traded_session'] = 'x'
+        s.on_session_end('QQQ')
+        self.assertEqual(s.symbol_state('QQQ'), {})

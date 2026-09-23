@@ -144,13 +144,51 @@ the held-out window was not spent. The 58-trade liquid slice is a favourable CUT
 of a run, not a strategy — blocking rollover entries frees slots and cooldowns,
 so the restricted version takes 700+ different trades and loses.
 
+## H11 — the first candidate to survive out of sample
+
+Everything above died on cost. So the design was changed to one where cost cannot
+decide the answer: rebalance MONTHLY, not hourly. Twelve round trips a year
+against three hundred.
+
+Also fixed the other binding constraint — data. 60,265 daily FX bars synced
+across 24 pairs over 10 years, roughly 25x what four pairs of hourly bars over
+two years provided. And a daily bar is struck at the New York close, so the
+unknown 21:00-01:00 rollover spread that decided H4 stops mattering entirely.
+
+Momentum first, as the null: uniformly negative across 12 well-powered cells
+(7,536 positions each). A consistent negative sign is evidence for the opposite,
+so the sign was flipped.
+
+**Held out 2023-01-01..2026-09-22, lookback 30, hold 21, one look:**
+
+| round-trip cost | annualised | Sharpe | hit |
+|---|---:|---:|---:|
+| 3 bps (assumed) | **+1.18%** | 0.56 | 53.5% |
+| 6 bps (doubled) | **+0.81%** | 0.38 | 53.5% |
+| 9 bps (tripled) | **+0.45%** | 0.21 | 51.2% |
+| 15 bps (5x) | −0.27% | −0.13 | 46.5% |
+
+Robust in the ways that matter: four of five neighbouring lookbacks are also
+positive out of sample, and dropping the three widest-spread pairs (USD/MXN,
+USD/NOK, USD/SEK) makes it BETTER, not worse — +1.44% at 3 bps, Sharpe 0.69. So
+it is not an execution artifact. lookback=30 was picked deliberately over the
+argmax at 20.
+
+**And it is not significant.** t = 1.05 against the 2.02 needed at n=43 monthly
+periods. Bootstrap 95% CI on the mean is [−10.23, +32.28] bps, so the lower bound
+does not clear zero and the challenger rejected it on exactly that. At Sharpe
+0.56 reaching t=2 would take roughly 13 years of held-out data.
+
+That is the honest position: the first candidate with positive net expectancy out
+of sample after realistic and stressed costs, at a magnitude too small to call
+credible on the evidence available.
+
 ## Next
 
-1. **Get a real spread schedule from a venue for 21:00-01:00 UTC on the four
-   majors.** One number against 2.91x settles the strongest candidate either way.
-   Nothing else in this queue is worth as much.
-2. Re-read every equity result here against a benchmark; several were scored
+1. **Forward-test H11 on paper.** It is the only candidate that has earned one.
+   It needs engine support for a cross-sectional, monthly-rebalanced book, which
+   the current per-symbol engine does not have.
+2. Extend the held-out window backwards: 2016-2022 was the search half, but FX
+   daily data exists well before 2016 and would roughly double the evidence.
+3. Re-read every equity result here against a benchmark; several were scored
    against zero before `REQUIRE_BENCHMARK` existed.
-3. If the rollover spread comes back above 2.91x, the remaining question is
-   whether a signal exists that trades the liquid window natively rather than as
-   a residue of one that does not.

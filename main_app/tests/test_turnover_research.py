@@ -7,7 +7,7 @@ enough" on a gate — is the same failure one layer down, where nobody looks.
 """
 import json
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -143,3 +143,77 @@ class TheResearchIsRecordedAgainstAHypothesis(TestCase):
         self.assertIn('argmax', reg['what_is_not_claimed'])
         self.assertEqual(len(reg['candidates']), len(CANDIDATES))
         self.assertEqual(set(reg['strategies']), set(STRATEGIES))
+
+
+class NoSpentBarReachesTheEngine(TestCase):
+    """The leak that invalidated the first MT-A003 run.
+
+    `load_frames` takes an inclusive end DATE and expands it across the ET session
+    day, so asking for 2026-09-08 returned bars to 2026-09-09 03:45 UTC — 112
+    fifteen-minute and 28 hourly bars inside the window MT-A001 spent. Filtering
+    ENTRIES at the boundary was not enough: a position still open at midnight
+    exited on those bars, so spent data priced five of twelve rows.
+
+    Third time on this desk a window has been given a start and no end, so this
+    test watches the frames actually handed to the engine rather than a helper
+    that could drift away from the call site.
+    """
+    N_STRATS, N_CANDIDATES = len(STRATEGIES), len(CANDIDATES)
+
+    def setUp(self):
+        from main_app.models import Hypothesis, Strategy
+        for key in STRATEGIES:
+            Strategy.objects.get_or_create(key=key, market='forex',
+                                           defaults={'timeframe': '15Min', 'params': {},
+                                                     'enabled': True})
+        self.h = Hypothesis.objects.create(market='forex', title='MT-A003 test',
+                                           claim='x', source='test')
+        self.folder = Path(tempfile.mkdtemp())
+        (self.folder / 'p.json').write_text(json.dumps(
+            {'registered_at': '2026-09-24T22:44:23+00:00', 'hypothesis_id': self.h.id}))
+        self.seen = []
+
+    def _frames(self, symbols, timeframe, start, end):
+        import pandas as pd
+        freq = '15min' if timeframe == '15Min' else '1h'
+        idx = pd.date_range(TRAIN_END - timedelta(days=12), TRAIN_END + timedelta(days=2),
+                            freq=freq, tz='UTC')
+        return {s: pd.DataFrame({'close': [1.1] * len(idx)}, index=idx) for s in symbols}
+
+    def _capture(self, key, params, over, frames, start, end, **kw):
+        self.seen.append(frames)
+        return [], 0.3
+
+    def _run(self):
+        mod = 'main_app.management.commands.turnover_research'
+        with mock.patch(f'{mod}.PREREG', str(self.folder / 'p.json')), \
+             mock.patch(f'{mod}.RESULTS', str(self.folder / 'r.json')), \
+             mock.patch('main_app.services.backtest.load_frames', side_effect=self._frames), \
+             mock.patch('main_app.management.commands.h10_forward.run_window',
+                        side_effect=self._capture):
+            call_command('turnover_research', '--run', verbosity=0)
+
+    def test_the_fixture_actually_contains_bars_past_the_boundary(self):
+        """Guards the guard. If the fixture held no spent bars, the assertion below
+        would pass against the leaking code too and prove nothing."""
+        raw = self._frames(['EUR/USD'], '15Min', None, None)['EUR/USD']
+        self.assertGreater(int((raw.index >= TRAIN_END).sum()), 0,
+                           'fixture has no bars past TRAIN_END — the test would be vacuous')
+
+    def test_no_bar_at_or_after_the_train_end_is_handed_to_the_engine(self):
+        self._run()
+        self.assertEqual(len(self.seen), self.N_STRATS * self.N_CANDIDATES * 2,
+                         'not every candidate ran; the assertion below would be partial')
+        for frames in self.seen:
+            for sym, df in frames.items():
+                spent = df.index[df.index >= TRAIN_END]
+                self.assertEqual(len(spent), 0,
+                                 f'{sym}: {len(spent)} spent bar(s) reached the engine, '
+                                 f'first {spent[0] if len(spent) else "-"}')
+
+    def test_the_engine_still_receives_a_usable_train_window(self):
+        """A truncation that cut everything would also pass the test above."""
+        self._run()
+        for frames in self.seen:
+            for df in frames.values():
+                self.assertGreater(len(df), 40, 'truncation left too little to warm up on')

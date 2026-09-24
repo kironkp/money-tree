@@ -74,6 +74,23 @@ MIN_NET_PF_AT_2X = 1.0      # must still make money if the toll doubles
 SELECT_ON = 'net_1x'        # the single ranking statistic
 
 
+def train_frames(frames: dict) -> dict:
+    """Every bar the engine may see, cut strictly before TRAIN_END.
+
+    `load_frames` takes an inclusive end DATE and expands it to cover the whole ET
+    session day, so asking for 2026-09-08 returns bars to 2026-09-09 03:45 UTC —
+    112 fifteen-minute bars and 28 hourly ones inside the window MT-A001 spent.
+    Filtering entries at the boundary is not enough: a position still open at
+    midnight exits on those bars, so spent data prices the result.
+
+    This is the third time on this desk a window has been given a start and no end.
+    Warm-up was once consumed inside a test window, `act_from` was once set with no
+    `act_until`, and run_window's own docstring says both are required. Hence a
+    named function and a test that watches what actually reaches the engine.
+    """
+    return {sym: df[df.index < TRAIN_END] for sym, df in frames.items()}
+
+
 def registration(now) -> dict:
     return {
         'assignment': 'MT-A003',
@@ -202,8 +219,11 @@ class Command(BaseCommand):
         # not a turnover effect. So every candidate is judged on one common entry
         # calendar: the latest warm-up boundary across all of them, which is the
         # 15Min one. Reported, not assumed.
-        frames = {'15Min': load_frames(list(PAIRS), '15Min', date(2026, 7, 1), TRAIN_END.date()),
-                  '1Hour': load_frames(list(PAIRS), '1Hour', date(2026, 1, 1), TRAIN_END.date())}
+        frames = {
+            '15Min': train_frames(load_frames(list(PAIRS), '15Min', date(2026, 7, 1),
+                                              TRAIN_END.date())),
+            '1Hour': train_frames(load_frames(list(PAIRS), '1Hour', date(2026, 1, 1),
+                                              TRAIN_END.date()))}
         warm = max(make_strategy(k, live[k]).warmup_bars for k in STRATEGIES)
         entry_from = max(sorted(df.index[df.index < TRAIN_END])[warm].to_pydatetime()
                          for df in frames['15Min'].values())
@@ -211,21 +231,42 @@ class Command(BaseCommand):
         bars = {tf: {sym: int(((df.index >= entry_from) & (df.index < TRAIN_END)).sum())
                      for sym, df in fr.items()} for tf, fr in frames.items()}
 
-        rows, first_result_at = [], None
+        rows = []
+        # Stamped BEFORE the first run, so it bounds the earliest moment any result
+        # could exist rather than the moment the first one finished.
+        first_result_at = datetime.now(timezone.utc).isoformat()
         for key in STRATEGIES:
             for name, tf, over, why in CANDIDATES:
                 trades, slip = run_window(key, dict(live[key]), dict(over), frames[tf],
                                           entry_from, TRAIN_END, timeframe=tf, pairs=PAIRS)
                 t2, _ = run_window(key, dict(live[key]), dict(over), frames[tf],
                                    entry_from, TRAIN_END, cost_mult=2.0, timeframe=tf, pairs=PAIRS)
-                if first_result_at is None:
-                    first_result_at = datetime.now(timezone.utc).isoformat()
+                # Belt and braces. The frames are already cut, so this can only fire
+                # if that truncation is ever removed — which is exactly when it matters.
+                late = [t for t in trades + t2 if t.entry_ts >= TRAIN_END]
+                if late:
+                    raise CommandError(
+                        f'{key}/{name}: {len(late)} entry(ies) at or after {TRAIN_END:%Y-%m-%d}, '
+                        f'the window MT-A001 spent. Refusing to record a contaminated row.')
                 rows.append({'strategy': key, 'candidate': name, 'timeframe': tf,
                              'risk_override': over, 'what': why,
                              **_stats(trades, slip), **_at2x(t2)})
 
         winners = {k: _select(k, rows) for k in STRATEGIES}
+        # A re-run must say what it replaced. The first MT-A003 run was contaminated
+        # by bars inside the spent window, and a silent overwrite would have left no
+        # trace of a figure that had already been reported.
+        superseded = []
+        if os.path.exists(RESULTS):
+            prev = json.load(open(RESULTS))
+            superseded = (prev.get('superseded') or []) + [
+                {'measured_at': prev.get('measured_at'), 'candidates': prev.get('candidates'),
+                 'outcome': prev.get('outcome'),
+                 'train_entry_window': prev.get('train_entry_window'),
+                 'why_replaced': prev.get('replaced_because', 'superseded by a later run')}]
+
         out = {'assignment': 'MT-A003', 'registered_at': reg['registered_at'],
+               'superseded': superseded,
                'first_result_at': first_result_at,
                'measured_at': datetime.now(timezone.utc).isoformat(),
                'train_entry_window': [entry_from.isoformat(), TRAIN_END.isoformat()],
@@ -241,7 +282,19 @@ class Command(BaseCommand):
         h.status = (Hypothesis.FORWARD if any(w['frozen'] for w in winners.values())
                     else Hypothesis.REJECTED)
         h.decided_at = djtz.now()
-        h.decision_note = '; '.join(f'{k}: {v["outcome"]}' for k, v in winners.items())
+        note = '; '.join(f'{k}: {v["outcome"]}' for k, v in winners.items())
+        if superseded:
+            prev_rows = {(r['strategy'], r['candidate']): r['net']
+                         for r in (superseded[-1].get('candidates') or [])}
+            changed = [f'{r["strategy"]}/{r["candidate"]} {prev_rows[(r["strategy"], r["candidate"])]:+.2f}'
+                       f'->{r["net"]:+.2f}'
+                       for r in rows
+                       if (r['strategy'], r['candidate']) in prev_rows
+                       and abs(prev_rows[(r['strategy'], r['candidate'])] - r['net']) > 0.005]
+            note += (f'. SUPERSEDES a contaminated run measured {superseded[-1]["measured_at"]}: '
+                     f'{superseded[-1]["why_replaced"]} '
+                     f'{len(changed)} of {len(rows)} rows changed: {"; ".join(changed)}')
+        h.decision_note = note
         h.save()
         self._report(reg, out, winners)
 
@@ -329,7 +382,8 @@ def _select(strategy: str, rows: list) -> dict:
                 'frozen for forward confirmation only — not a result']
         return {'outcome': f'FROZEN: {w["candidate"]}', 'frozen': True, 'winner': w['candidate'],
                 'why': why, 'forward_confirmation_start': FORWARD_START.isoformat()}
-    if top is not None and top['net'] > base['net'] and top['trades'] < MIN_TRAIN_TRADES:
+    if (top is not None and top['net'] > base['net'] and top['trades'] < MIN_TRAIN_TRADES
+            and top['net_pf_2x'] is not None and top['net_pf_2x'] >= MIN_NET_PF_AT_2X):
         why += [f'best net was {top["candidate"]} at {top["net"]:+.2f}, but on only '
                 f'{top["trades"]} trades against a pre-registered floor of {MIN_TRAIN_TRADES}',
                 'the number, not a hedge: this cannot be separated from noise']

@@ -113,7 +113,11 @@ class TheEntryWindowHoldsAtBothEnds(TestCase):
         self.assertGreater(len(trades), 0)
         for t in trades:
             self.assertGreaterEqual(t.entry_ts, self.start, 'an entry landed BEFORE the window')
-            self.assertLessEqual(t.entry_ts, self.end, 'an entry landed AFTER the window')
+            # Strictly less: the window is half-open [start, end), so an entry AT the
+            # end is outside it. The old assertion allowed one and its message called
+            # the end inclusive, which is the disagreement MT-A005 had to settle
+            # before a shared guard could be written at all.
+            self.assertLess(t.entry_ts, self.end, 'an entry landed AT or AFTER the window end')
 
     def test_run_window_refuses_frames_that_reach_past_the_window_end(self):
         """The MT-A005 contract, at the choke point every research command uses.

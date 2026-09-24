@@ -224,7 +224,14 @@ class Command(BaseCommand):
         self.stdout.write(f'  warm-up needed        {need} bars before the window (have '
                           f'{shortest}) — checked, not assumed')
 
-        result = {'window': [start.isoformat(), end.isoformat()], 'spec': dict(H10_SPEC),
+        # Both, because an exclusive end of 2026-09-24T20:00:00.000001 reads like a
+        # bug even when it is exactly right. The included bar is what a human checks.
+        last_included = max((df.index[-1].to_pydatetime() for df in frames.values() if len(df)),
+                            default=None)
+        result = {'window': [start.isoformat(), end.isoformat()],
+                  'window_note': 'half-open [start, end): no bar at or after end reached the engine',
+                  'last_included_bar': last_included.isoformat() if last_included else None,
+                  'spec': dict(H10_SPEC),
                   'risk': dict(H10_RISK), 'pairs': list(H10_PAIRS), 'timeframe': H10_TIMEFRAME,
                   'held_out_window': list(H10_HELD_OUT), 'bars_loaded': bars,
                   'bars_in_window': in_window, 'warmup_bars_required': need,

@@ -3,6 +3,8 @@
     "2026-09-08T00:00:00+00:00",
     "2026-09-24T20:00:00.000001+00:00"
   ],
+  "window_note": "half-open [start, end): no bar at or after end reached the engine",
+  "last_included_bar": "2026-09-24T20:00:00+00:00",
   "spec": {
     "lookback_h": 480,
     "min_move_atr": 1.0,
@@ -234,16 +236,17 @@
   },
   "superseded": [
     {
+      "window": "unseen 2026-09-08..09-24",
       "what": "baseline figures only; H10 rows unchanged",
-      "why": "MT-A005. Each baseline loaded its own timeframe with load_frames(..., end.date()); the store takes an INCLUSIVE end date and expands it across the ET session day, so bars ran past the window end \u2014 44 fifteen-minute bars on the unseen window, 16 hourly and 64 fifteen-minute on the held-out one. Entries were bounded but open positions exited on them. research_frames now cuts at the window end before quality_gate sees the tail.",
-      "does_not_re_decide": "No hypothesis is re-decided by this. H10 itself is unchanged in both windows (unseen n=8 net -119.35; held-out n=100 net +1081.84), and MT-A003 selected on turnover_research train rows, all 12 of which are byte-identical after the change.",
+      "why": "MT-A005. Each baseline loaded its own timeframe with load_frames(..., end.date()); the store takes an INCLUSIVE end date and expands it across the ET session day, so bars ran past the window end \u2014 44 fifteen-minute on the unseen window, 16 hourly and 64 fifteen-minute on the held-out one. Entries were bounded but open positions exited on them. research_frames now cuts at the window end, before quality_gate sees the tail.",
+      "does_not_re_decide": "No hypothesis is re-decided. H10 is unchanged in both windows (unseen n=8 net -119.35; held-out n=100 net +1081.84) and MT-A003 selected on turnover_research train rows, all 12 byte-identical. These are context baselines. Audit: docs/mt-a005-window-audit.md",
       "changed_rows": [
         {
           "baseline": "vwap_reversion",
-          "before": -415.22,
-          "after": -417.87,
+          "timeframe": "15Min",
           "trades": 129,
-          "timeframe": "15Min"
+          "before": -415.22,
+          "after": -417.87
         }
       ]
     }

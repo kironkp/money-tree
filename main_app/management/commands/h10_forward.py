@@ -91,10 +91,18 @@ def _measure(trades, slippage_bps: float) -> dict:
 
 
 def run_window(key: str, params: dict, risk_over: dict, frames, start, end,
-               cost_mult: float = 1.0) -> tuple[list, float]:
-    """Replay one strategy over [start, end]. Returns (trades in window, slippage_bps)."""
-    spec = spec_from_models(key, params, list(H10_PAIRS), H10_TIMEFRAME, AgentConfig.get())
-    spec.risk = replace(spec.risk, **risk_over)
+               cost_mult: float = 1.0, timeframe: str = H10_TIMEFRAME,
+               pairs=H10_PAIRS) -> tuple[list, float]:
+    """Replay one strategy over [start, end]. Returns (trades in window, slippage_bps).
+
+    `timeframe` and `risk_over` are arguments rather than constants because a
+    BASELINE has to be run as it actually lives. Running the live rows on H10's
+    1Hour frames under H10's risk settings and calling the result "live params"
+    described a configuration that has never existed.
+    """
+    spec = spec_from_models(key, params, list(pairs), timeframe, AgentConfig.get())
+    if risk_over:
+        spec.risk = replace(spec.risk, **risk_over)
     if cost_mult != 1.0:
         spec.fee_bps = {k: v * cost_mult for k, v in spec.fee_bps.items()}
         spec.risk = replace(spec.risk, slippage_bps=spec.risk.slippage_bps * cost_mult)
@@ -119,10 +127,15 @@ class Command(BaseCommand):
         parser.add_argument('--no-write', action='store_true')
 
     def handle(self, *args, **o):
-        # The spec is asserted, not assumed. A run on different numbers is a
-        # different hypothesis and must not be reported as a forward test of H10.
-        assert H10_SPEC['lookback_h'] == 480 and H10_SPEC['stop_atr_mult'] == 4.0
-        assert H10_SPEC['cooldown_h'] == 168 and (H10_SPEC['hour_from'], H10_SPEC['hour_to']) == (7, 21)
+        # The spec is checked, not assumed, and checked with a raise rather than an
+        # assert: `python -O` strips asserts, which is exactly the run where you
+        # least want a spec guard to quietly vanish. All eight keys, not four.
+        expected = {'lookback_h': 480, 'min_move_atr': 1.0, 'stop_atr_mult': 4.0, 'atr_len': 24,
+                    'cooldown_h': 168, 'allow_short': True, 'hour_from': 7, 'hour_to': 21}
+        if dict(H10_SPEC) != expected:
+            raise SystemExit(f'H10_SPEC has drifted from the recorded hypothesis.\n'
+                             f'  recorded: {expected}\n  found:    {dict(H10_SPEC)}\n'
+                             f'A run on different numbers is a different hypothesis.')
 
         start = datetime.fromisoformat(o['start']).replace(tzinfo=timezone.utc)
         start, end = _window_bounds(start)
@@ -173,6 +186,8 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING('\n  H10 at the modelled toll'))
         self._row('h10 (1x cost)', base)
 
+        self.stdout.write('    (2x and 3x below are full RE-RUNS, not a cost overlay: a higher toll'
+                          '\n     changes which trades survive the gates, so gross moves too)')
         for mult in (2.0, 3.0):
             tr, sl = run_window('fx_trend', dict(H10_SPEC), dict(H10_RISK), frames, start, end,
                                 cost_mult=mult)
@@ -183,14 +198,31 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING('\n  Baselines on the SAME window'))
         self.stdout.write('    flat (no trades)              net       0.00   <- the honest benchmark')
         result['baselines'] = {'flat': {'net': 0.0}}
+        # Each live row is replayed on ITS OWN timeframe with the forex lane's own
+        # RiskConfig and no H10 overrides — that is what "baseline" has to mean.
+        for row in Strategy.objects.filter(market='forex', enabled=True).order_by('key'):
+            tf_frames = (frames if row.timeframe == H10_TIMEFRAME
+                         else load_frames(list(H10_PAIRS), row.timeframe, warm_from, end.date()))
+            tr, sl = run_window(row.key, dict(row.params), {}, tf_frames, start, end,
+                                timeframe=row.timeframe)
+            m = _measure(tr, sl)
+            m['timeframe'] = row.timeframe
+            m['risk'] = 'forex lane live RiskConfig'
+            result['baselines'][row.key] = m
+            self._row(f'{row.key} ({row.timeframe}, live risk)', m)
+
+        # Kept only so the earlier, mislabelled figures remain comparable. This
+        # is NOT how these strategies run.
+        self.stdout.write('    --- same rows forced onto H10\'s 1Hour frames and risk settings,')
+        self.stdout.write('        which is not how either of them runs: ---')
         for key in ('ema_momentum', 'vwap_reversion'):
             row = Strategy.objects.filter(key=key, market='forex').first()
             if row is None:
                 continue
             tr, sl = run_window(key, dict(row.params), dict(H10_RISK), frames, start, end)
             m = _measure(tr, sl)
-            result['baselines'][key] = m
-            self._row(f'{key} (live params)', m)
+            result['baselines'][f'{key}_1hour_h10_risk'] = m
+            self._row(f'{key} (1Hour, H10 risk)', m)
 
         n = base.get('trades', 0)
         self.stdout.write(self.style.MIGRATE_HEADING('\n  What this can and cannot tell you'))

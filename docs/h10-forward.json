@@ -94,6 +94,45 @@
       "net": 0.0
     },
     "ema_momentum": {
+      "trades": 93,
+      "gross": 99.06,
+      "fees": 453.83,
+      "slippage": 234.25,
+      "net": -589.02,
+      "notional": 4538627.99,
+      "gross_pf": 1.067,
+      "bps_captured": 0.22,
+      "bps_cost": 1.52,
+      "net_hour_shaped_cost": -1529.4,
+      "entries_in_rollover": 27,
+      "first_entry": "2026-09-08T00:45:00+00:00",
+      "last_entry": "2026-09-24T01:00:00+00:00",
+      "timeframe": "15Min",
+      "risk": "forex lane live RiskConfig"
+    },
+    "news_catalyst": {
+      "trades": 0,
+      "timeframe": "15Min",
+      "risk": "forex lane live RiskConfig"
+    },
+    "vwap_reversion": {
+      "trades": 129,
+      "gross": 484.26,
+      "fees": 586.01,
+      "slippage": 313.47,
+      "net": -415.22,
+      "notional": 5860583.64,
+      "gross_pf": 1.206,
+      "bps_captured": 0.83,
+      "bps_cost": 1.53,
+      "net_hour_shaped_cost": -1404.2,
+      "entries_in_rollover": 17,
+      "first_entry": "2026-09-08T01:15:00+00:00",
+      "last_entry": "2026-09-24T18:15:00+00:00",
+      "timeframe": "15Min",
+      "risk": "forex lane live RiskConfig"
+    },
+    "ema_momentum_1hour_h10_risk": {
       "trades": 34,
       "gross": -2.33,
       "fees": 111.13,
@@ -108,7 +147,7 @@
       "first_entry": "2026-09-08T02:00:00+00:00",
       "last_entry": "2026-09-23T00:00:00+00:00"
     },
-    "vwap_reversion": {
+    "vwap_reversion_1hour_h10_risk": {
       "trades": 34,
       "gross": -2.58,
       "fees": 101.63,

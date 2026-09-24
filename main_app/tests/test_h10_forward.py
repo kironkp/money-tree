@@ -44,35 +44,79 @@ class TheForwardRunUsesH10sFrozenSpec(SimpleTestCase):
 
 class TheEntryWindowHoldsAtBothEnds(TestCase):
     """act_from stops the engine acting early; the trade filter stops it late.
-    Setting only the first is the leak that invalidated a whole train window."""
+    Setting only the first is the leak that put 38% of a train window's trades
+    inside the test window.
+
+    The first version of this test was vacuous: the fixture had 400 bars against
+    FxTrend's 760-bar warm-up constant, so no trade was ever produced and the
+    assertion loop ran zero times. It passed, proved nothing, and carried a
+    comment claiming the params made warm-up short — they do not, warmup_bars is
+    a class constant. Hence the negative control below: if the end filter is
+    removed, this test MUST fail.
+    """
+    WARMUP = 900        # comfortably over FxTrend.warmup_bars (760)
 
     def setUp(self):
-        from main_app.models import Bar, Instrument
-        from main_app.tests.helpers import seed_db
-        seed_db(('EUR/USD',), with_bars=False)
-        self.inst = Instrument.objects.filter(symbol='EUR/USD').first() or \
-            Instrument.objects.create(symbol='EUR/USD', asset_class='forex', market='forex')
-        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
         from datetime import timedelta
-        px = 1.10
-        for i in range(400):
-            px += 0.0004 if (i // 40) % 2 == 0 else -0.0004
+        from main_app.models import Bar, Instrument
+        self.inst = (Instrument.objects.filter(symbol='EUR/USD').first()
+                     or Instrument.objects.create(symbol='EUR/USD', asset_class='forex',
+                                                  market='forex'))
+        self.base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        # A series that actually trends, so the 480-bar lookback clears its ATR
+        # threshold and entries fire on both sides of the window boundary.
+        px, n = 1.10, self.WARMUP + 900
+        for k in range(n):
+            leg = (k // 150) % 2
+            px += 0.0012 if leg == 0 else -0.0012
             Bar.objects.create(instrument=self.inst, timeframe='1Hour',
-                               ts=base + timedelta(hours=i), open=px, high=px + 0.001,
-                               low=px - 0.001, close=px, volume=1000)
+                               ts=self.base + timedelta(hours=k), open=px,
+                               high=px + 0.0006, low=px - 0.0006, close=px, volume=1000)
+        self.start = self.base + timedelta(hours=self.WARMUP)
+        self.end = self.start + timedelta(hours=300)
+
+    def _frames(self):
+        from datetime import timedelta
+        from main_app.services.backtest import load_frames
+        return load_frames(['EUR/USD'], '1Hour', self.base.date(),
+                           (self.base + timedelta(hours=self.WARMUP + 1000)).date())
+
+    def _params(self):
+        # H10's spec but with the hour gate open, so the synthetic clock cannot
+        # silently suppress every entry and hand back another empty test.
+        return dict(H10_SPEC, hour_from=0, hour_to=24)
+
+    def test_the_fixture_actually_produces_trades(self):
+        """Guards the guard. If this ever returns zero, the window assertions
+        below are vacuous again and the suite must say so."""
+        from main_app.management.commands.h10_forward import run_window
+        trades, _ = run_window('fx_trend', self._params(), dict(H10_RISK),
+                               self._frames(), self.start, self.end)
+        self.assertGreater(len(trades), 0,
+                           'fixture produced no trades — the window tests would prove nothing')
 
     def test_no_trade_enters_before_the_window_or_after_it(self):
         from main_app.management.commands.h10_forward import run_window
-        from main_app.services.backtest import load_frames
-        start = datetime(2026, 1, 8, tzinfo=timezone.utc)
-        end = datetime(2026, 1, 12, tzinfo=timezone.utc)
-        frames = load_frames(['EUR/USD'], '1Hour', datetime(2026, 1, 1).date(), datetime(2026, 1, 20).date())
-        # A short-warmup strategy, so the fixture can actually produce trades.
-        params = dict(H10_SPEC, lookback_h=12, atr_len=6, cooldown_h=1, hour_from=0, hour_to=24)
-        trades, _ = run_window('fx_trend', params, dict(H10_RISK), frames, start, end)
+        trades, _ = run_window('fx_trend', self._params(), dict(H10_RISK),
+                               self._frames(), self.start, self.end)
+        self.assertGreater(len(trades), 0)
         for t in trades:
-            self.assertGreaterEqual(t.entry_ts, start, 'an entry landed BEFORE the window')
-            self.assertLessEqual(t.entry_ts, end, 'an entry landed AFTER the window')
+            self.assertGreaterEqual(t.entry_ts, self.start, 'an entry landed BEFORE the window')
+            self.assertLessEqual(t.entry_ts, self.end, 'an entry landed AFTER the window')
+
+    def test_negative_control_the_data_does_contain_a_trade_after_the_window_end(self):
+        """The end filter is only load-bearing if something would otherwise cross
+        it. Run unbounded over the same data and require an entry past `end`; if
+        this ever fails, the filter is untested no matter how green the suite is.
+        """
+        from datetime import timedelta
+        from main_app.management.commands.h10_forward import run_window
+        far = self.end + timedelta(hours=5000)
+        trades, _ = run_window('fx_trend', self._params(), dict(H10_RISK),
+                               self._frames(), self.start, far)
+        after = [t for t in trades if t.entry_ts > self.end]
+        self.assertGreater(len(after), 0,
+                           'nothing trades after the window end, so the end filter is unproven')
 
 
 class TheSpreadModelIsShapedByTheClock(SimpleTestCase):

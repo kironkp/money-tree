@@ -1,0 +1,127 @@
+{
+  "window": [
+    "2026-09-08T00:00:00+00:00",
+    "2026-09-24T20:00:00+00:00"
+  ],
+  "spec": {
+    "lookback_h": 480,
+    "min_move_atr": 1.0,
+    "stop_atr_mult": 4.0,
+    "atr_len": 24,
+    "cooldown_h": 168,
+    "allow_short": true,
+    "hour_from": 7,
+    "hour_to": 21
+  },
+  "risk": {
+    "max_hold_minutes": 7200,
+    "min_reward_to_cost": 0.0
+  },
+  "pairs": [
+    "EUR/USD",
+    "GBP/USD",
+    "AUD/USD",
+    "NZD/USD"
+  ],
+  "timeframe": "1Hour",
+  "held_out_window": [
+    "2026-01-01",
+    "2026-09-07"
+  ],
+  "bars_loaded": {
+    "AUD/USD": 3533,
+    "EUR/USD": 3530,
+    "GBP/USD": 3530,
+    "NZD/USD": 3535
+  },
+  "bars_in_window": {
+    "AUD/USD": 307,
+    "EUR/USD": 307,
+    "GBP/USD": 307,
+    "NZD/USD": 307
+  },
+  "warmup_bars_required": 760,
+  "warmup_bars_available": 3223,
+  "costs": {
+    "2x": {
+      "trades": 8,
+      "gross": -101.72,
+      "fees": 21.97,
+      "slippage": 13.19,
+      "net": -136.89,
+      "notional": 109944.38,
+      "gross_pf": 0.422,
+      "bps_captured": -9.25,
+      "bps_cost": 3.2,
+      "net_hour_shaped_cost": -141.29,
+      "entries_in_rollover": 0,
+      "first_entry": "2026-09-08T08:00:00+00:00",
+      "last_entry": "2026-09-17T11:00:00+00:00"
+    },
+    "3x": {
+      "trades": 8,
+      "gross": -101.69,
+      "fees": 32.94,
+      "slippage": 19.78,
+      "net": -154.42,
+      "notional": 109893.94,
+      "gross_pf": 0.423,
+      "bps_captured": -9.25,
+      "bps_cost": 4.8,
+      "net_hour_shaped_cost": -152.22,
+      "entries_in_rollover": 0,
+      "first_entry": "2026-09-08T08:00:00+00:00",
+      "last_entry": "2026-09-17T11:00:00+00:00"
+    }
+  },
+  "h10": {
+    "trades": 8,
+    "gross": -101.76,
+    "fees": 10.99,
+    "slippage": 6.6,
+    "net": -119.35,
+    "notional": 109996.67,
+    "gross_pf": 0.42,
+    "bps_captured": -9.25,
+    "bps_cost": 1.6,
+    "net_hour_shaped_cost": -130.35,
+    "entries_in_rollover": 0,
+    "first_entry": "2026-09-08T08:00:00+00:00",
+    "last_entry": "2026-09-17T11:00:00+00:00"
+  },
+  "baselines": {
+    "flat": {
+      "net": 0.0
+    },
+    "ema_momentum": {
+      "trades": 34,
+      "gross": -2.33,
+      "fees": 111.13,
+      "slippage": 57.88,
+      "net": -171.33,
+      "notional": 1111790.96,
+      "gross_pf": 0.997,
+      "bps_captured": -0.02,
+      "bps_cost": 1.52,
+      "net_hour_shaped_cost": -342.71,
+      "entries_in_rollover": 3,
+      "first_entry": "2026-09-08T02:00:00+00:00",
+      "last_entry": "2026-09-23T00:00:00+00:00"
+    },
+    "vwap_reversion": {
+      "trades": 34,
+      "gross": -2.58,
+      "fees": 101.63,
+      "slippage": 52.92,
+      "net": -157.13,
+      "notional": 1016463.73,
+      "gross_pf": 0.996,
+      "bps_captured": -0.03,
+      "bps_cost": 1.52,
+      "net_hour_shaped_cost": -300.38,
+      "entries_in_rollover": 0,
+      "first_entry": "2026-09-08T04:00:00+00:00",
+      "last_entry": "2026-09-23T14:00:00+00:00"
+    }
+  }
+}

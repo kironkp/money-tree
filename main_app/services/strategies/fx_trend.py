@@ -44,6 +44,12 @@ class FxTrend(Strategy):
         Param('atr_len', 'int', 24, 12, 96, 12, help='ATR length in bars'),
         Param('cooldown_h', 'int', 24, 0, 168, 24, help='Hours before re-entering the same symbol'),
         Param('allow_short', 'bool', True, help='Take downtrends as well as uptrends'),
+        # Entry window in UTC. Defaults are permissive so nothing that already
+        # uses this strategy changes; H10's frozen spec narrows them to the
+        # liquid session, which is most of why it survived a realistic spread
+        # model when the unrestricted version did not.
+        Param('hour_from', 'int', 0, 0, 23, 1, help='First UTC hour an entry may be taken'),
+        Param('hour_to', 'int', 24, 0, 24, 1, help='First UTC hour an entry may NOT be taken'),
     )
     warmup_bars = 760
     intraday = True     # the engine still flattens at the forex week close
@@ -61,6 +67,8 @@ class FxTrend(Strategy):
 
     def on_bar(self, ctx: Context, bar, df, i) -> list[Signal]:
         if ctx.position is not None:
+            return []
+        if not (int(self.p['hour_from']) <= ctx.ts.hour < int(self.p['hour_to'])):
             return []
         st = self.symbol_state(ctx.symbol)
         cool = int(self.p['cooldown_h'])
@@ -103,3 +111,31 @@ class FxTrend(Strategy):
                      if np.isfinite(ta) else 'trend still forming',
                      value=None if not np.isfinite(ta) else ta, threshold=need)]
 
+
+# --- H10, frozen -------------------------------------------------------------
+# The exact specification measured on the held-out window 2026-01-01..2026-09-07
+# (n=100, net +$1,081.84, gross PF 1.583, captured 10.93 bps against a 1.60 bps
+# toll, +$916.77 under an hour-shaped spread model). Recorded as Hypothesis #10.
+#
+# It lives here rather than in a script so that the forward test and the test
+# that pins it import ONE definition. Changing these numbers changes what H10
+# means, so anything measured against a different spec is a different hypothesis
+# and must be recorded as one.
+H10_SPEC = {
+    'lookback_h': 480,
+    'min_move_atr': 1.0,
+    'stop_atr_mult': 4.0,
+    'atr_len': 24,
+    'cooldown_h': 168,
+    'allow_short': True,
+    'hour_from': 7,
+    'hour_to': 21,
+}
+# Risk-side settings that are part of the spec but live on RiskConfig, not params.
+H10_RISK = {
+    'max_hold_minutes': 7200,       # hold to the forex week close
+    'min_reward_to_cost': 0.0,      # the strategy sets no target, so the gate cannot apply
+}
+H10_PAIRS = ('EUR/USD', 'GBP/USD', 'AUD/USD', 'NZD/USD')
+H10_TIMEFRAME = '1Hour'
+H10_HELD_OUT = ('2026-01-01', '2026-09-07')

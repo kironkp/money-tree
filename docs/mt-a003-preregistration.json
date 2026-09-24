@@ -1,0 +1,90 @@
+{
+  "assignment": "MT-A003",
+  "baseline": "baseline \u2014 each strategy on 15Min with the forex lane live RiskConfig",
+  "candidates": [
+    {
+      "name": "baseline",
+      "risk_override": {},
+      "timeframe": "15Min",
+      "what": "the unchanged live config \u2014 what the desk runs today"
+    },
+    {
+      "name": "gate_4x",
+      "risk_override": {
+        "min_reward_to_cost": 4.0
+      },
+      "timeframe": "15Min",
+      "what": "target must clear 4x the round trip instead of 2x"
+    },
+    {
+      "name": "gate_8x",
+      "risk_override": {
+        "min_reward_to_cost": 8.0
+      },
+      "timeframe": "15Min",
+      "what": "target must clear 8x the round trip"
+    },
+    {
+      "name": "hourly",
+      "risk_override": {},
+      "timeframe": "1Hour",
+      "what": "same rules and same risk, one decision an hour instead of four"
+    },
+    {
+      "name": "hourly_hold_24h",
+      "risk_override": {
+        "max_hold_minutes": 1440
+      },
+      "timeframe": "1Hour",
+      "what": "hourly cadence, and a position may run a day instead of four hours"
+    },
+    {
+      "name": "hourly_gate_4x_hold_24h",
+      "risk_override": {
+        "max_hold_minutes": 1440,
+        "min_reward_to_cost": 4.0
+      },
+      "timeframe": "1Hour",
+      "what": "both controls together"
+    }
+  ],
+  "constraints": "Research only. No Strategy row, parameter, risk limit or qualification is changed, and nothing is applied to the running agents.",
+  "forward_confirmation_start": "2026-09-25T00:00:00+00:00",
+  "hypothesis_created_at": "2026-09-24T22:44:23.343388+00:00",
+  "hypothesis_id": 19,
+  "pairs": [
+    "EUR/USD",
+    "GBP/USD",
+    "AUD/USD",
+    "NZD/USD"
+  ],
+  "question": "On the live forex rules, does a turnover control beat the unchanged live config on train net after costs?",
+  "registered_at": "2026-09-24T22:44:23.343122+00:00",
+  "reporting": "Every candidate is reported including failures: n, gross, fees, slippage, net at 1x and 2x, and net profit factor.",
+  "selection_rule": {
+    "blocked_if": "If the highest-net candidate fails only the trade-count gate, the outcome is \"BLOCKED: insufficient train data\", reported with the number rather than as a hedge.",
+    "gates": [
+      "train trades >= 30",
+      "net profit factor at 2x cost >= 1.0",
+      "train net at 1x cost strictly greater than the baseline for that strategy"
+    ],
+    "rank_by": "net_1x",
+    "statement": "Per strategy, the winner is the candidate with the highest train net at 1x cost that ALSO satisfies every gate below. If no candidate satisfies them, the recorded outcome is \"none beat baseline\" and nothing is frozen."
+  },
+  "spent_window": [
+    "2026-09-08",
+    "2026-09-24"
+  ],
+  "spent_window_note": "Used by MT-A001. Never used to select or tune anything, including \"just to look\".",
+  "strategies": [
+    "ema_momentum",
+    "vwap_reversion"
+  ],
+  "train_window": [
+    "2026-07-10",
+    "2026-09-08"
+  ],
+  "train_window_note": "15Min forex history begins 2026-07-10, so warm-up is consumed INSIDE the train window and effective train bars are reported per candidate. There is no earlier data to warm up from.",
+  "what_is_not_claimed": "No significance is claimed and none can be. Twelve comparisons (6 candidates x 2 strategies) with an argmax taken means the winner is flattered by selection by construction. This step only chooses what to confirm forward from 2026-09-25; the forward window is the only thing that can confirm it.",
+  "why": "ema_momentum and vwap_reversion are gross-positive (gross PF 1.07 and 1.21) and net-negative, capturing 0.2-0.8 bps a trade against a ~1.6 bps round trip. Cost is the binding constraint, so turnover is the lever."
+}

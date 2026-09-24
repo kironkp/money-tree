@@ -1,0 +1,26 @@
+{
+  "forward_start": "2026-09-25T00:00:00+00:00",
+  "pairs": [
+    "EUR/USD",
+    "GBP/USD",
+    "AUD/USD",
+    "NZD/USD"
+  ],
+  "risk": {
+    "max_hold_minutes": 7200,
+    "min_reward_to_cost": 0.0
+  },
+  "runs": [],
+  "spec": {
+    "allow_short": true,
+    "atr_len": 24,
+    "cooldown_h": 168,
+    "hour_from": 7,
+    "hour_to": 21,
+    "lookback_h": 480,
+    "min_move_atr": 1.0,
+    "stop_atr_mult": 4.0
+  },
+  "timeframe": "1Hour",
+  "trades": {}
+}

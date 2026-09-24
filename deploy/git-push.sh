@@ -37,6 +37,43 @@ fi
 branch=$("$GIT" rev-parse --abbrev-ref HEAD)
 [ "$branch" = 'main' ] || say "note: on branch $branch, not main"
 
+# --- research upkeep, before the backup so tonight's snapshot carries it ------
+# maintain_bars refreshes the 1Hour forex series that no agent trades (it stopped
+# dead for 17 days and nothing noticed, because staleness was only ever checked
+# for series something was actively trading). h10_shadow then appends H10's newly
+# completed forward round trips to docs/h10-shadow.json.
+#
+# Neither places an order, writes a Strategy row, or changes a risk limit.
+#
+# Strictly non-fatal and time-limited. These run BEFORE the backup, so a hang here
+# holds the lock and costs the night's ledger snapshot — the one artefact in this
+# script that cannot be regenerated. macOS ships no timeout(1), hence the explicit
+# watchdog. Their own output goes to a separate log; this one keeps a line each.
+PIPENV=/Users/kironkp/.local/bin/pipenv
+UPKEEP_LOG="$REPO/run/research-upkeep.log"
+
+limited() {                                    # limited <seconds> <label> <cmd...>
+    secs=$1; label=$2; shift 2
+    printf '\n===== %s  %s =====\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$label" >> "$UPKEEP_LOG"
+    "$@" >> "$UPKEEP_LOG" 2>&1 &
+    pid=$!
+    ( sleep "$secs"; kill -9 "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    guard=$!
+    if wait "$pid" 2>/dev/null; then
+        say "$label ok"
+    else
+        say "warning: $label failed or hit its ${secs}s limit — see run/research-upkeep.log (the night continues)"
+    fi
+    kill "$guard" 2>/dev/null
+}
+
+if [ -x "$PIPENV" ]; then
+    limited 900 'bar refresh'  "$PIPENV" run python manage.py maintain_bars
+    limited 600 'H10 shadow'   "$PIPENV" run python manage.py h10_shadow --quiet
+else
+    say "warning: no pipenv at $PIPENV — skipped the bar refresh and the H10 shadow"
+fi
+
 # Refresh the trading-data backup first so tonight's commit carries it. A
 # backup failure must not stop the code push, so it is logged, not fatal.
 if [ -x "$REPO/deploy/backup-data.sh" ]; then

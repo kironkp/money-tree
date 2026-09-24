@@ -226,10 +226,20 @@ class NoForexAdapterExistsYet(TestCase):
     """The blocking fact, pinned so it cannot be forgotten or quietly assumed away."""
 
     def test_paper_forex_is_refused_because_no_adapter_exists(self):
+        """Refused for the RIGHT reason, with Alpaca fully configured.
+
+        `ALPACA_ENABLED` is forced on because the missing-keys gate sits one line
+        above the forex gate in `Agent.setup`. Without the override this test passed
+        on a machine with a populated `.env` and passed for the wrong reason on one
+        without — it caught "paper mode needs Alpaca keys" and never reached the
+        claim in its own name. Forcing keys present is what makes it assert the
+        stronger fact: a fully credentialled desk still cannot run forex on paper.
+        """
         from main_app.services.agent import Agent
-        with self.assertRaises(RuntimeError) as cm:
-            Agent(mode='paper', market='forex').setup()
-        self.assertIn('forex', str(cm.exception).lower())
+        with self.settings(ALPACA_ENABLED=True):
+            with self.assertRaises(RuntimeError) as cm:
+                Agent(mode='paper', market='forex').setup()
+        self.assertIn('no forex broker adapter', str(cm.exception).lower())
 
     def test_live_forex_is_refused_twice_over(self):
         """Live is stopped by the arming gate before the missing-adapter gate is

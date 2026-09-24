@@ -10,7 +10,8 @@ the running agents read. It replays the frozen H10_SPEC over bars that closed
 after the forward start and appends completed round trips to a committed JSON
 artifact.
 
-Two decisions worth stating, because both could quietly inflate the record:
+Four rules, because this file is what a promotion or a rejection will rest on and
+each of these is a way such a record quietly flatters itself:
 
   * Only COMPLETED round trips are recorded. `run_frames` flattens whatever is
     open at the final bar and stamps it `exit_reason='end'` — that is the
@@ -21,14 +22,20 @@ Two decisions worth stating, because both could quietly inflate the record:
   * Appends are idempotent on a deterministic key, so a re-run, a crashed run,
     or two runs in one night cannot double-count. A record that grows when you
     look at it is not a record.
+  * The record accepts ONE window and ONE spec. A different `--start`, or a
+    retuned H10_SPEC, is a different hypothesis and is refused rather than
+    silently appended to the same evidence.
+  * Writes are atomic. The nightly job runs this under a kill -9 watchdog and
+    then commits and pushes whatever is on disk.
 """
 from __future__ import annotations
 
 import json
 import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 
 from main_app.services.backtest import load_frames
 from main_app.services.strategies import make_strategy
@@ -57,35 +64,81 @@ def load_record(path: str) -> dict:
         return json.load(fh)
 
 
+def write_record(path: str, rec: dict) -> None:
+    """Write through a temp file in the same directory, then `os.replace`.
+
+    `open(path, 'w')` truncates before it writes anything. This runs from the
+    02:00 job under a `kill -9` watchdog, and that job then commits and pushes
+    whatever is on disk — so a mid-write kill would publish a truncated record and
+    the next run would fail to parse its own evidence. `os.replace` is atomic
+    within a filesystem: a reader sees either the old record or the new one.
+    """
+    folder = os.path.dirname(os.path.abspath(path)) or '.'
+    fd, tmp = tempfile.mkstemp(dir=folder, prefix='.h10-shadow-', suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w') as fh:
+            json.dump(rec, fh, indent=2, sort_keys=True)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def _per_trade(t: dict, slippage_bps: float) -> tuple[float, float]:
+    """`(gross pnl, round-trip cost at 1x)` for one recorded round trip.
+
+    Slippage sits inside the fill price, so `pnl` is already net of it and has to
+    be added back to see the raw edge. It is charged on entry always and on exit
+    only when that leg is not a limit fill, since a target rests at its level.
+    """
+    legs = 1 + (0 if t['exit_reason'] == 'target' else 1)
+    cost = t['fees'] + t['notional'] * legs * slippage_bps / 1e4
+    return t['pnl'] + cost, cost
+
+
+def _pf(values: list[float]) -> float | None:
+    won = sum(v for v in values if v > 0)
+    lost = -sum(v for v in values if v <= 0)
+    return round(won / lost, 3) if lost else None
+
+
 def summarise(trades: list[dict], slippage_bps: float, cost_mult: float = 1.0) -> dict:
     """Totals over recorded round trips. Costs scale; the price move does not.
 
-    Note this is NOT the same quantity as h10_forward's 2x/3x rows. That command
-    re-runs the backtest with higher costs, so wider costs can move a fill or trip a
-    different exit. A forward record cannot do that — these trades already happened —
-    so here the higher cost is charged against the fills that actually occurred. The
-    two agreed to within $0.11 on the 2026-09-08..24 window; they will diverge more
-    the further a cost multiplier moves an exit. Compare 1x figures, not these.
+    A cost multiple may only ever make the record worse. The first version of this
+    built each trade as `pnl + fees*m + slip`, which ADDS cost back as the multiple
+    rises: profit factor climbed 0.42 → 0.486 → 0.561 with costs, exactly inverted,
+    on the one figure a promotion decision reads. It survived because there was a
+    test that net falls with cost and none that PF does. There is now.
+
+    Two profit factors are reported because they answer different questions.
+    `gross_pf` is the signal with no toll charged and is identical at every
+    multiple — if it ever moves with `cost_mult`, the multiplier is leaking into
+    the price move. `net_pf` is what the desk would have kept and must fall.
+
+    Note `net` at 2x/3x is NOT the same quantity as h10_forward's rows of that
+    name. That command re-runs the backtest with higher costs, so a wider spread
+    can move a fill or trip a different exit. A forward record cannot do that —
+    these trades already happened — so the higher cost is charged against the fills
+    that actually occurred. Compare 1x figures, not these.
     """
     if not trades:
-        return {'trades': 0, 'net': 0.0, 'gross': 0.0}
-    net = sum(t['pnl'] for t in trades)
+        return {'trades': 0, 'gross': 0.0, 'net': 0.0, 'gross_pf': None, 'net_pf': None}
+    rows = [_per_trade(t, slippage_bps) for t in trades]
+    gross = sum(g for g, _ in rows)
+    cost = sum(c for _, c in rows) * cost_mult
     fees = sum(t['fees'] for t in trades) * cost_mult
+    nets = [g - c * cost_mult for g, c in rows]
     notional = sum(t['notional'] for t in trades)
-    legs = sum(1 + (0 if t['exit_reason'] == 'target' else 1) for t in trades)
-    slip = notional / len(trades) * legs * slippage_bps / 1e4 * cost_mult
-    base_fees = sum(t['fees'] for t in trades)
-    base_slip = notional / len(trades) * legs * slippage_bps / 1e4
-    gross = net + base_fees + base_slip           # the raw edge, cost-independent
-    per = slip / len(trades)
-    adj = [t['pnl'] + t['fees'] * cost_mult + per for t in trades]
-    gw = sum(x for x in adj if x > 0)
-    gl = -sum(x for x in adj if x <= 0)
     return {
         'trades': len(trades), 'gross': round(gross, 2), 'fees': round(fees, 2),
-        'slippage': round(slip, 2), 'net': round(gross - fees - slip, 2),
-        'gross_pf': round(gw / gl, 3) if gl else None,
+        'slippage': round(cost - fees, 2), 'net': round(sum(nets), 2),
+        'gross_pf': _pf([g for g, _ in rows]), 'net_pf': _pf(nets),
         'bps_captured': round(gross / notional * 1e4, 2) if notional else None,
+        'bps_cost': round(cost / notional * 1e4, 2) if notional else None,
     }
 
 
@@ -98,17 +151,46 @@ class Command(BaseCommand):
         parser.add_argument('--quiet', action='store_true')
 
     def handle(self, *args, **o):
-        from main_app.management.commands.h10_forward import _measure, run_window, _window_bounds
+        from main_app.management.commands.h10_forward import run_window, _window_bounds
 
         start = datetime.fromisoformat(o['start']).replace(tzinfo=timezone.utc)
+        is_record = os.path.abspath(o['out']) == os.path.abspath(ARTIFACT)
+        existed = os.path.exists(o['out'])
         rec = load_record(o['out'])
-        # Persist the skeleton before anything is measured. The record then exists
-        # from the moment the clock starts, carrying the spec it will be judged
-        # under, and nobody can later claim it was opened after a good first week.
-        if not os.path.exists(o['out']):
-            with open(o['out'], 'w') as fh:
-                json.dump(rec, fh, indent=2, sort_keys=True)
+        if not existed:
+            # A fresh file pins whatever window it was opened on, so a scratch run
+            # can measure any period. The committed record is pinned by the
+            # constant below and cannot be reopened on a different one.
+            rec['forward_start'] = start.isoformat()
+
+        # --- the record accepts one window and one spec ----------------------
+        # Both refusals guard the same thing: evidence that silently changes what
+        # it is evidence OF. Appending the spent 09-08..24 window, or extending the
+        # file after H10_SPEC was retuned, would leave a record whose n and PF look
+        # like one hypothesis while describing two.
+        if is_record and start != FORWARD_START:
+            raise CommandError(
+                f'refusing to write the committed record on {start:%Y-%m-%d}: it is pinned to '
+                f'{FORWARD_START:%Y-%m-%d}. Measure another window with --out to a scratch path.')
+        if rec.get('forward_start') != start.isoformat():
+            raise CommandError(
+                f'refusing to extend a record opened on {rec.get("forward_start")} with a run '
+                f'starting {start.isoformat()} — that would be two windows in one n.')
+        if rec.get('spec') != dict(H10_SPEC) or rec.get('risk') != dict(H10_RISK):
+            raise CommandError(
+                'refusing to extend this record: the live H10_SPEC/H10_RISK no longer matches the '
+                'spec pinned in it. A retuned spec is a different hypothesis and needs its own '
+                f'record.\n  pinned: {rec.get("spec")} / {rec.get("risk")}\n'
+                f'  live  : {dict(H10_SPEC)} / {dict(H10_RISK)}')
+
+        if not existed:
+            # Persist the skeleton only once the guards pass, so a refused run
+            # never leaves a record behind. From here on the file exists carrying
+            # the spec it will be judged under, and nobody can claim later that it
+            # was opened after a good first week.
+            write_record(o['out'], rec)
             self.stdout.write(f'opened an empty forward record at {o["out"]}')
+
         try:
             start, end = _window_bounds(start)
         except SystemExit as exc:
@@ -154,8 +236,7 @@ class Command(BaseCommand):
         rec['runs'] = (rec.get('runs') or [])[-19:] + [
             {'at': rec['last_run'], 'window_end': end.isoformat(), 'added': added,
              'total': len(rows), 'in_flight': len(in_flight)}]
-        with open(o['out'], 'w') as fh:
-            json.dump(rec, fh, indent=2, sort_keys=True)
+        write_record(o['out'], rec)
 
         if o.get('verbosity', 1) == 0 or (o['quiet'] and not added and not in_flight):
             return
@@ -165,11 +246,12 @@ class Command(BaseCommand):
         self.stdout.write(f'  added         {added} completed round trip(s) this run')
         self.stdout.write(f'  in flight     {len(in_flight)} (open at the last bar — NOT recorded; '
                           f'marking one to market would be inventing a result)')
-        self.stdout.write(f'  cumulative    n={t1["trades"]}  gross {t1.get("gross", 0):+.2f}  '
-                          f'net {t1.get("net", 0):+.2f}  PF {t1.get("gross_pf")}')
+        self.stdout.write(f'  cumulative    n={t1["trades"]}  gross {t1["gross"]:+.2f}  '
+                          f'gross PF {t1["gross_pf"]}  (no toll charged)')
+        self.stdout.write(f'    at 1x cost  net {t1["net"]:+.2f}  net PF {t1["net_pf"]}')
         for m in ('2x', '3x'):
             tm = rec['totals'][m]
-            self.stdout.write(f'    at {m} cost  net {tm.get("net", 0):+.2f}  PF {tm.get("gross_pf")}')
+            self.stdout.write(f'    at {m} cost  net {tm["net"]:+.2f}  net PF {tm["net_pf"]}')
         gate = 30
         self.stdout.write(f'  promotion gate wants ~{gate} trades after costs; '
                           f'{max(0, gate - t1["trades"])} to go at roughly 8 a fortnight')

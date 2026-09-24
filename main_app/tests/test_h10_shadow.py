@@ -11,10 +11,14 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from unittest import mock
+
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
 
-from main_app.management.commands.h10_shadow import BOUNDARY_EXIT, summarise, trade_key
+from main_app.management.commands.h10_shadow import (BOUNDARY_EXIT, summarise, trade_key,
+                                                     write_record)
 from main_app.services.strategies.fx_trend import H10_RISK, H10_SPEC
 
 
@@ -51,21 +55,53 @@ class ATradeKeyIdentifiesTheRoundTrip(SimpleTestCase):
         self.assertNotEqual(trade_key(a), trade_key(b))
 
 
-class TotalsScaleCostsAndNotTheMove(SimpleTestCase):
+class ACostMultipleMayOnlyMakeTheRecordWorse(SimpleTestCase):
+    """The inverted-PF bug, pinned.
+
+    The first version built each trade as `pnl + fees*m + slip`. Because `pnl` is
+    already net of 1x cost, raising the multiple ADDED cost back: profit factor on
+    the real spent window climbed 0.42 -> 0.486 -> 0.561 as costs rose. That is the
+    single number a promotion decision reads, reported backwards.
+
+    It survived because a test asserted net falls with cost and nothing asserted PF
+    does. Both are here now, and so is the reason they are different questions:
+    gross is the signal before any toll and must not move at all.
+    """
+    MULTIPLES = (1.0, 2.0, 3.0, 10.0)
+
     def _rows(self):
-        return [{'pnl': 40.0, 'fees': -2.0, 'notional': 25000.0, 'exit_reason': 'stop'},
-                {'pnl': -25.0, 'fees': -2.0, 'notional': 25000.0, 'exit_reason': 'target'}]
+        # Positive fees: TradeRecord stores cost as a positive number, so
+        # gross = net + fees. A negative fixture here would have hidden the sign.
+        return [{'pnl': 40.0, 'fees': 2.0, 'notional': 25000.0, 'exit_reason': 'stop'},
+                {'pnl': -25.0, 'fees': 2.0, 'notional': 25000.0, 'exit_reason': 'target'}]
 
-    def test_gross_is_the_same_at_every_cost_multiple(self):
-        """Costs are what a multiplier is allowed to move. If gross drifts, the
-        multiplier is being applied to the price move, which would make a bad
-        strategy look robust to costs it never paid."""
-        g = {m: summarise(self._rows(), 0.8, m)['gross'] for m in (1.0, 2.0, 3.0)}
-        self.assertEqual(len(set(g.values())), 1, f'gross moved with cost: {g}')
+    def test_profit_factor_never_improves_as_costs_rise(self):
+        pf = [summarise(self._rows(), 0.8, m)['net_pf'] for m in self.MULTIPLES]
+        self.assertEqual(pf, sorted(pf, reverse=True),
+                         f'higher costs improved the profit factor: {pf}')
+        self.assertLess(pf[-1], pf[0], 'costs made no difference to PF at all')
 
-    def test_higher_costs_never_improve_the_net(self):
-        nets = [summarise(self._rows(), 0.8, m)['net'] for m in (1.0, 2.0, 3.0)]
+    def test_net_never_improves_as_costs_rise(self):
+        nets = [summarise(self._rows(), 0.8, m)['net'] for m in self.MULTIPLES]
         self.assertEqual(nets, sorted(nets, reverse=True), nets)
+
+    def test_gross_is_identical_at_every_cost_multiple(self):
+        """If gross moves with the multiplier, the multiplier is leaking into the
+        price move and a bad strategy looks robust to costs it never paid."""
+        for field in ('gross', 'gross_pf', 'bps_captured'):
+            seen = {summarise(self._rows(), 0.8, m)[field] for m in self.MULTIPLES}
+            self.assertEqual(len(seen), 1, f'{field} moved with cost: {seen}')
+
+    def test_at_1x_the_net_is_exactly_what_the_trades_made(self):
+        """The anchor. 1x must reproduce the recorded P&L with nothing added or
+        removed, or every multiple above it is measured from the wrong place."""
+        self.assertAlmostEqual(summarise(self._rows(), 0.8)['net'],
+                               sum(r['pnl'] for r in self._rows()), places=2)
+
+    def test_costs_rise_with_the_multiple(self):
+        for field in ('fees', 'slippage'):
+            vals = [summarise(self._rows(), 0.8, m)[field] for m in self.MULTIPLES]
+            self.assertEqual(vals, sorted(vals), f'{field} did not rise with cost: {vals}')
 
     def test_an_empty_record_is_zero_and_not_a_crash(self):
         self.assertEqual(summarise([], 0.8)['trades'], 0)
@@ -157,3 +193,128 @@ class TheShadowRecordAccumulatesWithoutDoubleCounting(TestCase):
         rec = self._run()
         self.assertEqual(rec['spec'], dict(H10_SPEC))
         self.assertEqual(rec['risk'], dict(H10_RISK))
+
+
+class TheRecordAcceptsOneWindowAndOneSpec(SimpleTestCase):
+    """Evidence that silently changes what it is evidence OF.
+
+    Two ways in. `--start 2026-09-08` with the default output would append the
+    window MT-A001 already spent to the forward record, so an n and a PF would
+    describe two windows while reading as one. And a retuned H10_SPEC would extend
+    the same file under a different hypothesis — the same class of mistake as the
+    `evidence_since` reset that erased burst's earned quarantine.
+
+    SimpleTestCase on purpose: these guards must fire before any bar is loaded, so
+    a refusal cannot depend on the database being in any particular state.
+    """
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.tmp = self.dir / 'scratch.json'
+
+    def _open_at(self, iso_date):
+        """Open a scratch record pinned to a given window, without measuring."""
+        rec = {'forward_start': f'{iso_date}T00:00:00+00:00', 'spec': dict(H10_SPEC),
+               'risk': dict(H10_RISK), 'pairs': [], 'timeframe': '1Hour',
+               'trades': {}, 'runs': []}
+        self.tmp.write_text(json.dumps(rec))
+        return rec
+
+    def test_the_committed_record_refuses_any_window_but_its_own(self):
+        """Read-only: the guard fires before the real record is opened for writing."""
+        with self.assertRaises(CommandError) as cm:
+            call_command('h10_shadow', start='2026-09-08', verbosity=0)
+        self.assertIn('pinned to', str(cm.exception))
+        self.assertIn('scratch path', str(cm.exception))
+
+    def test_an_existing_record_refuses_a_different_start(self):
+        self._open_at('2026-09-25')
+        with self.assertRaises(CommandError) as cm:
+            call_command('h10_shadow', start='2026-09-08', out=str(self.tmp), verbosity=0)
+        self.assertIn('two windows in one n', str(cm.exception))
+
+    def test_a_record_pinned_to_a_different_spec_is_refused(self):
+        rec = self._open_at('2026-09-25')
+        rec['spec'] = dict(H10_SPEC, stop_atr_mult=2.5)      # as if the spec were retuned
+        self.tmp.write_text(json.dumps(rec))
+        with self.assertRaises(CommandError) as cm:
+            call_command('h10_shadow', start='2026-09-25', out=str(self.tmp), verbosity=0)
+        self.assertIn('different hypothesis', str(cm.exception))
+
+    def test_a_record_pinned_to_different_risk_is_refused(self):
+        rec = self._open_at('2026-09-25')
+        rec['risk'] = dict(H10_RISK, max_hold_minutes=1440)
+        self.tmp.write_text(json.dumps(rec))
+        with self.assertRaises(CommandError):
+            call_command('h10_shadow', start='2026-09-25', out=str(self.tmp), verbosity=0)
+
+    def test_a_refused_run_leaves_the_record_exactly_as_it_was(self):
+        """Refusing is only half of it. A guard that raised after touching the file
+        would still have damaged the evidence it was protecting."""
+        self._open_at('2026-09-25')
+        before = self.tmp.read_bytes()
+        with self.assertRaises(CommandError):
+            call_command('h10_shadow', start='2026-09-08', out=str(self.tmp), verbosity=0)
+        self.assertEqual(self.tmp.read_bytes(), before, 'a refused run modified the record')
+
+
+class AFreshScratchRecordMayBeOpenedOnAnyWindow(TestCase):
+    """The positive control for the guards above.
+
+    Without it those tests would pass just as well if the command refused
+    everything. A scratch path is how any other window gets measured, so it has to
+    stay open — it is only the committed record that is pinned.
+    """
+
+    def test_a_fresh_scratch_file_pins_the_window_it_was_opened_on(self):
+        folder = Path(tempfile.mkdtemp())
+        fresh = folder / 'fresh.json'
+        call_command('h10_shadow', start='2026-09-08', out=str(fresh), verbosity=0)
+        rec = json.loads(fresh.read_text())
+        self.assertEqual(rec['forward_start'], '2026-09-08T00:00:00+00:00')
+        self.assertEqual(rec['spec'], dict(H10_SPEC), 'the live spec was not pinned into it')
+
+    def test_reopening_that_scratch_file_on_its_own_window_is_allowed(self):
+        folder = Path(tempfile.mkdtemp())
+        fresh = folder / 'fresh.json'
+        call_command('h10_shadow', start='2026-09-08', out=str(fresh), verbosity=0)
+        call_command('h10_shadow', start='2026-09-08', out=str(fresh), verbosity=0)
+
+
+class TheRecordIsWrittenAtomically(SimpleTestCase):
+    """`open(path, 'w')` truncates before it writes.
+
+    This runs from the 02:00 job under a `kill -9` watchdog, and that job then
+    commits and pushes whatever is on disk — so a mid-write kill would publish a
+    truncated record and the next run would fail to parse its own evidence.
+    """
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.tmp = self.dir / 'rec.json'
+        self.good = {'forward_start': '2026-09-25T00:00:00+00:00', 'trades': {'a': 1}}
+        write_record(str(self.tmp), self.good)
+
+    def test_a_crash_mid_write_leaves_the_previous_record_intact(self):
+        import main_app.management.commands.h10_shadow as mod
+
+        def die(*a, **k):
+            raise KeyboardInterrupt('watchdog kill -9')
+
+        with mock.patch.object(mod.json, 'dump', side_effect=die):
+            with self.assertRaises(KeyboardInterrupt):
+                write_record(str(self.tmp), {'trades': {'a': 1, 'b': 2}})
+        self.assertEqual(json.loads(self.tmp.read_text()), self.good,
+                         'a failed write damaged the record that was already there')
+
+    def test_a_crash_leaves_no_temp_file_behind(self):
+        import main_app.management.commands.h10_shadow as mod
+        with mock.patch.object(mod.json, 'dump', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                write_record(str(self.tmp), {'trades': {}})
+        leftover = [p.name for p in self.dir.iterdir() if p.name != 'rec.json']
+        self.assertEqual(leftover, [], f'temp files left behind: {leftover}')
+
+    def test_a_successful_write_replaces_the_content(self):
+        write_record(str(self.tmp), {'trades': {'c': 3}})
+        self.assertEqual(json.loads(self.tmp.read_text()), {'trades': {'c': 3}})

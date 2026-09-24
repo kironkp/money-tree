@@ -1,0 +1,307 @@
+{
+  "assignment": "MT-A003",
+  "candidates": [
+    {
+      "bps_captured": 0.62,
+      "candidate": "baseline",
+      "fees": 1419.91,
+      "gross": 874.12,
+      "net": -1281.7,
+      "net_2x": -2812.43,
+      "net_pf": 0.781,
+      "net_pf_2x": 0.558,
+      "notional": 14199320.25,
+      "risk_override": {},
+      "slippage": 735.91,
+      "strategy": "ema_momentum",
+      "timeframe": "15Min",
+      "trades": 301,
+      "trades_2x": 286,
+      "what": "the unchanged live config \u2014 what the desk runs today"
+    },
+    {
+      "bps_captured": 0.45,
+      "candidate": "gate_4x",
+      "fees": 1480.42,
+      "gross": 671.16,
+      "net": -1578.44,
+      "net_2x": -2728.72,
+      "net_pf": 0.751,
+      "net_pf_2x": 0.563,
+      "notional": 14804310.44,
+      "risk_override": {
+        "min_reward_to_cost": 4.0
+      },
+      "slippage": 769.17,
+      "strategy": "ema_momentum",
+      "timeframe": "15Min",
+      "trades": 317,
+      "trades_2x": 263,
+      "what": "target must clear 4x the round trip instead of 2x"
+    },
+    {
+      "bps_captured": -0.16,
+      "candidate": "gate_8x",
+      "fees": 363.97,
+      "gross": -56.83,
+      "net": -612.58,
+      "net_2x": -423.51,
+      "net_pf": 0.694,
+      "net_pf_2x": 0.632,
+      "notional": 3639694.06,
+      "risk_override": {
+        "min_reward_to_cost": 8.0
+      },
+      "slippage": 191.78,
+      "strategy": "ema_momentum",
+      "timeframe": "15Min",
+      "trades": 78,
+      "trades_2x": 34,
+      "what": "target must clear 8x the round trip"
+    },
+    {
+      "bps_captured": 0.68,
+      "candidate": "hourly",
+      "fees": 360.24,
+      "gross": 243.4,
+      "net": -320.1,
+      "net_2x": -850.89,
+      "net_pf": 0.84,
+      "net_pf_2x": 0.628,
+      "notional": 3602431.7,
+      "risk_override": {},
+      "slippage": 203.26,
+      "strategy": "ema_momentum",
+      "timeframe": "1Hour",
+      "trades": 109,
+      "trades_2x": 109,
+      "what": "same rules and same risk, one decision an hour instead of four"
+    },
+    {
+      "bps_captured": 2.13,
+      "candidate": "hourly_hold_24h",
+      "fees": 299.71,
+      "gross": 639.87,
+      "net": 189.07,
+      "net_2x": -269.9,
+      "net_pf": 1.086,
+      "net_pf_2x": 0.889,
+      "notional": 2997098.12,
+      "risk_override": {
+        "max_hold_minutes": 1440
+      },
+      "slippage": 151.09,
+      "strategy": "ema_momentum",
+      "timeframe": "1Hour",
+      "trades": 97,
+      "trades_2x": 96,
+      "what": "hourly cadence, and a position may run a day instead of four hours"
+    },
+    {
+      "bps_captured": 2.13,
+      "candidate": "hourly_gate_4x_hold_24h",
+      "fees": 299.71,
+      "gross": 639.87,
+      "net": 189.07,
+      "net_2x": -269.9,
+      "net_pf": 1.086,
+      "net_pf_2x": 0.889,
+      "notional": 2997098.12,
+      "risk_override": {
+        "max_hold_minutes": 1440,
+        "min_reward_to_cost": 4.0
+      },
+      "slippage": 151.09,
+      "strategy": "ema_momentum",
+      "timeframe": "1Hour",
+      "trades": 97,
+      "trades_2x": 96,
+      "what": "both controls together"
+    },
+    {
+      "bps_captured": -0.13,
+      "candidate": "baseline",
+      "fees": 1475.5,
+      "gross": -188.33,
+      "net": -2455.15,
+      "net_2x": -3564.01,
+      "net_pf": 0.666,
+      "net_pf_2x": 0.497,
+      "notional": 14754966.44,
+      "risk_override": {},
+      "slippage": 791.33,
+      "strategy": "vwap_reversion",
+      "timeframe": "15Min",
+      "trades": 358,
+      "trades_2x": 321,
+      "what": "the unchanged live config \u2014 what the desk runs today"
+    },
+    {
+      "bps_captured": -0.08,
+      "candidate": "gate_4x",
+      "fees": 1409.76,
+      "gross": -108.12,
+      "net": -2285.14,
+      "net_2x": -3196.71,
+      "net_pf": 0.686,
+      "net_pf_2x": 0.542,
+      "notional": 14097510.48,
+      "risk_override": {
+        "min_reward_to_cost": 4.0
+      },
+      "slippage": 767.25,
+      "strategy": "vwap_reversion",
+      "timeframe": "15Min",
+      "trades": 339,
+      "trades_2x": 286,
+      "what": "target must clear 4x the round trip instead of 2x"
+    },
+    {
+      "bps_captured": 0.38,
+      "candidate": "gate_8x",
+      "fees": 1152.79,
+      "gross": 433.7,
+      "net": -1365.99,
+      "net_2x": -2386.59,
+      "net_pf": 0.783,
+      "net_pf_2x": 0.574,
+      "notional": 11527589.39,
+      "risk_override": {
+        "min_reward_to_cost": 8.0
+      },
+      "slippage": 646.9,
+      "strategy": "vwap_reversion",
+      "timeframe": "15Min",
+      "trades": 255,
+      "trades_2x": 188,
+      "what": "target must clear 8x the round trip"
+    },
+    {
+      "bps_captured": -0.13,
+      "candidate": "hourly",
+      "fees": 384.89,
+      "gross": -50.71,
+      "net": -649.81,
+      "net_2x": -1211.63,
+      "net_pf": 0.732,
+      "net_pf_2x": 0.545,
+      "notional": 3848968.11,
+      "risk_override": {},
+      "slippage": 214.2,
+      "strategy": "vwap_reversion",
+      "timeframe": "1Hour",
+      "trades": 138,
+      "trades_2x": 127,
+      "what": "same rules and same risk, one decision an hour instead of four"
+    },
+    {
+      "bps_captured": 0.44,
+      "candidate": "hourly_hold_24h",
+      "fees": 322.28,
+      "gross": 140.51,
+      "net": -354.61,
+      "net_2x": -704.64,
+      "net_pf": 0.849,
+      "net_pf_2x": 0.733,
+      "notional": 3222915.16,
+      "risk_override": {
+        "max_hold_minutes": 1440
+      },
+      "slippage": 172.84,
+      "strategy": "vwap_reversion",
+      "timeframe": "1Hour",
+      "trades": 113,
+      "trades_2x": 123,
+      "what": "hourly cadence, and a position may run a day instead of four hours"
+    },
+    {
+      "bps_captured": 0.44,
+      "candidate": "hourly_gate_4x_hold_24h",
+      "fees": 322.29,
+      "gross": 140.92,
+      "net": -354.21,
+      "net_2x": -734.08,
+      "net_pf": 0.849,
+      "net_pf_2x": 0.715,
+      "notional": 3222943.68,
+      "risk_override": {
+        "max_hold_minutes": 1440,
+        "min_reward_to_cost": 4.0
+      },
+      "slippage": 172.84,
+      "strategy": "vwap_reversion",
+      "timeframe": "1Hour",
+      "trades": 113,
+      "trades_2x": 115,
+      "what": "both controls together"
+    }
+  ],
+  "first_result_at": "2026-09-24T22:46:59.972337+00:00",
+  "forward_confirmation_start": "2026-09-25T00:00:00+00:00",
+  "forward_result": "not started \u2014 nothing is claimed about it",
+  "live_params": {
+    "ema_momentum": {
+      "fast": 9,
+      "min_relvol": 1.0,
+      "rr": 2.0,
+      "rsi_max": 70,
+      "rsi_min": 50,
+      "slow": 21,
+      "stop_atr_mult": 1.5
+    },
+    "vwap_reversion": {
+      "entry_z": 2.0,
+      "lookback": 30,
+      "max_bars_held": 24,
+      "min_bar_pos": 6,
+      "stop_atr_mult": 1.5
+    }
+  },
+  "measured_at": "2026-09-24T22:47:20.332878+00:00",
+  "outcome": {
+    "ema_momentum": {
+      "frozen": false,
+      "outcome": "none beat baseline",
+      "why": [
+        "baseline net at 1x: -1281.70 over 301 trades",
+        "no candidate cleared every pre-registered gate",
+        "NOTE: hourly_hold_24h did beat the baseline on net (+189.07 vs -1281.70 over 97 trades) and failed on net PF at 2x 0.89 < 1.0",
+        "not frozen, because the gate it failed is the one that asks whether the edge survives a worse toll \u2014 which is the entire question here",
+        "reported as a failure, which is the honest and most likely outcome"
+      ],
+      "winner": null
+    },
+    "vwap_reversion": {
+      "frozen": false,
+      "outcome": "none beat baseline",
+      "why": [
+        "baseline net at 1x: -2455.15 over 358 trades",
+        "no candidate cleared every pre-registered gate",
+        "NOTE: hourly_gate_4x_hold_24h did beat the baseline on net (-354.21 vs -2455.15 over 113 trades) and failed on net PF at 2x 0.71 < 1.0",
+        "not frozen, because the gate it failed is the one that asks whether the edge survives a worse toll \u2014 which is the entire question here",
+        "reported as a failure, which is the honest and most likely outcome"
+      ],
+      "winner": null
+    }
+  },
+  "registered_at": "2026-09-24T22:44:23.343122+00:00",
+  "train_bars_in_entry_window": {
+    "15Min": {
+      "AUD/USD": 3915,
+      "EUR/USD": 3913,
+      "GBP/USD": 3913,
+      "NZD/USD": 3915
+    },
+    "1Hour": {
+      "AUD/USD": 982,
+      "EUR/USD": 982,
+      "GBP/USD": 982,
+      "NZD/USD": 983
+    }
+  },
+  "train_entry_window": [
+    "2026-07-10T16:15:00+00:00",
+    "2026-09-08T00:00:00+00:00"
+  ],
+  "warmup_bars_consumed": 40
+}

@@ -135,8 +135,7 @@ class Command(BaseCommand):
             raise CommandError('choose exactly one of --preregister and --run')
         if o['preregister']:
             return self._preregister()
-        raise CommandError('--run is not built yet; the registration is committed first '
-                           'so that the order cannot be argued about later')
+        return self._run()
 
     def _preregister(self):
         from main_app.models import Hypothesis
@@ -177,3 +176,180 @@ class Command(BaseCommand):
         self.stdout.write(f'  spent         2026-09-08 .. 2026-09-24 — never used to select')
         self.stdout.write(f'  confirm from  {FORWARD_START:%Y-%m-%d}, nothing claimed yet')
         self.stdout.write(self.style.SUCCESS(f'  wrote {PREREG}'))
+
+    # --- measurement -------------------------------------------------------
+    def _run(self):
+        from datetime import date
+        from main_app.management.commands.h10_forward import run_window
+        from main_app.models import Hypothesis, Strategy
+        from main_app.services.backtest import load_frames
+        from main_app.services.strategies import make_strategy
+
+        if not os.path.exists(PREREG):
+            raise CommandError(f'no {PREREG} — register what will be tested before measuring it. '
+                               f'Run --preregister first.')
+        reg = json.load(open(PREREG))
+        h = Hypothesis.objects.filter(id=reg.get('hypothesis_id')).first()
+        if h is None:
+            raise CommandError(f'registration names hypothesis #{reg.get("hypothesis_id")}, '
+                               f'which does not exist — refusing to report against nothing')
+
+        live = {k: Strategy.objects.get(market='forex', key=k).params for k in STRATEGIES}
+
+        # 1Hour forex reaches back years; 15Min starts 2026-07-10. Loading each from
+        # its own earliest point gives the hourly candidates a proper warm-up, which
+        # is correct — but it would also hand them a longer ENTRY window, which is
+        # not a turnover effect. So every candidate is judged on one common entry
+        # calendar: the latest warm-up boundary across all of them, which is the
+        # 15Min one. Reported, not assumed.
+        frames = {'15Min': load_frames(list(PAIRS), '15Min', date(2026, 7, 1), TRAIN_END.date()),
+                  '1Hour': load_frames(list(PAIRS), '1Hour', date(2026, 1, 1), TRAIN_END.date())}
+        warm = max(make_strategy(k, live[k]).warmup_bars for k in STRATEGIES)
+        entry_from = max(sorted(df.index[df.index < TRAIN_END])[warm].to_pydatetime()
+                         for df in frames['15Min'].values())
+
+        bars = {tf: {sym: int(((df.index >= entry_from) & (df.index < TRAIN_END)).sum())
+                     for sym, df in fr.items()} for tf, fr in frames.items()}
+
+        rows, first_result_at = [], None
+        for key in STRATEGIES:
+            for name, tf, over, why in CANDIDATES:
+                trades, slip = run_window(key, dict(live[key]), dict(over), frames[tf],
+                                          entry_from, TRAIN_END, timeframe=tf, pairs=PAIRS)
+                t2, _ = run_window(key, dict(live[key]), dict(over), frames[tf],
+                                   entry_from, TRAIN_END, cost_mult=2.0, timeframe=tf, pairs=PAIRS)
+                if first_result_at is None:
+                    first_result_at = datetime.now(timezone.utc).isoformat()
+                rows.append({'strategy': key, 'candidate': name, 'timeframe': tf,
+                             'risk_override': over, 'what': why,
+                             **_stats(trades, slip), **_at2x(t2)})
+
+        winners = {k: _select(k, rows) for k in STRATEGIES}
+        out = {'assignment': 'MT-A003', 'registered_at': reg['registered_at'],
+               'first_result_at': first_result_at,
+               'measured_at': datetime.now(timezone.utc).isoformat(),
+               'train_entry_window': [entry_from.isoformat(), TRAIN_END.isoformat()],
+               'warmup_bars_consumed': warm, 'train_bars_in_entry_window': bars,
+               'forward_confirmation_start': FORWARD_START.isoformat(),
+               'forward_result': 'not started — nothing is claimed about it',
+               'live_params': live, 'candidates': rows, 'outcome': winners}
+        with open(RESULTS, 'w') as fh:
+            json.dump(out, fh, indent=2, sort_keys=True)
+
+        h.train_result = {'entry_window': out['train_entry_window'], 'rows': rows,
+                          'outcome': winners}
+        h.status = (Hypothesis.FORWARD if any(w['frozen'] for w in winners.values())
+                    else Hypothesis.REJECTED)
+        h.decided_at = djtz.now()
+        h.decision_note = '; '.join(f'{k}: {v["outcome"]}' for k, v in winners.items())
+        h.save()
+        self._report(reg, out, winners)
+
+    def _report(self, reg, out, winners):
+        w = self.stdout.write
+        w(self.style.MIGRATE_HEADING('\nMT-A003 TURNOVER RESEARCH — train only, places no orders'))
+        w(f'  registered    {reg["registered_at"]}')
+        w(f'  first result  {out["first_result_at"]}   (registration must precede it)')
+        w(f'  entry window  {out["train_entry_window"][0][:16]} .. {TRAIN_END:%Y-%m-%d} '
+          f'after {out["warmup_bars_consumed"]} warm-up bars')
+        for tf, b in out['train_bars_in_entry_window'].items():
+            w(f'    {tf:6} bars/pair  {", ".join(f"{s} {n}" for s, n in sorted(b.items()))}')
+        hdr = (f'\n  {"strategy":15} {"candidate":24} {"n":>4} {"gross":>9} {"fees":>8} '
+               f'{"slip":>8} {"net 1x":>9} {"net 2x":>9} {"netPF":>6} {"PF2x":>6}')
+        w(hdr)
+        w('  ' + '-' * (len(hdr) - 3))
+        for r in out['candidates']:
+            flag = '' if r['trades'] >= MIN_TRAIN_TRADES else '  <- too few to choose'
+            w(f'  {r["strategy"]:15} {r["candidate"]:24} {r["trades"]:4} {r["gross"]:9.2f} '
+              f'{r["fees"]:8.2f} {r["slippage"]:8.2f} {r["net"]:9.2f} {r["net_2x"]:9.2f} '
+              f'{_fmt(r["net_pf"]):>6} {_fmt(r["net_pf_2x"]):>6}{flag}')
+        w('')
+        for k, v in winners.items():
+            style = self.style.SUCCESS if v['frozen'] else self.style.WARNING
+            w(style(f'  {k:15} {v["outcome"]}'))
+            for line in v['why']:
+                w(f'      {line}')
+        w(f'\n  forward confirmation starts {FORWARD_START:%Y-%m-%d}; nothing is claimed about '
+          f'it here.\n  No significance is claimed: {len(CANDIDATES) * len(STRATEGIES)} '
+          f'comparisons with an argmax taken flatters the winner by construction.')
+        w(self.style.SUCCESS(f'  wrote {RESULTS}'))
+
+
+def _fmt(v):
+    return '-' if v is None else f'{v:.2f}'
+
+
+def _pf(trades) -> float | None:
+    won = sum(float(t.pnl) for t in trades if float(t.pnl) > 0)
+    lost = -sum(float(t.pnl) for t in trades if float(t.pnl) <= 0)
+    return round(won / lost, 3) if lost else None
+
+
+def _stats(trades, slip) -> dict:
+    """Net profit factor, not gross: the question is what the desk keeps."""
+    if not trades:
+        return {'trades': 0, 'gross': 0.0, 'fees': 0.0, 'slippage': 0.0, 'net': 0.0,
+                'net_pf': None, 'bps_captured': None, 'notional': 0.0}
+    net = sum(float(t.pnl) for t in trades)
+    fees = sum(float(t.fees) for t in trades)
+    notional = sum(float(t.entry_price) * float(t.qty) for t in trades)
+    legs = sum(1 + (0 if t.exit_reason == 'target' else 1) for t in trades)
+    slipc = notional / len(trades) * legs * slip / 1e4
+    gross = net + fees + slipc
+    return {'trades': len(trades), 'gross': round(gross, 2), 'fees': round(fees, 2),
+            'slippage': round(slipc, 2), 'net': round(net, 2), 'net_pf': _pf(trades),
+            'notional': round(notional, 2),
+            'bps_captured': round(gross / notional * 1e4, 2) if notional else None}
+
+
+def _at2x(trades) -> dict:
+    return {'net_2x': round(sum(float(t.pnl) for t in trades), 2),
+            'net_pf_2x': _pf(trades), 'trades_2x': len(trades)}
+
+
+def _select(strategy: str, rows: list) -> dict:
+    """Apply the pre-registered rule exactly. No judgement is exercised here."""
+    mine = [r for r in rows if r['strategy'] == strategy]
+    base = next(r for r in mine if r['candidate'] == 'baseline')
+    others = [r for r in mine if r['candidate'] != 'baseline']
+    ranked = sorted(others, key=lambda r: r[SELECT_ON.replace('net_1x', 'net')], reverse=True)
+    top = ranked[0] if ranked else None
+
+    def ok(r):
+        return (r['trades'] >= MIN_TRAIN_TRADES
+                and r['net_pf_2x'] is not None and r['net_pf_2x'] >= MIN_NET_PF_AT_2X
+                and r['net'] > base['net'])
+
+    passing = [r for r in ranked if ok(r)]
+    why = [f'baseline net at 1x: {base["net"]:+.2f} over {base["trades"]} trades']
+    if passing:
+        w = passing[0]
+        why += [f'winner {w["candidate"]}: net {w["net"]:+.2f} over {w["trades"]} trades, '
+                f'net PF at 2x {_fmt(w["net_pf_2x"])}',
+                'frozen for forward confirmation only — not a result']
+        return {'outcome': f'FROZEN: {w["candidate"]}', 'frozen': True, 'winner': w['candidate'],
+                'why': why, 'forward_confirmation_start': FORWARD_START.isoformat()}
+    if top is not None and top['net'] > base['net'] and top['trades'] < MIN_TRAIN_TRADES:
+        why += [f'best net was {top["candidate"]} at {top["net"]:+.2f}, but on only '
+                f'{top["trades"]} trades against a pre-registered floor of {MIN_TRAIN_TRADES}',
+                'the number, not a hedge: this cannot be separated from noise']
+        return {'outcome': 'BLOCKED: insufficient train data', 'frozen': False,
+                'winner': None, 'why': why}
+    why += ['no candidate cleared every pre-registered gate']
+    # "none beat baseline" is the registered label for "nothing cleared the gates",
+    # and it is kept exactly as registered. But on its own it would hide a candidate
+    # that beat the baseline on net and died on robustness, which is a different and
+    # more interesting failure — and the one worth looking at again after more data.
+    if top is not None and top['net'] > base['net']:
+        failed = []
+        if top['trades'] < MIN_TRAIN_TRADES:
+            failed.append(f'n {top["trades"]} < {MIN_TRAIN_TRADES}')
+        if top['net_pf_2x'] is None or top['net_pf_2x'] < MIN_NET_PF_AT_2X:
+            failed.append(f'net PF at 2x {_fmt(top["net_pf_2x"])} < {MIN_NET_PF_AT_2X}')
+        why += [f'NOTE: {top["candidate"]} did beat the baseline on net '
+                f'({top["net"]:+.2f} vs {base["net"]:+.2f} over {top["trades"]} trades) '
+                f'and failed on {" and ".join(failed)}',
+                'not frozen, because the gate it failed is the one that asks whether the '
+                'edge survives a worse toll — which is the entire question here']
+    why += ['reported as a failure, which is the honest and most likely outcome']
+    return {'outcome': 'none beat baseline', 'frozen': False, 'winner': None, 'why': why}

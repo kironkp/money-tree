@@ -5,11 +5,12 @@ past a window end when only `act_from` was set — 38% of one "train" window was
 test data. And a strategy was measured under parameters that had drifted from the
 ones the hypothesis recorded, which makes the measurement about something else.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from django.test import SimpleTestCase, TestCase
 
-from main_app.management.commands.h10_forward import spread_multiplier
+from main_app.management.commands.h10_forward import (coverage, coverage_gaps,
+                                                      spread_multiplier)
 from main_app.services.strategies import make_strategy
 from main_app.services.strategies.fx_trend import (H10_HELD_OUT, H10_PAIRS, H10_RISK, H10_SPEC,
                                                    H10_TIMEFRAME)
@@ -133,3 +134,54 @@ class TheSpreadModelIsShapedByTheClock(SimpleTestCase):
 
     def test_asia_sits_between_them(self):
         self.assertEqual(spread_multiplier(3), 1.5)
+
+
+class ABaselineMustReachTheWindowStart(SimpleTestCase):
+    """A baseline replayed on a timeframe whose history does not reach the window
+    start measured a SHORTER window, and comparing it like for like credits or
+    blames the strategy for the calendar.
+
+    This is not hypothetical here. 15Min forex history begins 2026-07-10 and the
+    1Hour series reaches back years, so any window opening before July compares a
+    full baseline against a partial one — and MT-A001 already shipped one baseline
+    measured on the wrong frames entirely.
+    """
+    START = datetime(2026, 9, 8, tzinfo=timezone.utc)
+    END = datetime(2026, 9, 24, tzinfo=timezone.utc)
+
+    def _frames(self, first_offset_h: float, n: int = 400):
+        import pandas as pd
+        idx = pd.date_range(self.START + timedelta(hours=first_offset_h), periods=n, freq='15min',
+                            tz='UTC')
+        return {'EUR/USD': pd.DataFrame({'close': [1.1] * n}, index=idx)}
+
+    def test_coverage_reports_the_first_and_last_bar_in_the_window(self):
+        cov = coverage(self._frames(0), self.START, self.END)
+        self.assertEqual(cov['EUR/USD']['bars'], 400)
+        self.assertEqual(cov['EUR/USD']['first'][:16], '2026-09-08T00:00')
+
+    def test_a_series_that_starts_late_is_flagged(self):
+        cov = coverage(self._frames(72), self.START, self.END)
+        gaps = coverage_gaps(cov, self.START, '15Min')
+        self.assertEqual(len(gaps), 1)
+        self.assertIn('72.0h after the window opened', gaps[0])
+
+    def test_a_series_with_no_bars_in_the_window_is_flagged(self):
+        import pandas as pd
+        idx = pd.date_range(self.START - timedelta(days=30), periods=10, freq='15min', tz='UTC')
+        cov = coverage({'EUR/USD': pd.DataFrame({'close': [1.1] * 10}, index=idx)},
+                       self.START, self.END)
+        self.assertEqual(coverage_gaps(cov, self.START, '15Min'),
+                         ['EUR/USD: NO bars inside the window at all'])
+
+    def test_one_bar_late_is_a_boundary_and_not_a_gap(self):
+        """Without slack every run would warn about its own first bar, and a
+        warning that always fires is one nobody reads."""
+        self.assertEqual(coverage_gaps(coverage(self._frames(0.25), self.START, self.END),
+                                       self.START, '15Min'), [])
+
+    def test_the_slack_scales_with_the_timeframe(self):
+        """Two bars of slack means two HOURS on 1Hour frames, not thirty minutes."""
+        cov = coverage(self._frames(1.5), self.START, self.END)
+        self.assertEqual(coverage_gaps(cov, self.START, '1Hour'), [])
+        self.assertEqual(len(coverage_gaps(cov, self.START, '15Min')), 1)

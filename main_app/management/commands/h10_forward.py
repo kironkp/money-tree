@@ -90,6 +90,41 @@ def _measure(trades, slippage_bps: float) -> dict:
     }
 
 
+def coverage(frames, start, end) -> dict:
+    """First and last bar each series actually holds inside [start, end].
+
+    A baseline replayed on a timeframe whose history does not reach the window
+    start is measuring a SHORTER window, and comparing it like for like flatters
+    or damns it for a reason that has nothing to do with the strategy. 15Min forex
+    only begins 2026-07-10, so this is a live hazard on this desk rather than a
+    hypothetical one.
+    """
+    out = {}
+    for sym, df in frames.items():
+        idx = df.index[(df.index >= start) & (df.index <= end)]
+        out[sym] = {'bars': int(len(idx)),
+                    'first': idx[0].to_pydatetime().isoformat() if len(idx) else None,
+                    'last': idx[-1].to_pydatetime().isoformat() if len(idx) else None}
+    return out
+
+
+def coverage_gaps(cov: dict, start: datetime, timeframe: str) -> list[str]:
+    """Series that do not reach the window start. Two bars of slack, because a
+    feed that begins one bar late is a boundary, not a gap."""
+    from main_app.services.timeframes import tf_minutes
+    slack = tf_minutes(timeframe) * 2
+    out = []
+    for sym, c in sorted(cov.items()):
+        if not c['bars']:
+            out.append(f'{sym}: NO bars inside the window at all')
+            continue
+        gap = (datetime.fromisoformat(c['first']) - start).total_seconds() / 60
+        if gap > slack:
+            out.append(f'{sym}: first in-window bar {c["first"][:16]}, '
+                       f'{gap / 60:.1f}h after the window opened')
+    return out
+
+
 def run_window(key: str, params: dict, risk_over: dict, frames, start, end,
                cost_mult: float = 1.0, timeframe: str = H10_TIMEFRAME,
                pairs=H10_PAIRS) -> tuple[list, float]:
@@ -208,8 +243,23 @@ class Command(BaseCommand):
             m = _measure(tr, sl)
             m['timeframe'] = row.timeframe
             m['risk'] = 'forex lane live RiskConfig'
+            # A baseline that cannot reach the window start is not a baseline for
+            # this window, and saying so is the whole point of printing it.
+            cov = coverage(tf_frames, start, end)
+            m['coverage'] = cov
+            gaps = coverage_gaps(cov, start, row.timeframe)
+            m['coverage_gaps'] = gaps
             result['baselines'][row.key] = m
             self._row(f'{row.key} ({row.timeframe}, live risk)', m)
+            for sym, c in sorted(cov.items()):
+                self.stdout.write(f'        {sym:9} {c["bars"]:5} bars  '
+                                  f'{(c["first"] or "-")[:16]} .. {(c["last"] or "-")[:16]}')
+            for g in gaps:
+                self.stdout.write(w(f'        WARNING {row.timeframe} does not cover the window '
+                                    f'start — {g}'))
+            if gaps:
+                self.stdout.write(w('        this baseline measured a SHORTER window than H10 '
+                                    'and is not comparable like for like'))
 
         # Kept only so the earlier, mislabelled figures remain comparable. This
         # is NOT how these strategies run.

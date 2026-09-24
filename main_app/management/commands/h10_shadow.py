@@ -37,7 +37,6 @@ from datetime import datetime, timedelta, timezone
 
 from django.core.management.base import BaseCommand, CommandError
 
-from main_app.services.backtest import load_frames
 from main_app.services.strategies import make_strategy
 from main_app.services.strategies.fx_trend import (H10_PAIRS, H10_RISK, H10_SPEC, H10_TIMEFRAME)
 
@@ -152,6 +151,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **o):
         from main_app.management.commands.h10_forward import run_window, _window_bounds
+        from main_app.services.research_window import Window, inclusive_through, research_frames
 
         start = datetime.fromisoformat(o['start']).replace(tzinfo=timezone.utc)
         is_record = os.path.abspath(o['out']) == os.path.abspath(ARTIFACT)
@@ -202,7 +202,11 @@ class Command(BaseCommand):
 
         need = make_strategy('fx_trend', dict(H10_SPEC)).warmup_bars
         warm_from = (start - timedelta(days=max(120, need // 4))).date()
-        frames = load_frames(list(H10_PAIRS), H10_TIMEFRAME, warm_from, end.date())
+        # Half-open: `end` is the latest closed bar, so the window runs through it
+        # and stops. research_frames cuts before quality_gate ever sees the tail.
+        end = inclusive_through(end)
+        frames = research_frames(H10_PAIRS, H10_TIMEFRAME,
+                                 Window(warmup_start=warm_from, start=start, end=end))
         available = min(int((df.index < start).sum()) for df in frames.values())
         if available < need:
             self.stderr.write(f'warm-up too short ({available} bars, need {need}) — not recording, '

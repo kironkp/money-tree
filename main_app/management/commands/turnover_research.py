@@ -33,6 +33,8 @@ TITLE = 'MT-A003: turnover controls on the live forex strategies'
 # Selection uses bars strictly before this. 2026-09-08..09-24 was spent by MT-A001
 # and must never be used to choose anything.
 TRAIN_END = datetime(2026, 9, 8, tzinfo=timezone.utc)
+# 15Min forex history begins here; the window is half-open [TRAIN_START, TRAIN_END).
+TRAIN_START = datetime(2026, 7, 10, tzinfo=timezone.utc)
 # Confirmation, when it happens, starts here. Nothing is claimed about it yet.
 FORWARD_START = datetime(2026, 9, 25, tzinfo=timezone.utc)
 
@@ -75,7 +77,16 @@ SELECT_ON = 'net_1x'        # the single ranking statistic
 
 
 def train_frames(frames: dict) -> dict:
-    """Every bar the engine may see, cut strictly before TRAIN_END.
+    """Cut frames strictly before TRAIN_END.
+
+    Superseded by `research_window.research_frames`, which does the cut before
+    quality_gate rather than after and is now the only way this command obtains
+    bars. Kept because MT-A003's correction is recorded against this name and
+    because it is the cheapest way to express the rule in a test.
+
+    Original note follows.
+
+    Every bar the engine may see, cut strictly before TRAIN_END.
 
     `load_frames` takes an inclusive end DATE and expands it to cover the whole ET
     session day, so asking for 2026-09-08 returns bars to 2026-09-09 03:45 UTC —
@@ -199,7 +210,7 @@ class Command(BaseCommand):
         from datetime import date
         from main_app.management.commands.h10_forward import run_window
         from main_app.models import Hypothesis, Strategy
-        from main_app.services.backtest import load_frames
+        from main_app.services.research_window import Window, research_frames
         from main_app.services.strategies import make_strategy
 
         if not os.path.exists(PREREG):
@@ -219,11 +230,9 @@ class Command(BaseCommand):
         # not a turnover effect. So every candidate is judged on one common entry
         # calendar: the latest warm-up boundary across all of them, which is the
         # 15Min one. Reported, not assumed.
-        frames = {
-            '15Min': train_frames(load_frames(list(PAIRS), '15Min', date(2026, 7, 1),
-                                              TRAIN_END.date())),
-            '1Hour': train_frames(load_frames(list(PAIRS), '1Hour', date(2026, 1, 1),
-                                              TRAIN_END.date()))}
+        frames = {tf: research_frames(PAIRS, tf, Window(warmup_start=warm, start=TRAIN_START,
+                                                        end=TRAIN_END))
+                  for tf, warm in (('15Min', date(2026, 7, 1)), ('1Hour', date(2026, 1, 1)))}
         warm = max(make_strategy(k, live[k]).warmup_bars for k in STRATEGIES)
         entry_from = max(sorted(df.index[df.index < TRAIN_END])[warm].to_pydatetime()
                          for df in frames['15Min'].values())

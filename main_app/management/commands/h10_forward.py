@@ -30,7 +30,9 @@ from datetime import datetime, timedelta, timezone
 from django.core.management.base import BaseCommand
 
 from main_app.models import AgentConfig, Bar, Instrument, Strategy
-from main_app.services.backtest import load_frames, run_backtest, spec_from_models
+from main_app.services.backtest import run_backtest, spec_from_models
+from main_app.services.research_window import (Window, assert_bounded,
+                                               inclusive_through, research_frames)
 from main_app.services.strategies.fx_trend import (H10_HELD_OUT, H10_PAIRS, H10_RISK, H10_SPEC,
                                                    H10_TIMEFRAME)
 
@@ -141,12 +143,17 @@ def run_window(key: str, params: dict, risk_over: dict, frames, start, end,
     if cost_mult != 1.0:
         spec.fee_bps = {k: v * cost_mult for k, v in spec.fee_bps.items()}
         spec.risk = replace(spec.risk, slippage_bps=spec.risk.slippage_bps * cost_mult)
+    # The choke point. Every research command reaches the engine through here, so a
+    # call site that loads its own frames fails loudly instead of quietly measuring
+    # the future. `end` is EXCLUSIVE — see research_window.inclusive_through.
+    assert_bounded(frames, end, f'run_window({key})')
     spec.act_from = start
     res = run_backtest(spec, frames)
     # act_from stops the engine acting early; this stops it acting late. Both are
     # required — setting only the first is the leak that invalidated a whole
-    # train window.
-    return [t for t in res.trades if start <= t.entry_ts <= end], spec.risk.slippage_bps
+    # train window, and bounding entries while the FRAMES ran past the boundary is
+    # the same mistake one layer out.
+    return [t for t in res.trades if start <= t.entry_ts < end], spec.risk.slippage_bps
 
 
 class Command(BaseCommand):
@@ -176,6 +183,12 @@ class Command(BaseCommand):
         start, end = _window_bounds(start)
         if o['end']:
             end = datetime.fromisoformat(o['end']).replace(tzinfo=timezone.utc, hour=23, minute=59)
+        # Half-open from here on: `end` becomes the first instant OUTSIDE the
+        # window, so the same value bounds the 1Hour frames and every baseline's
+        # own timeframe. Previously each baseline loaded to the end DATE, which
+        # the store expands across the ET session day — 44 fifteen-minute bars
+        # past the window end on the unseen run, 64 on the held-out one.
+        end = inclusive_through(end)
         # Warm-up comes from bars BEFORE the window; the engine may not act on them.
         #
         # This must be counted in BARS, not hours. FX is shut at weekends, so 552
@@ -186,7 +199,8 @@ class Command(BaseCommand):
         from main_app.services.strategies import make_strategy
         need = make_strategy('fx_trend', dict(H10_SPEC)).warmup_bars
         warm_from = (start - timedelta(days=max(120, need // 4))).date()
-        frames = load_frames(list(H10_PAIRS), H10_TIMEFRAME, warm_from, end.date())
+        window = Window(warmup_start=warm_from, start=start, end=end)
+        frames = research_frames(H10_PAIRS, H10_TIMEFRAME, window)
         in_window = {s_: int((df.index >= start).sum()) for s_, df in frames.items()}
         shortest = min((len(df) - n) for (s_, df), n in zip(frames.items(), in_window.values()))
         if shortest < need:
@@ -199,7 +213,8 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING(
             '\nH10 FORWARD TEST — bars never used to fit or select it'))
         self.stdout.write(f'  held-out window was   {H10_HELD_OUT[0]} .. {H10_HELD_OUT[1]}')
-        self.stdout.write(f'  this window is        {start:%Y-%m-%d %H:%M} .. {end:%Y-%m-%d %H:%M} UTC')
+        self.stdout.write(f'  this window is        {start:%Y-%m-%d %H:%M} .. {end:%Y-%m-%d %H:%M} UTC '
+                          f'(half-open: no bar at or after the end reaches the engine)')
         self.stdout.write(f'  warm-up loaded from   {warm_from} (no trade may enter before the window)')
         self.stdout.write(f'  spec                  {H10_SPEC}')
         self.stdout.write(f'  risk                  {H10_RISK}')
@@ -237,7 +252,7 @@ class Command(BaseCommand):
         # RiskConfig and no H10 overrides — that is what "baseline" has to mean.
         for row in Strategy.objects.filter(market='forex', enabled=True).order_by('key'):
             tf_frames = (frames if row.timeframe == H10_TIMEFRAME
-                         else load_frames(list(H10_PAIRS), row.timeframe, warm_from, end.date()))
+                         else research_frames(H10_PAIRS, row.timeframe, window))
             tr, sl = run_window(row.key, dict(row.params), {}, tf_frames, start, end,
                                 timeframe=row.timeframe)
             m = _measure(tr, sl)

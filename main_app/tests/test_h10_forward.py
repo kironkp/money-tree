@@ -76,11 +76,21 @@ class TheEntryWindowHoldsAtBothEnds(TestCase):
         self.start = self.base + timedelta(hours=self.WARMUP)
         self.end = self.start + timedelta(hours=300)
 
-    def _frames(self):
+    def _frames(self, end=None):
+        """Frames bounded at the window end, as production now supplies them.
+
+        Before MT-A005 these tests handed run_window frames running well past the
+        end and relied on the ENTRY filter alone to bound the window. That is no
+        longer the contract: frames arrive bounded and the entry filter is the
+        second line of defence, not the first. `test_run_window_refuses_frames_...`
+        below pins the new half.
+        """
         from datetime import timedelta
         from main_app.services.backtest import load_frames
-        return load_frames(['EUR/USD'], '1Hour', self.base.date(),
-                           (self.base + timedelta(hours=self.WARMUP + 1000)).date())
+        from main_app.services.research_window import truncate
+        frames = load_frames(['EUR/USD'], '1Hour', self.base.date(),
+                             (self.base + timedelta(hours=self.WARMUP + 1000)).date())
+        return truncate(frames, end or self.end)
 
     def _params(self):
         # H10's spec but with the hour gate open, so the synthetic clock cannot
@@ -105,6 +115,22 @@ class TheEntryWindowHoldsAtBothEnds(TestCase):
             self.assertGreaterEqual(t.entry_ts, self.start, 'an entry landed BEFORE the window')
             self.assertLessEqual(t.entry_ts, self.end, 'an entry landed AFTER the window')
 
+    def test_run_window_refuses_frames_that_reach_past_the_window_end(self):
+        """The MT-A005 contract, at the choke point every research command uses.
+
+        A command that loads its own frames — the mistake made three times — now
+        fails loudly here instead of quietly measuring the future.
+        """
+        from datetime import timedelta
+        from main_app.management.commands.h10_forward import run_window
+        from main_app.services.backtest import load_frames
+        from main_app.services.research_window import WindowLeak
+        leaking = load_frames(['EUR/USD'], '1Hour', self.base.date(),
+                              (self.base + timedelta(hours=self.WARMUP + 1000)).date())
+        with self.assertRaises(WindowLeak) as cm:
+            run_window('fx_trend', self._params(), dict(H10_RISK), leaking, self.start, self.end)
+        self.assertIn('EUR/USD', str(cm.exception))
+
     def test_negative_control_the_data_does_contain_a_trade_after_the_window_end(self):
         """The end filter is only load-bearing if something would otherwise cross
         it. Run unbounded over the same data and require an entry past `end`; if
@@ -114,7 +140,7 @@ class TheEntryWindowHoldsAtBothEnds(TestCase):
         from main_app.management.commands.h10_forward import run_window
         far = self.end + timedelta(hours=5000)
         trades, _ = run_window('fx_trend', self._params(), dict(H10_RISK),
-                               self._frames(), self.start, far)
+                               self._frames(far), self.start, far)
         after = [t for t in trades if t.entry_ts > self.end]
         self.assertGreater(len(after), 0,
                            'nothing trades after the window end, so the end filter is unproven')

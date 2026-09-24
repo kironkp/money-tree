@@ -16,7 +16,7 @@ from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase
 
 from main_app.management.commands.turnover_research import (CANDIDATES, MIN_NET_PF_AT_2X,
-                                                            MIN_TRAIN_TRADES, STRATEGIES,
+                                                            MIN_TRAIN_TRADES, PAIRS, STRATEGIES,
                                                             TRAIN_END, _select)
 
 
@@ -161,7 +161,10 @@ class NoSpentBarReachesTheEngine(TestCase):
     N_STRATS, N_CANDIDATES = len(STRATEGIES), len(CANDIDATES)
 
     def setUp(self):
-        from main_app.models import Hypothesis, Strategy
+        from main_app.models import Hypothesis, Instrument, Strategy
+        for sym in PAIRS:
+            Instrument.objects.get_or_create(symbol=sym, defaults={'asset_class': 'forex',
+                                                                   'market': 'forex'})
         for key in STRATEGIES:
             Strategy.objects.get_or_create(key=key, market='forex',
                                            defaults={'timeframe': '15Min', 'params': {},
@@ -173,12 +176,19 @@ class NoSpentBarReachesTheEngine(TestCase):
             {'registered_at': '2026-09-24T22:44:23+00:00', 'hypothesis_id': self.h.id}))
         self.seen = []
 
-    def _frames(self, symbols, timeframe, start, end):
+    def _bars(self, inst, timeframe, a=None, b=None, **kw):
+        """Raw store output, deliberately running past TRAIN_END.
+
+        Patched at the STORE, not at research_frames, so the cut under test is the
+        real one. Patching the loader would only prove it returns what it returns.
+        """
         import pandas as pd
         freq = '15min' if timeframe == '15Min' else '1h'
         idx = pd.date_range(TRAIN_END - timedelta(days=12), TRAIN_END + timedelta(days=2),
                             freq=freq, tz='UTC')
-        return {s: pd.DataFrame({'close': [1.1] * len(idx)}, index=idx) for s in symbols}
+        return pd.DataFrame({'open': [1.1] * len(idx), 'high': [1.1] * len(idx),
+                             'low': [1.1] * len(idx), 'close': [1.1] * len(idx),
+                             'volume': [0] * len(idx)}, index=idx)
 
     def _capture(self, key, params, over, frames, start, end, **kw):
         self.seen.append(frames)
@@ -188,7 +198,7 @@ class NoSpentBarReachesTheEngine(TestCase):
         mod = 'main_app.management.commands.turnover_research'
         with mock.patch(f'{mod}.PREREG', str(self.folder / 'p.json')), \
              mock.patch(f'{mod}.RESULTS', str(self.folder / 'r.json')), \
-             mock.patch('main_app.services.backtest.load_frames', side_effect=self._frames), \
+             mock.patch('main_app.services.data.store.load_frame', side_effect=self._bars), \
              mock.patch('main_app.management.commands.h10_forward.run_window',
                         side_effect=self._capture):
             call_command('turnover_research', '--run', verbosity=0)
@@ -196,7 +206,7 @@ class NoSpentBarReachesTheEngine(TestCase):
     def test_the_fixture_actually_contains_bars_past_the_boundary(self):
         """Guards the guard. If the fixture held no spent bars, the assertion below
         would pass against the leaking code too and prove nothing."""
-        raw = self._frames(['EUR/USD'], '15Min', None, None)['EUR/USD']
+        raw = self._bars(None, '15Min')
         self.assertGreater(int((raw.index >= TRAIN_END).sum()), 0,
                            'fixture has no bars past TRAIN_END — the test would be vacuous')
 
@@ -217,3 +227,54 @@ class NoSpentBarReachesTheEngine(TestCase):
         for frames in self.seen:
             for df in frames.values():
                 self.assertGreater(len(df), 40, 'truncation left too little to warm up on')
+
+
+class TheLateEntryGuardIsReachable(NoSpentBarReachesTheEngine):
+    """The belt-and-braces check in _run, which the reviewer noted was untested.
+
+    It cannot fire while research_frames does its job, which is exactly why it
+    needs a test: a guard that has never been observed firing is a comment. This
+    forces a trade with an entry inside the spent window past the loader and
+    requires the command to refuse rather than record the row.
+    """
+
+    class _Trade:
+        exit_reason = 'stop'
+
+        def __init__(self, entry_ts):
+            self.entry_ts, self.pnl, self.fees = entry_ts, 1.0, 0.1
+            self.entry_price, self.qty = 1.1, 1000
+
+    def _late(self, *a, **kw):
+        return [self._Trade(TRAIN_END + timedelta(hours=1))], 0.3
+
+    def _on_time(self, *a, **kw):
+        return [self._Trade(TRAIN_END - timedelta(hours=1))], 0.3
+
+    def _run_with(self, side_effect):
+        mod = 'main_app.management.commands.turnover_research'
+        with mock.patch(f'{mod}.PREREG', str(self.folder / 'p.json')), \
+             mock.patch(f'{mod}.RESULTS', str(self.folder / 'r.json')), \
+             mock.patch('main_app.services.data.store.load_frame', side_effect=self._bars), \
+             mock.patch('main_app.management.commands.h10_forward.run_window',
+                        side_effect=side_effect):
+            call_command('turnover_research', '--run', verbosity=0)
+
+    def test_an_entry_inside_the_spent_window_is_refused_not_recorded(self):
+        with self.assertRaises(CommandError) as cm:
+            self._run_with(self._late)
+        msg = str(cm.exception)
+        self.assertIn('2026-09-08', msg)
+        self.assertIn('contaminated', msg.lower())
+
+    def test_a_refused_run_writes_no_results_file(self):
+        with self.assertRaises(CommandError):
+            self._run_with(self._late)
+        self.assertFalse((self.folder / 'r.json').exists(),
+                         'a contaminated run left a results file behind')
+
+    def test_the_same_shape_of_trade_inside_the_window_is_accepted(self):
+        """The positive control: without it the guard could reject everything and
+        both tests above would still pass."""
+        self._run_with(self._on_time)
+        self.assertTrue((self.folder / 'r.json').exists())

@@ -1,0 +1,157 @@
+{
+  "assignment": "MT-A008",
+  "candidates": [
+    {
+      "max_hold_minutes": 4320,
+      "name": "ema_momentum_1Hour_72h",
+      "strategy": "ema_momentum",
+      "timeframe": "1Hour",
+      "what": "ema_momentum deciding every 1Hour, held at most 72h"
+    },
+    {
+      "max_hold_minutes": 7200,
+      "name": "ema_momentum_1Hour_week",
+      "strategy": "ema_momentum",
+      "timeframe": "1Hour",
+      "what": "ema_momentum deciding every 1Hour, held at most week"
+    },
+    {
+      "max_hold_minutes": 4320,
+      "name": "ema_momentum_1Day_72h",
+      "strategy": "ema_momentum",
+      "timeframe": "1Day",
+      "what": "ema_momentum deciding every 1Day, held at most 72h"
+    },
+    {
+      "max_hold_minutes": 7200,
+      "name": "ema_momentum_1Day_week",
+      "strategy": "ema_momentum",
+      "timeframe": "1Day",
+      "what": "ema_momentum deciding every 1Day, held at most week"
+    },
+    {
+      "max_hold_minutes": 4320,
+      "name": "fx_trend_1Hour_72h",
+      "strategy": "fx_trend",
+      "timeframe": "1Hour",
+      "what": "fx_trend deciding every 1Hour, held at most 72h"
+    },
+    {
+      "max_hold_minutes": 7200,
+      "name": "fx_trend_1Hour_week",
+      "strategy": "fx_trend",
+      "timeframe": "1Hour",
+      "what": "fx_trend deciding every 1Hour, held at most week"
+    },
+    {
+      "max_hold_minutes": 4320,
+      "name": "fx_trend_1Day_72h",
+      "strategy": "fx_trend",
+      "timeframe": "1Day",
+      "what": "fx_trend deciding every 1Day, held at most 72h"
+    },
+    {
+      "max_hold_minutes": 7200,
+      "name": "fx_trend_1Day_week",
+      "strategy": "fx_trend",
+      "timeframe": "1Day",
+      "what": "fx_trend deciding every 1Day, held at most week"
+    }
+  ],
+  "comparators": {
+    "flat": "net 0. The honest benchmark, and what the net>0 gate enforces.",
+    "h10_frozen": "H10's frozen spec and risk on 1Hour. A fixed comparator, NOT a candidate \u2014 it cannot win and is not ranked.",
+    "live_params_1hour": "The live ema_momentum parameters run at 1Hour. Labelled live PARAMETERS, not the live CONFIGURATION: the live rows trade 15Min, and 15Min FX history begins 2026-07-10, so the live baseline has zero bars in this window and is unevaluable. Substituting a different timeframe and calling it the live baseline is the MT-A001 C2 error."
+  },
+  "constraints": "Research only. No Strategy row, parameter, risk limit or qualification is changed, and nothing is applied to the running agents.",
+  "forbidden_windows": {
+    "h10_held_out": [
+      "2026-01-01T00:00:00+00:00",
+      "2026-09-08T00:00:00+00:00"
+    ],
+    "spent_by_mt_a001": [
+      "2026-09-08T00:00:00+00:00",
+      "2026-09-25T00:00:00+00:00"
+    ]
+  },
+  "forward_confirmation_start": "2026-09-25T00:00:00+00:00",
+  "hypothesis": "H19",
+  "hypothesis_created_at": "2026-09-25T00:54:34.309801+00:00",
+  "hypothesis_id": 22,
+  "no_4hour": "The grid named 1Hour / 4Hour / 1Day. There are ZERO 4Hour forex bars in the database and Yahoo offers no 4h interval, so 4Hour would have to be resampled from 1Hour \u2014 a new data source with its own alignment questions. Not built to fit a grid shape. 1Hour and 1Day only.",
+  "no_retuning": "Only timeframe and max hold vary. ema_momentum uses its live parameters unchanged; fx_trend uses H10_SPEC with only the bar-expressed values rescaled as above.",
+  "param_ranges_are_advisory": "Param.coerce() converts type only \u2014 it does NOT clamp to min/max or snap to step, which are used solely by the optimizer's grid(). Checked before registering, because fx_trend declares lookback_h min 48 and the 1Day value is 20: had it clamped, every daily candidate would silently have run at 48 days. It does not, and a test asserts the engine receives exactly these values for every candidate.",
+  "question": "On FX majors, does a slower trend rule produce train net above zero at 1x cost AND a net profit factor of at least 1.0 at 2x cost?",
+  "registered_at": "2026-09-25T00:54:34.309430+00:00",
+  "reporting": "Every candidate reported including failures: n, gross, fees, slippage, net at 1x and 2x, and net profit factor.",
+  "risk_overrides": {
+    "ema_momentum_1Day_72h": {
+      "max_hold_minutes": 4320
+    },
+    "ema_momentum_1Day_week": {
+      "max_hold_minutes": 7200
+    },
+    "ema_momentum_1Hour_72h": {
+      "max_hold_minutes": 4320
+    },
+    "ema_momentum_1Hour_week": {
+      "max_hold_minutes": 7200
+    },
+    "fx_trend_1Day_72h": {
+      "max_hold_minutes": 4320,
+      "min_reward_to_cost": 0.0
+    },
+    "fx_trend_1Day_week": {
+      "max_hold_minutes": 7200,
+      "min_reward_to_cost": 0.0
+    },
+    "fx_trend_1Hour_72h": {
+      "max_hold_minutes": 4320,
+      "min_reward_to_cost": 0.0
+    },
+    "fx_trend_1Hour_week": {
+      "max_hold_minutes": 7200,
+      "min_reward_to_cost": 0.0
+    }
+  },
+  "risk_overrides_note": "min_reward_to_cost 0 for fx_trend only, because it emits a stop and no target, so the cost gate has nothing to measure and would refuse every entry \u2014 the reason H10_RISK carries it. ema_momentum emits a target at rr=2.0 and keeps the lane live gate, so it is judged under the cost rule it actually trades under. Everything else is the forex lane live RiskConfig.",
+  "selection_rule": {
+    "gates": [
+      "train trades >= 30",
+      "train net at 1x cost > 0.0 (beats flat)",
+      "train net at 1x cost > the live_params_1hour comparator",
+      "net profit factor at 2x cost >= 1.0"
+    ],
+    "rank_by": "train net at 1x cost",
+    "statement": "The winner is the candidate with the highest train net at 1x cost that satisfies every gate. If none does, the outcome is \"none\" and nothing is frozen."
+  },
+  "timeframe_params": {
+    "1Day": {
+      "atr_len": 14,
+      "cooldown_h": 7,
+      "hour_from": 0,
+      "hour_to": 24,
+      "lookback_h": 20
+    },
+    "1Hour": {
+      "atr_len": 24,
+      "cooldown_h": 168,
+      "hour_from": 7,
+      "hour_to": 21,
+      "lookback_h": 480
+    }
+  },
+  "timeframe_params_note": "lookback_h and cooldown_h are read as BARS despite their names. The 1Day values hold the calendar horizon constant (20 days of trend, 7 days of cooldown) rather than inheriting 480 days and 8 months. Fixed before any result.",
+  "train_window": [
+    "2024-11-01T00:00:00+00:00",
+    "2026-01-01T00:00:00+00:00"
+  ],
+  "train_window_note": "Half-open. Ends exactly where H10 held-out begins, so selection cannot touch it. 1Hour FX history starts 2024-09-08, leaving 928-929 warm-up bars per pair before the window against FxTrend's 760-bar requirement \u2014 asserted at run time, not assumed.",
+  "unevaluable_gate": "The TRUE live configuration \u2014 ema_momentum and vwap_reversion at 15Min \u2014 is UNEVALUABLE on this window: 15Min FX history begins 2026-07-10, so it has zero bars here. Recorded rather than quietly dropped. The gate is therefore written explicitly as: beats flat (net at 1x > 0) AND beats the live_params_1hour row on train net at 1x. That row is the live PARAMETERS on a different cadence, which is a fair comparator for a cadence experiment and is not the live configuration.",
+  "warmup_from": {
+    "1Day": "2010-01-01",
+    "1Hour": "2024-09-01"
+  },
+  "what_is_not_claimed": "No significance is claimed and none is available: 8 candidates with an argmax taken flatters the winner by construction. A train result is not a positive result. Only the forward record from 2026-09-25 can confirm anything, and this step does not claim it has.",
+  "why": "Every after-cost positive on this desk came from holding longer. H10 (hourly, week holds) +$1,081.84 held out. MT-A003 turned ema_momentum from -$1,281.70 to +$272.31 by cutting turnover, then failed 2x cost at 0.921. Cost eating a real gross edge is the recurring failure, so cadence and hold are the levers."
+}

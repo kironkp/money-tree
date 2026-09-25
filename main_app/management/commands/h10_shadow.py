@@ -76,8 +76,11 @@ def write_record(path: str, rec: dict) -> None:
     # The accepted measurement is the trades and their totals. `runs` is an
     # append-only log and is deliberately not a stamp: appending an entry is
     # provenance, rewriting or dropping one is not.
-    rec = merge_artifact(path, rec, measured=lambda d: (d.get('trades'), d.get('totals')),
-                         stamps=('last_run', 'window', 'slippage_bps'))
+    # No stamps. `last_run` and `window` describe THIS invocation — freezing them
+    # would hide that a later run scanned further and found nothing, which is the
+    # one thing the log is for. Only trades and totals are the measurement, and
+    # those are protected by being what `measured` compares.
+    rec = merge_artifact(path, rec, measured=lambda d: (d.get('trades'), d.get('totals')))
     folder = os.path.dirname(os.path.abspath(path)) or '.'
     fd, tmp = tempfile.mkstemp(dir=folder, prefix='.h10-shadow-', suffix='.tmp')
     try:
@@ -155,6 +158,24 @@ class Command(BaseCommand):
         parser.add_argument('--out', default=ARTIFACT)
         parser.add_argument('--quiet', action='store_true')
 
+    def _log(self, rec: dict, path: str, status: str, **extra) -> None:
+        """Append one run-log entry and persist the record. Every invocation.
+
+        The log exists to tell a MISSED nightly run apart from a night where
+        nothing happened, and it cannot do that if the quiet nights are the ones
+        that return early. Three of the four exits used to return before reaching
+        it — no bars, no new bars, warm-up too short — which are exactly the quiet
+        nights. So the entry carries a status and the reason, and it is written
+        through write_record like everything else.
+
+        Touches neither `trades` nor `totals`: a night that measured nothing must
+        not be able to disturb the measurement.
+        """
+        rec['last_run'] = datetime.now(timezone.utc).isoformat()
+        rec['runs'] = (rec.get('runs') or []) + [
+            dict({'at': rec['last_run'], 'status': status}, **extra)]
+        write_record(path, rec)
+
     def handle(self, *args, **o):
         from main_app.management.commands.h10_forward import _window_bounds
         from main_app.services.research_window import (Window, inclusive_through,
@@ -202,10 +223,10 @@ class Command(BaseCommand):
             start, end = _window_bounds(start)
         except SystemExit as exc:
             self.stderr.write(str(exc))
-            return
+            return self._log(rec, o['out'], 'no_bars', reason=str(exc))
         if end <= start:
             self.stdout.write(f'no bars yet after {start:%Y-%m-%d} — nothing to record')
-            return
+            return self._log(rec, o['out'], 'no_new_bars', window_end=end.isoformat())
 
         need = make_strategy('fx_trend', dict(H10_SPEC)).warmup_bars
         warm_from = (start - timedelta(days=max(120, need // 4))).date()
@@ -218,7 +239,7 @@ class Command(BaseCommand):
         if available < need:
             self.stderr.write(f'warm-up too short ({available} bars, need {need}) — not recording, '
                               f'because silence would look like "no trades"')
-            return
+            return self._log(rec, o['out'], 'warmup_short', available=available, need=need)
 
         all_trades, slip = run_window('fx_trend', dict(H10_SPEC), dict(H10_RISK), frames, start, end,
                                       timeframe=H10_TIMEFRAME, pairs=H10_PAIRS)
@@ -238,21 +259,14 @@ class Command(BaseCommand):
         added = len(rec['trades']) - before
         rows = list(rec['trades'].values())
 
-        rec['last_run'] = datetime.now(timezone.utc).isoformat()
         rec['window'] = [start.isoformat(), end.isoformat()]
         rec['slippage_bps'] = slip
         rec['in_flight'] = [{'symbol': t.symbol, 'side': t.side,
                              'entry_ts': t.entry_ts.isoformat()} for t in in_flight]
         rec['totals'] = {'1x': summarise(rows, slip), '2x': summarise(rows, slip, 2.0),
                          '3x': summarise(rows, slip, 3.0)}
-        # Append-only, one entry per invocation including a re-run that adds
-        # nothing — that is how a missed nightly run is told apart from a night
-        # where nothing happened. It used to keep only the last 19, which dropped
-        # existing entries; a log that forgets is not a log.
-        rec['runs'] = (rec.get('runs') or []) + [
-            {'at': rec['last_run'], 'window_end': end.isoformat(), 'added': added,
-             'total': len(rows), 'in_flight': len(in_flight)}]
-        write_record(o['out'], rec)
+        self._log(rec, o['out'], 'recorded', window_end=end.isoformat(), added=added,
+                  total=len(rows), in_flight=len(in_flight))
 
         if o.get('verbosity', 1) == 0 or (o['quiet'] and not added and not in_flight):
             return

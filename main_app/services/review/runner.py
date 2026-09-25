@@ -7,6 +7,7 @@ its own would make the halt policy a property of nine scattered functions.
 from __future__ import annotations
 
 import logging
+import os
 import traceback
 
 from datetime import timedelta
@@ -18,6 +19,10 @@ from .findings import Recorder, alert
 from .guard import readonly_config
 
 log = logging.getLogger(__name__)
+
+# The 15-minute operational cycle does NOT email. See the note at its call site.
+# Set MONEYTREE_EMAIL_OPERATIONAL=1 to turn per-run alerts back on.
+EMAIL_OPERATIONAL = os.getenv('MONEYTREE_EMAIL_OPERATIONAL', '') not in ('', '0', 'false', 'no')
 
 
 def run_operational(accounts=None, trigger: str = 'schedule', broker=None,
@@ -101,13 +106,22 @@ def run_operational(accounts=None, trigger: str = 'schedule', broker=None,
     finally:
         run.finished_at = timezone.now()
         run.save()
-    if notify:
-        # New findings always, and a standing critical only when it is stale
-        # enough to be worth saying again. Mailing every repeated critical meant
-        # one unfixed fault sent 96 messages a day from the 15-minute job alone,
-        # which is how an operator learns to filter the alerts.
+    if notify and EMAIL_OPERATIONAL:
+        # Off by default. This cycle runs every 15 minutes, and `abnormal_costs`
+        # re-opens as the trade count ticks up, so even with the repeat throttle it
+        # produced several mails a day — Kiron asked on 2026-09-25 for the hourly
+        # mail to stop and the daily mail to stay.
+        #
+        # Nothing is lost by it: findings are still recorded, still halt a lane, and
+        # still show on /review and in the live feed. The open ones are summarised
+        # in the daily report, so a fault that persists is still put in front of him
+        # once a day rather than not at all.
         alert(run, rec.opened + [f for f in rec.repeated
                                  if f.severity == ReviewFinding.CRITICAL and _worth_repeating(f, now)])
+    elif notify:
+        log.info('operational review: %d new, %d repeated findings, not emailed '
+                 '(EMAIL_OPERATIONAL is off; they appear in the daily report)',
+                 len(rec.opened), len(rec.repeated))
     return run
 
 

@@ -27,6 +27,10 @@ class Command(BaseCommand):
         d = date.fromisoformat(o['date']) if o['date'] else None
         rep = build_report(d, mode=o['mode'])
         text = render_text(rep)
+        # The operational cycle stopped emailing per-run on 2026-09-25 (it runs every
+        # 15 minutes). Its open findings ride here instead, so a standing fault is
+        # still put in front of a human once a day rather than not at all.
+        text = text + _open_findings_block()
         self.stdout.write(text)
 
         if not o['no_journal']:
@@ -52,3 +56,25 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS(f'emailed to {to}'))
         except Exception as exc:
             self.stderr.write(f'email failed: {exc!r}')
+
+
+def _open_findings_block() -> str:
+    """Open operational findings, appended to the daily report."""
+    from main_app.models import ReviewFinding
+
+    # Explicit rank, not `-severity`: that sorts alphabetically, which puts WARN
+    # above CRITICAL and buries the only lines that matter.
+    rank = {ReviewFinding.CRITICAL: 0, ReviewFinding.WARN: 1}
+    rows = sorted(ReviewFinding.objects.filter(status=ReviewFinding.OPEN),
+                  key=lambda f: (rank.get(f.severity, 2), -f.seen_count))[:20]
+    if not rows:
+        return '\n\nOperational review: no open findings.\n'
+    out = [f'\n\nOperational review: {len(rows)} open finding(s)',
+           '(the 15-minute cycle no longer emails per run; this is the daily summary)', '']
+    for f in rows:
+        lane = f.account.market if f.account else 'desk'
+        out.append(f'  [{f.severity.upper()}] {lane}: {f.title}  (seen {f.seen_count}x, '
+                   f'{f.check_key})')
+    out.append('')
+    out.append('Full detail at /review. Nothing here changed a strategy or a risk limit.')
+    return '\n'.join(out) + '\n'

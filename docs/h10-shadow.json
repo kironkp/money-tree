@@ -1,5 +1,28 @@
 {
   "forward_start": "2026-09-25T00:00:00+00:00",
+  "in_flight": [
+    {
+      "entry_ts": "2026-09-25T08:00:00+00:00",
+      "side": "short",
+      "symbol": "AUD/USD"
+    },
+    {
+      "entry_ts": "2026-09-25T08:00:00+00:00",
+      "side": "short",
+      "symbol": "EUR/USD"
+    },
+    {
+      "entry_ts": "2026-09-25T08:00:00+00:00",
+      "side": "short",
+      "symbol": "GBP/USD"
+    },
+    {
+      "entry_ts": "2026-09-25T08:00:00+00:00",
+      "side": "short",
+      "symbol": "NZD/USD"
+    }
+  ],
+  "last_run": "2026-09-25T09:00:06.497385+00:00",
   "pairs": [
     "EUR/USD",
     "GBP/USD",
@@ -10,7 +33,17 @@
     "max_hold_minutes": 7200,
     "min_reward_to_cost": 0.0
   },
-  "runs": [],
+  "runs": [
+    {
+      "added": 0,
+      "at": "2026-09-25T09:00:06.497385+00:00",
+      "in_flight": 4,
+      "status": "recorded",
+      "total": 0,
+      "window_end": "2026-09-25T08:00:00.000001+00:00"
+    }
+  ],
+  "slippage_bps": 0.3,
   "spec": {
     "allow_short": true,
     "atr_len": 24,
@@ -22,5 +55,32 @@
     "stop_atr_mult": 4.0
   },
   "timeframe": "1Hour",
-  "trades": {}
+  "totals": {
+    "1x": {
+      "gross": 0.0,
+      "gross_pf": null,
+      "net": 0.0,
+      "net_pf": null,
+      "trades": 0
+    },
+    "2x": {
+      "gross": 0.0,
+      "gross_pf": null,
+      "net": 0.0,
+      "net_pf": null,
+      "trades": 0
+    },
+    "3x": {
+      "gross": 0.0,
+      "gross_pf": null,
+      "net": 0.0,
+      "net_pf": null,
+      "trades": 0
+    }
+  },
+  "trades": {},
+  "window": [
+    "2026-09-25T00:00:00+00:00",
+    "2026-09-25T08:00:00.000001+00:00"
+  ]
 }

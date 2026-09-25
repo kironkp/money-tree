@@ -315,6 +315,12 @@ class TheRecordIsWrittenAtomically(SimpleTestCase):
         leftover = [p.name for p in self.dir.iterdir() if p.name != 'rec.json']
         self.assertEqual(leftover, [], f'temp files left behind: {leftover}')
 
-    def test_a_successful_write_replaces_the_content(self):
+    def test_a_successful_write_replaces_the_fields_it_owns(self):
+        """It used to replace the whole file, and that is how MT-A005's superseded
+        blocks were destroyed — a re-run dropped every field it did not itself
+        produce. A writer now owns its own keys and leaves the rest alone."""
         write_record(str(self.tmp), {'trades': {'c': 3}})
-        self.assertEqual(json.loads(self.tmp.read_text()), {'trades': {'c': 3}})
+        doc = json.loads(self.tmp.read_text())
+        self.assertEqual(doc['trades'], {'c': 3}, 'the writer did not update its own field')
+        self.assertEqual(doc['forward_start'], self.good['forward_start'],
+                         'a field the writer does not produce was deleted')

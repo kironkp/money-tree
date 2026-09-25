@@ -236,7 +236,7 @@
       "what": "both controls together"
     }
   ],
-  "first_result_at": "2026-09-25T00:03:45.126090+00:00",
+  "first_result_at": "2026-09-24T23:03:44.021115+00:00",
   "forward_confirmation_start": "2026-09-25T00:00:00+00:00",
   "forward_result": "not started \u2014 nothing is claimed about it",
   "live_params": {
@@ -257,7 +257,7 @@
       "stop_atr_mult": 1.5
     }
   },
-  "measured_at": "2026-09-25T00:04:08.281404+00:00",
+  "measured_at": "2026-09-24T23:04:07.366914+00:00",
   "outcome": {
     "ema_momentum": {
       "frozen": false,

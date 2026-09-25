@@ -72,6 +72,12 @@ def write_record(path: str, rec: dict) -> None:
     the next run would fail to parse its own evidence. `os.replace` is atomic
     within a filesystem: a reader sees either the old record or the new one.
     """
+    from main_app.services.research_window import merge_artifact
+    # The accepted measurement is the trades and their totals. `runs` is an
+    # append-only log and is deliberately not a stamp: appending an entry is
+    # provenance, rewriting or dropping one is not.
+    rec = merge_artifact(path, rec, measured=lambda d: (d.get('trades'), d.get('totals')),
+                         stamps=('last_run', 'window', 'slippage_bps'))
     folder = os.path.dirname(os.path.abspath(path)) or '.'
     fd, tmp = tempfile.mkstemp(dir=folder, prefix='.h10-shadow-', suffix='.tmp')
     try:
@@ -239,7 +245,11 @@ class Command(BaseCommand):
                              'entry_ts': t.entry_ts.isoformat()} for t in in_flight]
         rec['totals'] = {'1x': summarise(rows, slip), '2x': summarise(rows, slip, 2.0),
                          '3x': summarise(rows, slip, 3.0)}
-        rec['runs'] = (rec.get('runs') or [])[-19:] + [
+        # Append-only, one entry per invocation including a re-run that adds
+        # nothing — that is how a missed nightly run is told apart from a night
+        # where nothing happened. It used to keep only the last 19, which dropped
+        # existing entries; a log that forgets is not a log.
+        rec['runs'] = (rec.get('runs') or []) + [
             {'at': rec['last_run'], 'window_end': end.isoformat(), 'added': added,
              'total': len(rows), 'in_flight': len(in_flight)}]
         write_record(o['out'], rec)

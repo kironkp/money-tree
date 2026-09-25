@@ -34,7 +34,7 @@ from main_app.models import AgentConfig, Bar, Instrument, Strategy
 # research commands import it from this module. It moved to the service so that no
 # command references a raw loader or runner directly.
 from main_app.services.research_window import (Window, inclusive_through,  # noqa: F401
-                                               research_frames, run_window)
+                                               merge_artifact, research_frames, run_window)
 from main_app.services.strategies.fx_trend import (H10_HELD_OUT, H10_PAIRS, H10_RISK, H10_SPEC,
                                                    H10_TIMEFRAME)
 
@@ -282,8 +282,13 @@ class Command(BaseCommand):
             self.stdout.write(w(f'    Treat {n} trades as anecdote, not signal.'))
 
         if not o['no_write']:
+            # Merged, never overwritten: a superseded block added after a run is
+            # provenance this command does not produce and must not delete.
+            out = merge_artifact(o['out'], result,
+                                 measured=lambda d: (d.get('h10'), d.get('baselines'),
+                                                     d.get('costs')))
             with open(o['out'], 'w') as fh:
-                json.dump(result, fh, indent=2, default=str)
+                json.dump(out, fh, indent=2, default=str)
             self.stdout.write(self.style.SUCCESS(f'\n  wrote {o["out"]}'))
 
     def _row(self, label, m):

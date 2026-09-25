@@ -26,6 +26,8 @@ for it. Cutting first removes that too.
 """
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -156,3 +158,36 @@ def run_window(key: str, params: dict, risk_over: dict, frames, start, end, *,
     # window, and bounding entries while the FRAMES ran past the boundary is the
     # same mistake one layer out.
     return [t for t in res.trades if start <= t.entry_ts < end], spec.risk.slippage_bps
+
+
+def merge_artifact(path: str, new: dict, *, measured, stamps=(), now=None) -> dict:
+    """What to write: `new` merged over whatever is already on disk.
+
+    A writer that rewrites its file wholesale silently deletes every field it does
+    not itself produce. That is how MT-A005's superseded blocks were destroyed: they
+    were added by hand after a run, and the next run — a verification that changed
+    nothing — dropped them, along with an accepted run's timestamps. Provenance a
+    writer does not know about is still provenance, so keys on disk survive unless
+    the new payload deliberately sets them.
+
+    `measured` extracts the part of the artifact that is a MEASUREMENT. When that is
+    unchanged, the accepted run's `stamps` are kept and `reverified_at` records that
+    a later run reproduced them. A verification must never be able to overwrite the
+    provenance of the run that was accepted — which is exactly how this was earned.
+
+    Append-only logs are deliberately NOT stamps. Appending an entry is provenance;
+    rewriting or dropping one is not, and callers must not truncate them.
+    """
+    from datetime import datetime, timezone
+
+    if not os.path.exists(path):
+        return new
+    with open(path) as fh:
+        old = json.load(fh)
+    merged = {**old, **new}
+    if measured(old) == measured(new):
+        for key in stamps:
+            if key in old:
+                merged[key] = old[key]
+        merged['reverified_at'] = now or datetime.now(timezone.utc).isoformat()
+    return merged

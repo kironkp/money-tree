@@ -24,6 +24,8 @@ import os
 from datetime import datetime, timezone
 
 from django.core.management.base import BaseCommand, CommandError
+
+from main_app.services.research_window import merge_artifact
 from django.utils import timezone as djtz
 
 PREREG = 'docs/mt-a003-preregistration.json'
@@ -271,10 +273,7 @@ class Command(BaseCommand):
             # Only an actual supersession is recorded. A re-run that reproduces the
             # same rows — verifying a refactor, say — has superseded nothing, and
             # appending it would pad the record with events that never happened.
-            def _key(rows):
-                return {(r['strategy'], r['candidate']): (r['trades'], r['net'], r['net_2x'])
-                        for r in (rows or [])}
-            if _key(prev.get('candidates')) != _key(rows):
+            if _rows_key(prev.get('candidates')) != _rows_key(rows):
                 superseded = superseded + [
                     {'measured_at': prev.get('measured_at'), 'candidates': prev.get('candidates'),
                      'outcome': prev.get('outcome'),
@@ -291,6 +290,11 @@ class Command(BaseCommand):
                'forward_confirmation_start': FORWARD_START.isoformat(),
                'forward_result': 'not started — nothing is claimed about it',
                'live_params': live, 'candidates': rows, 'outcome': winners}
+        # The accepted run's first_result_at and measured_at survive a re-run that
+        # reproduces the same rows. Overwriting them is how MT-A003's accepted
+        # timestamps were lost to a verification that changed nothing.
+        out = merge_artifact(RESULTS, out, measured=_measured_rows,
+                             stamps=('first_result_at', 'measured_at'))
         with open(RESULTS, 'w') as fh:
             json.dump(out, fh, indent=2, sort_keys=True)
 
@@ -308,9 +312,14 @@ class Command(BaseCommand):
                        for r in rows
                        if (r['strategy'], r['candidate']) in prev_rows
                        and abs(prev_rows[(r['strategy'], r['candidate'])] - r['net']) > 0.005]
-            note += (f'. SUPERSEDES a contaminated run measured {superseded[-1]["measured_at"]}: '
-                     f'{superseded[-1]["why_replaced"]} '
-                     f'{len(changed)} of {len(rows)} rows changed: {"; ".join(changed)}')
+            # .get throughout: a superseded entry may have been written by hand
+            # rather than by this command — that is exactly what the MT-A005 blocks
+            # are — and it must not carry this command's shape to be readable.
+            prev = superseded[-1]
+            note += (f'. SUPERSEDES a run measured {prev.get("measured_at", "(unrecorded)")}: '
+                     f'{prev.get("why_replaced") or prev.get("why") or "reason not recorded"} '
+                     f'{len(changed)} of {len(rows)} rows changed'
+                     + (f': {"; ".join(changed)}' if changed else ''))
         h.decision_note = note
         h.save()
         self._report(reg, out, winners)
@@ -343,6 +352,18 @@ class Command(BaseCommand):
           f'it here.\n  No significance is claimed: {len(CANDIDATES) * len(STRATEGIES)} '
           f'comparisons with an argmax taken flatters the winner by construction.')
         w(self.style.SUCCESS(f'  wrote {RESULTS}'))
+
+
+def _rows_key(rows) -> dict:
+    """The measurement, as one comparable value. One definition, used by both the
+    supersession check and the artifact merge, so they can never disagree about
+    whether a run changed anything."""
+    return {(r['strategy'], r['candidate']): (r['trades'], r['net'], r['net_2x'])
+            for r in (rows or [])}
+
+
+def _measured_rows(doc: dict) -> dict:
+    return _rows_key(doc.get('candidates'))
 
 
 def _fmt(v):

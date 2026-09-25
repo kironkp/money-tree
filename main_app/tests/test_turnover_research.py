@@ -199,7 +199,7 @@ class NoSpentBarReachesTheEngine(TestCase):
         with mock.patch(f'{mod}.PREREG', str(self.folder / 'p.json')), \
              mock.patch(f'{mod}.RESULTS', str(self.folder / 'r.json')), \
              mock.patch('main_app.services.data.store.load_frame', side_effect=self._bars), \
-             mock.patch('main_app.management.commands.h10_forward.run_window',
+             mock.patch('main_app.services.research_window.run_window',
                         side_effect=self._capture):
             call_command('turnover_research', '--run', verbosity=0)
 
@@ -256,7 +256,7 @@ class TheLateEntryGuardIsReachable(NoSpentBarReachesTheEngine):
         with mock.patch(f'{mod}.PREREG', str(self.folder / 'p.json')), \
              mock.patch(f'{mod}.RESULTS', str(self.folder / 'r.json')), \
              mock.patch('main_app.services.data.store.load_frame', side_effect=self._bars), \
-             mock.patch('main_app.management.commands.h10_forward.run_window',
+             mock.patch('main_app.services.research_window.run_window',
                         side_effect=side_effect):
             call_command('turnover_research', '--run', verbosity=0)
 

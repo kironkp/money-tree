@@ -102,14 +102,16 @@ class TheEntryWindowHoldsAtBothEnds(TestCase):
         below are vacuous again and the suite must say so."""
         from main_app.management.commands.h10_forward import run_window
         trades, _ = run_window('fx_trend', self._params(), dict(H10_RISK),
-                               self._frames(), self.start, self.end)
+                               self._frames(), self.start, self.end,
+                               timeframe='1Hour', pairs=['EUR/USD'])
         self.assertGreater(len(trades), 0,
                            'fixture produced no trades — the window tests would prove nothing')
 
     def test_no_trade_enters_before_the_window_or_after_it(self):
         from main_app.management.commands.h10_forward import run_window
         trades, _ = run_window('fx_trend', self._params(), dict(H10_RISK),
-                               self._frames(), self.start, self.end)
+                               self._frames(), self.start, self.end,
+                               timeframe='1Hour', pairs=['EUR/USD'])
         self.assertGreater(len(trades), 0)
         for t in trades:
             self.assertGreaterEqual(t.entry_ts, self.start, 'an entry landed BEFORE the window')
@@ -132,7 +134,8 @@ class TheEntryWindowHoldsAtBothEnds(TestCase):
         leaking = load_frames(['EUR/USD'], '1Hour', self.base.date(),
                               (self.base + timedelta(hours=self.WARMUP + 1000)).date())
         with self.assertRaises(WindowLeak) as cm:
-            run_window('fx_trend', self._params(), dict(H10_RISK), leaking, self.start, self.end)
+            run_window('fx_trend', self._params(), dict(H10_RISK), leaking, self.start, self.end,
+                       timeframe='1Hour', pairs=['EUR/USD'])
         self.assertIn('EUR/USD', str(cm.exception))
 
     def test_negative_control_the_data_does_contain_a_trade_after_the_window_end(self):
@@ -144,7 +147,8 @@ class TheEntryWindowHoldsAtBothEnds(TestCase):
         from main_app.management.commands.h10_forward import run_window
         far = self.end + timedelta(hours=5000)
         trades, _ = run_window('fx_trend', self._params(), dict(H10_RISK),
-                               self._frames(far), self.start, far)
+                               self._frames(far), self.start, far,
+                               timeframe='1Hour', pairs=['EUR/USD'])
         after = [t for t in trades if t.entry_ts > self.end]
         self.assertGreater(len(after), 0,
                            'nothing trades after the window end, so the end filter is unproven')

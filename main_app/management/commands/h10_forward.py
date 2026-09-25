@@ -30,9 +30,11 @@ from datetime import datetime, timedelta, timezone
 from django.core.management.base import BaseCommand
 
 from main_app.models import AgentConfig, Bar, Instrument, Strategy
-from main_app.services.backtest import run_backtest, spec_from_models
-from main_app.services.research_window import (Window, assert_bounded,
-                                               inclusive_through, research_frames)
+# run_window is re-exported: it used to live here, and the tests and the other two
+# research commands import it from this module. It moved to the service so that no
+# command references a raw loader or runner directly.
+from main_app.services.research_window import (Window, inclusive_through,  # noqa: F401
+                                               research_frames, run_window)
 from main_app.services.strategies.fx_trend import (H10_HELD_OUT, H10_PAIRS, H10_RISK, H10_SPEC,
                                                    H10_TIMEFRAME)
 
@@ -127,35 +129,6 @@ def coverage_gaps(cov: dict, start: datetime, timeframe: str) -> list[str]:
     return out
 
 
-def run_window(key: str, params: dict, risk_over: dict, frames, start, end,
-               cost_mult: float = 1.0, timeframe: str = H10_TIMEFRAME,
-               pairs=H10_PAIRS) -> tuple[list, float]:
-    """Replay one strategy over [start, end]. Returns (trades in window, slippage_bps).
-
-    `timeframe` and `risk_over` are arguments rather than constants because a
-    BASELINE has to be run as it actually lives. Running the live rows on H10's
-    1Hour frames under H10's risk settings and calling the result "live params"
-    described a configuration that has never existed.
-    """
-    spec = spec_from_models(key, params, list(pairs), timeframe, AgentConfig.get())
-    if risk_over:
-        spec.risk = replace(spec.risk, **risk_over)
-    if cost_mult != 1.0:
-        spec.fee_bps = {k: v * cost_mult for k, v in spec.fee_bps.items()}
-        spec.risk = replace(spec.risk, slippage_bps=spec.risk.slippage_bps * cost_mult)
-    # The choke point. Every research command reaches the engine through here, so a
-    # call site that loads its own frames fails loudly instead of quietly measuring
-    # the future. `end` is EXCLUSIVE — see research_window.inclusive_through.
-    assert_bounded(frames, end, f'run_window({key})')
-    spec.act_from = start
-    res = run_backtest(spec, frames)
-    # act_from stops the engine acting early; this stops it acting late. Both are
-    # required — setting only the first is the leak that invalidated a whole
-    # train window, and bounding entries while the FRAMES ran past the boundary is
-    # the same mistake one layer out.
-    return [t for t in res.trades if start <= t.entry_ts < end], spec.risk.slippage_bps
-
-
 class Command(BaseCommand):
     help = "Replay H10's frozen spec over bars it has never seen, after costs"
 
@@ -237,7 +210,8 @@ class Command(BaseCommand):
                   'bars_in_window': in_window, 'warmup_bars_required': need,
                   'warmup_bars_available': shortest, 'costs': {}}
 
-        trades, slip = run_window('fx_trend', dict(H10_SPEC), dict(H10_RISK), frames, start, end)
+        trades, slip = run_window('fx_trend', dict(H10_SPEC), dict(H10_RISK), frames, start, end,
+                                  timeframe=H10_TIMEFRAME, pairs=H10_PAIRS)
         base = _measure(trades, slip)
         result['h10'] = base
         self.stdout.write(self.style.MIGRATE_HEADING('\n  H10 at the modelled toll'))
@@ -247,7 +221,7 @@ class Command(BaseCommand):
                           '\n     changes which trades survive the gates, so gross moves too)')
         for mult in (2.0, 3.0):
             tr, sl = run_window('fx_trend', dict(H10_SPEC), dict(H10_RISK), frames, start, end,
-                                cost_mult=mult)
+                                timeframe=H10_TIMEFRAME, pairs=H10_PAIRS, cost_mult=mult)
             m = _measure(tr, sl)
             result['costs'][f'{mult:g}x'] = m
             self._row(f'h10 ({mult:g}x cost)', m)
@@ -261,7 +235,7 @@ class Command(BaseCommand):
             tf_frames = (frames if row.timeframe == H10_TIMEFRAME
                          else research_frames(H10_PAIRS, row.timeframe, window))
             tr, sl = run_window(row.key, dict(row.params), {}, tf_frames, start, end,
-                                timeframe=row.timeframe)
+                                timeframe=row.timeframe, pairs=H10_PAIRS)
             m = _measure(tr, sl)
             m['timeframe'] = row.timeframe
             m['risk'] = 'forex lane live RiskConfig'
@@ -291,7 +265,8 @@ class Command(BaseCommand):
             row = Strategy.objects.filter(key=key, market='forex').first()
             if row is None:
                 continue
-            tr, sl = run_window(key, dict(row.params), dict(H10_RISK), frames, start, end)
+            tr, sl = run_window(key, dict(row.params), dict(H10_RISK), frames, start, end,
+                                timeframe=H10_TIMEFRAME, pairs=H10_PAIRS)
             m = _measure(tr, sl)
             result['baselines'][f'{key}_1hour_h10_risk'] = m
             self._row(f'{key} (1Hour, H10 risk)', m)

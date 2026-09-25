@@ -41,17 +41,29 @@ test window's start with no history before it, and no `act_from` is set — so t
 strategy's warm-up is consumed **inside** every walk-forward and validation test window.
 
 That is the same class as the first leak on this desk, in the one pipeline that actually
-promotes strategies. Magnitude, computed from bar arithmetic rather than by re-running:
+promotes strategies. Sized from **`auto_research`'s real configuration** (read from
+`auto_research.py:104`, not from optimize's 20-day default), each lane's live timeframe,
+and the warm-up of the strategies actually enabled on it:
 
-| lane | 20-day test window | warm-up | dead |
-|---|---:|---:|---:|
-| stocks 5Min | 1,560 bars | 40 | 2.56% |
-| forex 15Min | 1,920 bars | 40 | 2.08% |
-| **crypto 1Hour** | **480 bars** | **40** | **8.33%** |
+| lane | timeframe | test window | bars per window | enabled strategies (warm-up) | dead |
+|---|---|---:|---:|---|---:|
+| stocks | 5Min | 40d | 2,229 | ema_momentum 40, news_catalyst 20 | 1.79% |
+| **crypto** | **4Hour** | **60d** | **360** | ema_momentum 40, news_catalyst 20, vwap_reversion 40 | **11.11%** |
+| degen | 15Min | 10d | 960 | ema_momentum 40, news_catalyst 20 | 4.17% |
+| **forex** | **15Min** | **7d** | **480** | ema_momentum 40, news_catalyst 20, vwap_reversion 40 | **8.33%** |
+
+**Computed, not measured.** Bars per window are arithmetic — test days × trading-day
+fraction (5/7 for stocks and forex, 1 for crypto and degen) × minutes open ÷ timeframe —
+not counted from the database, and no experiment was re-run to confirm the effect on any
+result. "Dead" uses the largest warm-up among the lane's enabled strategies.
+
+An earlier version of this table used optimize's 20-day default and gave 2.56% / 2.08% /
+8.33% for stocks / forex / crypto-at-1Hour. Those rows described a configuration
+`auto_research` does not use and are superseded by the table above.
 
 Not fixed here because `auto_research` drives nightly promotions and changing its bar
-handling would change what gets promoted, which is outside MT-A005's scope. **Queued as
-MT-A006**, along with the observation below.
+handling changes what gets promoted, which is outside MT-A005's scope. **Queued as
+MT-A006**, along with the cleaning observation below.
 
 ## Open observation: the cleaning step looks forward
 
@@ -62,11 +74,36 @@ data cleaning is itself mildly forward-looking — in the last place anyone woul
 
 `research_frames` removes this for research by cutting before the gate runs, and that was
 not academic: cutting *after* the gate gave −407.25 for one baseline where cutting
-*before* gives −417.87. It is **not** removed for `auto_research`/`optimize`, which load
-the full range once and slice afterwards, so each window's tail is still cleaned with
-bars from outside it. `OUTLIER_FACTOR` is 10×, so the practical effect should be nil on
-FX majors — but "should be nil" is what would have been said about the other three.
-**→ MT-A006.**
+*before* gives −417.87. It remains in place for:
+
+* **`auto_research` / `optimize`**, which load the full range once and slice per window
+  afterwards, so each window's tail is cleaned with bars from outside it;
+* **`run_agent --replay`**, which runs `quality_gate` over the whole session at once, so
+  each bar's outlier reference includes bars from later in the session — bars the live
+  loop had not seen at that point.
+
+`OUTLIER_FACTOR` is 10×, so the practical effect should be nil on FX majors — but "should
+be nil" is what would have been said about the other three. **→ MT-A006.**
+
+## What the static guard cannot see
+
+`test_research_window` parses every command file and refuses any non-exempt one that
+references a raw loader or runner. It is deliberately absolute — there is no "but it also
+uses `research_frames`" escape, because the previous version had one, satisfied by a
+substring, and a file carrying the comment `# uses research_frames` beside a direct
+`load_frames` call passed every test. That is the h10_forward baseline leak exactly.
+
+It still cannot see:
+
+* **string indirection** — `getattr(store, 'load_' + kind)`, `importlib` by name;
+* **helpers one hop down in services** — `dossier.grade` reaches bars through
+  `news_agent._feed_frame` → `store.covering_frame`, and the scan reads command files only;
+* **direct ORM reads** — `Bar.objects.filter(...)` builds a frame with no loader in sight.
+
+`assert_bounded`, inside `run_window`, is the runtime backstop for all three: whatever
+route the frames took, they are refused at the engine if they carry a bar at or after the
+window end. Static scanning stops the easy mistakes early; the runtime check is what
+actually holds.
 
 ## Effect on recorded figures
 

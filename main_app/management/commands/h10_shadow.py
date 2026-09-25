@@ -150,8 +150,9 @@ class Command(BaseCommand):
         parser.add_argument('--quiet', action='store_true')
 
     def handle(self, *args, **o):
-        from main_app.management.commands.h10_forward import run_window, _window_bounds
-        from main_app.services.research_window import Window, inclusive_through, research_frames
+        from main_app.management.commands.h10_forward import _window_bounds
+        from main_app.services.research_window import (Window, inclusive_through,
+                                                       research_frames, run_window)
 
         start = datetime.fromisoformat(o['start']).replace(tzinfo=timezone.utc)
         is_record = os.path.abspath(o['out']) == os.path.abspath(ARTIFACT)
@@ -213,7 +214,8 @@ class Command(BaseCommand):
                               f'because silence would look like "no trades"')
             return
 
-        all_trades, slip = run_window('fx_trend', dict(H10_SPEC), dict(H10_RISK), frames, start, end)
+        all_trades, slip = run_window('fx_trend', dict(H10_SPEC), dict(H10_RISK), frames, start, end,
+                                      timeframe=H10_TIMEFRAME, pairs=H10_PAIRS)
         done = [t for t in all_trades if t.exit_reason != BOUNDARY_EXIT]
         in_flight = [t for t in all_trades if t.exit_reason == BOUNDARY_EXIT]
 

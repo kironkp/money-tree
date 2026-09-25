@@ -24,10 +24,6 @@ from main_app.services.research_window import (Window, WindowLeak, assert_bounde
 START = datetime(2026, 9, 8, tzinfo=timezone.utc)
 END = datetime(2026, 9, 24, 20, 0, tzinfo=timezone.utc)
 COMMANDS = Path('main_app/management/commands')
-# Commands that load bars for research or evaluation. auto_research is excluded
-# because it reaches bars through optimize.run_experiment, whose slice_frames
-# already bounds every walk-forward window at both ends with [a, b).
-RESEARCH_COMMANDS = ('h10_forward.py', 'h10_shadow.py', 'turnover_research.py')
 
 
 @contextmanager
@@ -146,19 +142,19 @@ class ResearchFramesCutsBeforeTheQualityGate(TestCase):
                            'no pre-window warm-up survived the cut')
 
 
-# Anything that can put bars in front of a strategy. Matched by AST, so an alias
-# (`load_frames as lf`), a module-qualified call (`store.load_frame`) and an indirect
-# driver (`run_experiment`) are all caught.
-BAR_REACHING = {'load_frames', 'load_frame', 'covering_frame', 'run_backtest',
-                'run_backtest_for_model', 'run_experiment', 'evaluate_fixed_params',
-                'slice_frames'}
+# Anything that can put bars in front of a strategy, or run a strategy over them.
+# Matched by AST, so an alias (`load_frames as lf`), a module-qualified call
+# (`store.load_frame`, `bt.load_frames`) and an indirect driver (`run_experiment`)
+# are all caught.
+RAW_BAR_ACCESS = {'load_frames', 'load_frame', 'covering_frame', 'run_backtest',
+                  'run_backtest_for_model', 'run_experiment', 'evaluate_fixed_params',
+                  'slice_frames'}
 
-# Commands allowed to reach bars without research_frames, each with the reason.
-# A NAMED exemption, not an omission: the previous version of this guard was a
-# hardcoded tuple of three filenames matched against one literal string, so
-# auto_research called load_frames directly and the test said nothing. A guard that
-# protects only what someone remembered to list is the failure this whole module
-# exists to remove.
+# Commands allowed to reach bars without the bounded loader, each with the reason.
+# A NAMED exemption, not an omission: an earlier version of this guard was a
+# hardcoded tuple of filenames matched against one literal string, so auto_research
+# called load_frames directly and the test said nothing. A guard that protects only
+# what someone remembered to list is the failure this module exists to remove.
 EXEMPT = {
     'auto_research.py': (
         'Promotion pipeline. Reaches bars via optimize.run_experiment and '
@@ -181,78 +177,123 @@ EXEMPT = {
 class NoCommandReachesBarsWithoutTheBoundedLoader(SimpleTestCase):
     """AC1 as a discovered rule, not a remembered list.
 
-    Every command is parsed. Any that can put bars in front of a strategy must
-    either use research_frames or carry a written exemption. A new command, or an
-    aliased import inside an existing one, fails this without anyone updating it.
+    The rule is absolute: a non-exempt command may not reference a raw loader or
+    runner AT ALL. There is deliberately no "but it also uses research_frames"
+    escape, because the previous version had one — satisfied by a substring — and a
+    file carrying the comment ``# uses research_frames`` plus a direct load_frames
+    call passed every test. That is the h10_forward baseline leak exactly: a raw
+    load sitting in a file that already used the bounded path.
+
+    **What this scan cannot see**, and why it is not the only defence:
+
+      * string indirection — ``getattr(store, 'load_' + kind)``, importlib by name;
+      * helpers one hop down in services — ``dossier.grade`` reaches bars through
+        ``news_agent._feed_frame`` -> ``store.covering_frame``, and this scan reads
+        command files only;
+      * direct ORM reads — ``Bar.objects.filter(...)`` builds a frame with no loader
+        in sight.
+
+    ``assert_bounded`` inside ``run_window`` is the runtime backstop for all three:
+    whatever route the frames took, they are refused at the engine if they carry a
+    bar at or after the window end. Static scanning stops the easy mistakes early;
+    the runtime check is what actually holds.
     """
 
     @staticmethod
-    def bar_reaching(path: Path) -> set:
+    def _names(path: Path) -> set:
         import ast
         hits = set()
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.ImportFrom):
                 # `a.name` is the SOURCE name, so `import load_frames as lf` is caught.
-                hits |= {a.name for a in node.names if a.name in BAR_REACHING}
-            elif isinstance(node, ast.Attribute) and node.attr in BAR_REACHING:
+                hits |= {a.name for a in node.names}
+            elif isinstance(node, ast.Attribute):
                 hits.add(node.attr)
-            elif isinstance(node, ast.Name) and node.id in BAR_REACHING:
+            elif isinstance(node, ast.Name):
                 hits.add(node.id)
         return hits
 
-    def offenders(self, folder=COMMANDS) -> list:
-        out = []
-        for path in sorted(folder.glob('*.py')):
-            if path.name == '__init__.py' or path.name in EXEMPT:
-                continue
-            hits = self.bar_reaching(path)
-            if hits and 'research_frames' not in path.read_text():
-                out.append(f'{path.name} reaches bars via {sorted(hits)}')
-        return out
+    def raw_access(self, path: Path) -> set:
+        return self._names(path) & RAW_BAR_ACCESS
 
-    def test_every_command_that_reaches_bars_uses_the_bounded_loader(self):
+    def uses_bounded_loader(self, path: Path) -> bool:
+        """AST, not substring. A comment mentioning it is not using it."""
+        return 'research_frames' in self._names(path)
+
+    def offenders(self, folder=COMMANDS) -> list:
+        return [f'{p.name} reaches bars via {sorted(self.raw_access(p))}'
+                for p in sorted(folder.glob('*.py'))
+                if p.name != '__init__.py' and p.name not in EXEMPT and self.raw_access(p)]
+
+    def test_no_command_references_a_raw_loader(self):
         self.assertEqual(self.offenders(), [],
-                         'these obtain bars without research_frames and are not on the '
-                         'exemption list: ' + '; '.join(self.offenders()))
+                         'these reference a raw loader and are not exempt; obtain bars '
+                         'through research_frames instead: ' + '; '.join(self.offenders()))
 
     def test_the_scan_actually_finds_something(self):
-        """Guards the guard. If the AST walk silently matched nothing — a renamed
-        helper, a parse that failed open — the rule above would pass vacuously."""
-        found = {p.name for p in COMMANDS.glob('*.py') if self.bar_reaching(p)}
-        self.assertTrue(found, 'the scan flagged no command at all, so it is proving nothing')
+        """Guards the guard. If the AST walk matched nothing — a renamed helper, a
+        parse that failed open — the rule above would pass vacuously."""
+        found = {p.name for p in COMMANDS.glob('*.py') if self.raw_access(p)}
+        self.assertTrue(found, 'the scan flagged no command at all, so it proves nothing')
         self.assertIn('auto_research.py', found)
 
+    def test_every_research_command_actually_calls_the_bounded_loader(self):
+        """The other direction. Not bypassing the loader is not the same as using it,
+        and a command that imports the module but never calls research_frames would
+        satisfy the ban while loading bars some other way."""
+        for path in sorted(COMMANDS.glob('*.py')):
+            if 'research_window' in path.read_text() and path.name not in EXEMPT:
+                self.assertTrue(self.uses_bounded_loader(path),
+                                f'{path.name} imports research_window but never calls '
+                                f'research_frames')
+
     def test_every_exemption_is_still_a_real_file_with_a_real_reason(self):
-        """An exemption for a deleted file is a hole nobody can see."""
+        """An exemption for a deleted file, or one that no longer touches bars, is a
+        hole nobody can see."""
         for name, reason in EXEMPT.items():
             self.assertTrue((COMMANDS / name).exists(), f'{name} is exempt but does not exist')
             self.assertGreater(len(reason), 80, f'{name} needs a reason, not a label')
-            self.assertTrue(self.bar_reaching(COMMANDS / name),
+            self.assertTrue(self.raw_access(COMMANDS / name),
                             f'{name} no longer reaches bars — drop the exemption')
+
+    def test_a_mixed_file_does_not_slip_past(self):
+        """The reviewer's planted case. A raw load in a file that also uses the
+        bounded path — by comment or by real import — must still fail."""
+        for label, src in (
+                ('comment', '# uses research_frames for everything\n'
+                            'from main_app.services.backtest import load_frames\n\n\n'
+                            'def go():\n    return load_frames\n'),
+                ('real import', 'from main_app.services.backtest import load_frames\n'
+                                'from main_app.services.research_window import research_frames\n\n\n'
+                                'def go(s, tf, w):\n'
+                                '    return research_frames(s, tf, w), load_frames\n')):
+            with self.subTest(label), _temp_command('mixed_leak', src) as folder:
+                self.assertTrue(any('mixed_leak' in o for o in self.offenders(folder)),
+                                f'a raw load alongside the bounded path ({label}) was allowed')
+
+    def test_a_comment_is_not_a_use_of_the_bounded_loader(self):
+        with _temp_command('commented', '# research_frames\n\n\ndef go():\n    return 1\n') as f:
+            self.assertFalse(self.uses_bounded_loader(f / 'commented.py'))
 
     def test_an_aliased_import_does_not_slip_past(self):
         with _temp_command('aliased_leak', 'from main_app.services.backtest import '
-                                           'load_frames as lf\n\n\ndef go():\n    return lf\n') as folder:
-            self.assertTrue(any('aliased_leak' in o for o in self.offenders(folder)),
-                            'an aliased import was not detected')
+                                           'load_frames as lf\n\n\ndef go():\n    return lf\n') as f:
+            self.assertTrue(any('aliased_leak' in o for o in self.offenders(f)))
 
     def test_a_module_qualified_call_does_not_slip_past(self):
         with _temp_command('qualified_leak', 'from main_app.services.data import store\n\n\n'
-                                             'def go(i):\n    return store.load_frame(i)\n') as folder:
-            self.assertTrue(any('qualified_leak' in o for o in self.offenders(folder)),
-                            'a module-qualified call was not detected')
+                                             'def go(i):\n    return store.load_frame(i)\n') as f:
+            self.assertTrue(any('qualified_leak' in o for o in self.offenders(f)))
 
     def test_a_brand_new_command_is_caught_without_updating_any_list(self):
         with _temp_command('brand_new', 'from main_app.services.backtest import load_frames\n\n\n'
-                                        'def go():\n    return load_frames\n') as folder:
-            self.assertTrue(any('brand_new' in o for o in self.offenders(folder)),
-                            'a new command file was not discovered')
+                                        'def go():\n    return load_frames\n') as f:
+            self.assertTrue(any('brand_new' in o for o in self.offenders(f)))
 
-    def test_a_new_command_that_uses_the_bounded_loader_is_accepted(self):
+    def test_a_new_command_that_only_uses_the_bounded_loader_is_accepted(self):
         """The positive control: the rule must pass what it is meant to allow, or it
         is just a ban on writing commands."""
-        with _temp_command('good_new', 'from main_app.services.backtest import load_frames\n'
-                                       'from main_app.services.research_window import '
+        with _temp_command('good_new', 'from main_app.services.research_window import '
                                        'research_frames\n\n\ndef go(s, tf, w):\n'
-                                       '    return research_frames(s, tf, w)\n') as folder:
-            self.assertEqual([o for o in self.offenders(folder) if 'good_new' in o], [])
+                                       '    return research_frames(s, tf, w)\n') as f:
+            self.assertEqual([o for o in self.offenders(f) if 'good_new' in o], [])

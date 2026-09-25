@@ -117,3 +117,42 @@ def research_frames(symbols, timeframe: str, window: Window) -> dict[str, pd.Dat
         frames[inst.symbol] = df
     assert_bounded(frames, window.end, f'research_frames({timeframe})')
     return frames
+
+
+def run_window(key: str, params: dict, risk_over: dict, frames, start, end, *,
+               timeframe: str, pairs, cost_mult: float = 1.0) -> tuple[list, float]:
+    """Replay one strategy over the half-open window [start, end).
+
+    Lives here rather than in a command because it is the choke point: every
+    research command reaches the engine through it, so this is the one place that
+    can refuse frames carrying a bar at or after the end. It was in h10_forward,
+    which meant that command had to reference `run_backtest` directly — and a rule
+    saying "no command may touch a raw loader" then had to exempt the very file
+    holding the guard.
+
+    `timeframe` and `pairs` are REQUIRED and keyword-only. They used to default to
+    H10's, and that default is what let MT-A001 replay the live 15Min strategies on
+    H10's 1Hour frames under H10's risk settings and label the result "live params"
+    — a configuration that has never existed. A baseline has to be run as it
+    actually lives, so the caller states it.
+    """
+    from dataclasses import replace
+
+    from main_app.models import AgentConfig
+
+    from .backtest import run_backtest, spec_from_models
+
+    spec = spec_from_models(key, params, list(pairs), timeframe, AgentConfig.get())
+    if risk_over:
+        spec.risk = replace(spec.risk, **risk_over)
+    if cost_mult != 1.0:
+        spec.fee_bps = {k: v * cost_mult for k, v in spec.fee_bps.items()}
+        spec.risk = replace(spec.risk, slippage_bps=spec.risk.slippage_bps * cost_mult)
+    assert_bounded(frames, end, f'run_window({key})')
+    spec.act_from = start
+    res = run_backtest(spec, frames)
+    # act_from stops the engine acting early; this stops it acting late. Both are
+    # required — setting only the first is the leak that invalidated a whole train
+    # window, and bounding entries while the FRAMES ran past the boundary is the
+    # same mistake one layer out.
+    return [t for t in res.trades if start <= t.entry_ts < end], spec.risk.slippage_bps

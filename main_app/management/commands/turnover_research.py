@@ -208,9 +208,8 @@ class Command(BaseCommand):
     # --- measurement -------------------------------------------------------
     def _run(self):
         from datetime import date
-        from main_app.management.commands.h10_forward import run_window
         from main_app.models import Hypothesis, Strategy
-        from main_app.services.research_window import Window, research_frames
+        from main_app.services.research_window import Window, research_frames, run_window
         from main_app.services.strategies import make_strategy
 
         if not os.path.exists(PREREG):
@@ -249,7 +248,7 @@ class Command(BaseCommand):
                 trades, slip = run_window(key, dict(live[key]), dict(over), frames[tf],
                                           entry_from, TRAIN_END, timeframe=tf, pairs=PAIRS)
                 t2, _ = run_window(key, dict(live[key]), dict(over), frames[tf],
-                                   entry_from, TRAIN_END, cost_mult=2.0, timeframe=tf, pairs=PAIRS)
+                                   entry_from, TRAIN_END, timeframe=tf, pairs=PAIRS, cost_mult=2.0)
                 # Belt and braces. The frames are already cut, so this can only fire
                 # if that truncation is ever removed — which is exactly when it matters.
                 late = [t for t in trades + t2 if t.entry_ts >= TRAIN_END]
@@ -268,11 +267,20 @@ class Command(BaseCommand):
         superseded = []
         if os.path.exists(RESULTS):
             prev = json.load(open(RESULTS))
-            superseded = (prev.get('superseded') or []) + [
-                {'measured_at': prev.get('measured_at'), 'candidates': prev.get('candidates'),
-                 'outcome': prev.get('outcome'),
-                 'train_entry_window': prev.get('train_entry_window'),
-                 'why_replaced': prev.get('replaced_because', 'superseded by a later run')}]
+            superseded = prev.get('superseded') or []
+            # Only an actual supersession is recorded. A re-run that reproduces the
+            # same rows — verifying a refactor, say — has superseded nothing, and
+            # appending it would pad the record with events that never happened.
+            def _key(rows):
+                return {(r['strategy'], r['candidate']): (r['trades'], r['net'], r['net_2x'])
+                        for r in (rows or [])}
+            if _key(prev.get('candidates')) != _key(rows):
+                superseded = superseded + [
+                    {'measured_at': prev.get('measured_at'), 'candidates': prev.get('candidates'),
+                     'outcome': prev.get('outcome'),
+                     'train_entry_window': prev.get('train_entry_window'),
+                     'why_replaced': prev.get('replaced_because',
+                                              'superseded by a later run')}]
 
         out = {'assignment': 'MT-A003', 'registered_at': reg['registered_at'],
                'superseded': superseded,

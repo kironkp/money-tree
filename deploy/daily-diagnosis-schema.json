@@ -1,0 +1,35 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["headlines", "findings"],
+  "properties": {
+    "headlines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["angle", "title", "headline"],
+        "properties": {
+          "angle": {"type": "string", "enum": ["silent-failures", "money", "data", "risk", "evidence", "spend", "open"]},
+          "title": {"type": "string"},
+          "headline": {"type": "string", "description": "one sentence; \"nothing new\" is valid and common"}
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["angle", "severity", "what", "evidence", "action"],
+        "properties": {
+          "angle": {"type": "string", "enum": ["silent-failures", "money", "data", "risk", "evidence", "spend", "open"]},
+          "severity": {"type": "string", "enum": ["critical", "warn", "note"]},
+          "what": {"type": "string", "description": "the problem, in one plain sentence"},
+          "evidence": {"type": "string", "description": "the query you ran and the number it returned"},
+          "action": {"type": "string", "description": "the smallest thing that would fix it, or \"none\""}
+        }
+      }
+    }
+  }
+}

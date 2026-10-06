@@ -164,3 +164,38 @@ class GradedMeansAResultNotATimestamp(TestCase):
         from main_app.services.graph_state import state
         self._verdict(outcome_at=timezone.now(), outcome_kind='stop')
         self.assertIn('in 7d', state()['store.verdicts']['headline'])
+
+
+class TheMapAndTheTileAgreeAboutToday(TestCase):
+    """The map summed closed trades since ET midnight, replay included, while the
+    dashboard tile showed equity against the lane's day start. On forex the two
+    read "+36.22 today" and "day -60.78" at the same moment."""
+
+    def test_same_account_same_today_and_replay_is_not_the_lane(self):
+        from datetime import datetime
+        from decimal import Decimal
+
+        from django.urls import reverse
+        from django.utils import timezone
+
+        from main_app.models import Account, Instrument, Trade
+        from main_app.services.data import calendar as cal
+        from main_app.services.graph_state import state
+        from main_app.tests.helpers import make_user
+        sim = Account.for_mode('sim', 'stocks')
+        sim.equity = sim.starting_cash - Decimal('72.48')
+        sim.day_start_equity = sim.equity + Decimal('60.78')
+        sim.epoch_started_at = datetime(2026, 9, 19, 16, 0, tzinfo=cal.ET)
+        sim.save()
+        replay = Account.for_mode('replay', 'stocks')
+        inst = Instrument.objects.create(symbol='SPY', asset_class='etf')
+        now = timezone.now()
+        for acct, pnl in ((replay, '-500'), (sim, '-10')):
+            Trade.objects.create(account=acct, instrument=inst, qty=10, entry_ts=now, exit_ts=now,
+                                 entry_price=Decimal('500'), exit_price=Decimal('499'), pnl=Decimal(pnl),
+                                 pnl_pct=Decimal('-0.2'))
+        self.assertEqual(state()['agent.stocks']['sub'], '-60.78 today · 1 closed · -72.48 since Sep 19')
+        self.client.force_login(make_user())
+        tile = self.client.get(reverse('dashboard-panels'), {'account': 'sim', 'market': 'stocks'}).content.decode()
+        self.assertIn('day -$60.78', tile)
+        self.assertIn('since Sep 19 -$72.48', tile)

@@ -101,7 +101,15 @@ def write_eod_journal(account: Account, d: date | None = None, auto_disable: boo
             )
         dc = drift_check(account, row)
         drifts.append(dc)
-        if dc['drift'] and auto_disable and account.mode != 'replay':
+        # Drift stops a strategy only where money is real (paper, live). In sim
+        # failing never means stopping; the verdict and the nightly fix loop
+        # deal with it there.
+        dc['disabled'] = bool(dc['drift'] and auto_disable and account.mode in ('paper', 'live'))
+        if dc['drift'] and auto_disable and account.mode == 'sim':
+            RiskEvent.objects.create(account=account, kind='drift', message=f'{row.key} drifting: live expectancy '
+                                     f'{dc["live_expectancy"]:+.2f} vs backtest {dc["backtest_expectancy"]:+.2f} '
+                                     f'(sim keeps trading)')
+        if dc['disabled']:
             row.enabled = False
             row.notes = (row.notes + '\n' if row.notes else '') + (
                 f'{d}: auto-disabled — last {dc["trades"]} live trades expectancy {dc["live_expectancy"]:+.2f} '
@@ -129,7 +137,7 @@ def write_eod_journal(account: Account, d: date | None = None, auto_disable: boo
         lines.append(f"Median realized slippage {s['slippage_median_bps']:.1f} bps.")
     for dc in drifts:
         if dc['live_expectancy'] is not None and dc['backtest_expectancy']:
-            flag = ' **DRIFT — auto-disabled**' if dc['drift'] else ''
+            flag = ' **DRIFT — auto-disabled**' if dc.get('disabled') else (' **DRIFT**' if dc['drift'] else '')
             lines.append(f"{dc['strategy']}: last {dc['trades']} trades expectancy {dc['live_expectancy']:+.2f} "
                          f"vs backtest {dc['backtest_expectancy']:+.2f}{flag}")
     for qa in qualifications:

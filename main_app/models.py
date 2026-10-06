@@ -752,6 +752,13 @@ class Strategy(models.Model):
     def execution_qualified(self) -> bool:
         return self.qualification == Qualification.QUALIFIED
 
+    @property
+    def retry_pending(self) -> bool:
+        """A sim strategy whose verdict is failing. In sim failing never means
+        stopping: it keeps trading and waits for the nightly fix loop to install
+        a better version. The verdict itself still blocks graduation."""
+        return self.enabled and self.stage == Stage.SPROUT and self.qualification == Qualification.QUARANTINED
+
 
 class Experiment(models.Model):
     strategy_key = models.CharField(max_length=40)
@@ -763,6 +770,9 @@ class Experiment(models.Model):
     end = models.DateField()
     objective = models.CharField(max_length=20, default='sharpe')
     windows = models.JSONField(default=dict, blank=True)  # {train_days, test_days, step_days}
+    # RiskConfig fields to run this experiment under instead of the lane's live
+    # values, e.g. {'min_reward_to_cost': 4.0, 'max_hold_minutes': 1440}.
+    risk_overrides = models.JSONField(default=dict, blank=True)
     min_trades = models.PositiveIntegerField(default=10)
     status = models.CharField(max_length=10, default='queued')  # queued running done failed
     progress = models.FloatField(default=0)

@@ -484,10 +484,9 @@ ATR_WARMUP_DAYS = 4       # enough history before the verdict to warm a 14-perio
 
 
 def _hold_minutes(market: str) -> int:
-    from main_app.models import AgentConfig
-    cfg = AgentConfig.get()
-    return {Market.DEGEN: int(cfg.degen_max_hold_minutes),
-            Market.FOREX: int(cfg.forex_max_hold_minutes)}.get(market, int(cfg.max_hold_minutes))
+    """The preregistered grading horizon — never the lane's live max_hold."""
+    from .news_risk import GRADE_HOLD_MINUTES
+    return GRADE_HOLD_MINUTES.get(market, GRADE_HOLD_MINUTES['stocks'])
 
 
 def _atr_at(df, ts) -> float | None:

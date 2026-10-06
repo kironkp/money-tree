@@ -9,7 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import indicators as ind
-from .base import Context, Param, Rule, Signal, Strategy, volume_evidence, volume_rule
+from .base import Context, Param, Rule, Signal, Strategy, entry_session_param, volume_evidence, volume_rule
 
 
 class EmaMomentum(Strategy):
@@ -25,6 +25,7 @@ class EmaMomentum(Strategy):
         Param('stop_atr_mult', 'float', 1.5, 0.5, 2.5, 0.5, help='Stop distance in ATRs'),
         Param('rr', 'float', 2.0, 1.0, 4.0, 0.5, help='Target as a multiple of risk'),
         Param('min_relvol', 'float', 1.0, 0.0, 2.0, 0.5, help='Minimum relative volume at entry'),
+        entry_session_param(),
     )
     warmup_bars = 40
 

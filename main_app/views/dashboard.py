@@ -40,6 +40,16 @@ def _panel_context(request, cfg, account):
     for st in states:
         st.failing = [r for r in (st.rules or []) if not r.get('ok')]
         st.passing = [r for r in (st.rules or []) if r.get('ok')]
+    # Day and open P&L alone read $0.00 on a lane that has not traded today, which
+    # looked like "made and lost nothing" while the lane was down since the reset.
+    since_label = (f'since {account.epoch_started_at.astimezone(cal.ET):%b %-d}'
+                   if account.epoch_started_at else 'lifetime')
+    last_exit = account.trades.order_by('-exit_ts').values_list('exit_ts', flat=True).first()
+    if last_exit is None:
+        last_trade = 'no trades yet'
+    else:
+        days = (today - cal.session_date(last_exit)).days
+        last_trade = 'last trade today' if days <= 0 else f'last trade {days} d ago'
     return {
         'account': account, 'run': run, 'status': build_status(account, cfg, run), 'risk': portfolio_risk(account, cfg),
         'positions': list(positions.values()), 'trades_today': trades_today, 'signals': signals,
@@ -48,6 +58,7 @@ def _panel_context(request, cfg, account):
         'pnl_today_closed': sum(float(t.pnl) for t in trades_today), 'wins_today': sum(1 for t in trades_today if t.pnl > 0),
         'unrealized': sum(float(p.unrealized_pnl) for p in positions.values()),
         'enabled_strategies': Strategy.objects.filter(enabled=True, market=account.market).count(),
+        'since_label': since_label, 'last_trade': last_trade,
     }
 
 

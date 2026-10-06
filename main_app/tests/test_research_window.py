@@ -171,6 +171,13 @@ EXEMPT = {
     'backtest.py': (
         'Runs one BacktestRun whose window IS its [start, end]. There is no train/test '
         'split for data to leak across, so there is no boundary to enforce.'),
+    'fix_lane.py': (
+        'One-off sim fix (2026-10-06) that drives the same machinery as auto_research: '
+        'optimize.run_experiment walk-forwards, then evaluate_fixed_params replaying the '
+        'current params on the test windows the procedure traded. slice_frames bounds '
+        'every window [a, b) at both ends. Routing it through research_frames would make '
+        'it measure differently from the nightly loop it mirrors. Same cold-start '
+        'warm-up class as optimize.py, queued as MT-A006.'),
 }
 
 

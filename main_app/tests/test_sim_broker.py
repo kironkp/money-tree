@@ -123,6 +123,43 @@ class SimBrokerKeepsTheBooksStraight(SimpleTestCase):
         self.assertEqual(dup.status, 'rejected')
 
 
+class LiquidityCapNeverFillsDust(SimpleTestCase):
+    """1% of Alpaca's crypto bar volume turned a $2,000 degen entry into $0.17,
+    so every degen P&L rounded to $0.00. The cap is off for crypto, and where it
+    still applies an entry it would cut below 10% is canceled, not dusted."""
+
+    def test_crypto_fills_in_full_against_tiny_bar_volume(self):
+        b = SimBroker(1_000_000, slippage_bps=0, fee_bps={'crypto': 0},
+                      asset_classes={'ADA/USD': 'crypto'}, qty_increments={'ADA/USD': 0.0001})
+        b.on_bar('ADA/USD', bar(0.27, 0.28, 0.26, 0.27, v=50), T0)
+        b.submit(OrderReq(id='c1', symbol='ADA/USD', side='buy', qty=7450.6342, leg='entry', decision_price=0.27))
+        b.on_bar('ADA/USD', bar(0.27, 0.28, 0.26, 0.27, v=50), T0 + timedelta(minutes=1))
+        self.assertEqual(b.orders['c1'].status, 'filled')
+        self.assertAlmostEqual(b.positions['ADA/USD'].qty, 7450.6342)
+
+    def test_a_stock_entry_capped_below_ten_percent_is_rejected_unfilled(self):
+        b = SimBroker(1_000_000, slippage_bps=0, fee_bps={'stock': 0}, liquidity_cap_pct=1.0)
+        b.on_bar('X', bar(100, 101, 99, 100), T0)
+        b.submit(entry(qty=5000))
+        b.on_bar('X', bar(100, 101, 99, 100, v=40_000), T0 + timedelta(minutes=5))  # cap 400 = 8%
+        o = b.orders['e1']
+        self.assertEqual(o.status, 'canceled')
+        self.assertEqual(o.error, 'liquidity: would be dust')
+        self.assertEqual(o.filled_qty, 0)
+        self.assertNotIn('X', b.positions)
+        self.assertEqual(b.fills, [])
+        self.assertEqual(b.cash, 1_000_000)
+
+    def test_a_stock_entry_capped_above_ten_percent_still_partially_fills(self):
+        b = SimBroker(1_000_000, slippage_bps=0, fee_bps={'stock': 0}, liquidity_cap_pct=1.0)
+        b.on_bar('X', bar(100, 101, 99, 100), T0)
+        b.submit(entry(qty=5000))
+        b.on_bar('X', bar(100, 101, 99, 100, v=60_000), T0 + timedelta(minutes=5))  # cap 600 = 12%
+        self.assertEqual(b.positions['X'].qty, 600)
+        self.assertEqual(b.orders['e1'].status, 'canceled')
+        self.assertEqual(b.orders['e1'].error, 'liquidity: partial fill, remainder canceled')
+
+
 class ShortsCostMoreThanLongs(SimpleTestCase):
     """The short side had been modelled as a mirror of the long side. It is not."""
 

@@ -390,6 +390,11 @@ class Engine:
                 self.say('error', f'{strat.key} crashed on {symbol}: {exc!r}', symbol, strat.key, ts, phase='alert')
                 continue
             for sig in signals:
+                if sig.action in ('buy', 'sell') and not strat.entry_allowed(sig.ts):
+                    # Outside the strategy's entry window: not a blocked trade,
+                    # just not a time it trades. Exits are never filtered.
+                    strat.on_signal_blocked(sig, 'outside entry session')
+                    continue
                 fired = True
                 self.handle_signal(sig, strat, ctx, row, rules)
             evaluated.append((strat.key, rules))
@@ -668,8 +673,10 @@ class Engine:
             self._close(symbol, price, ts, 'eod', f'{what} — closing {symbol} at {price:,.5g} ({minutes_to_close:.0f} min to the close)')
         elif ac in ('crypto', 'forex'):
             hold_limit = pos.max_hold_until
-            if hold_limit is None and self.cfg.risk.max_hold_minutes:
-                hold_limit = pos.entry_ts + timedelta(minutes=self.cfg.risk.max_hold_minutes)
+            own = next((s.max_hold_minutes for s in self.strategies if s.key == pos.strategy_key), None)
+            minutes = own or self.cfg.risk.max_hold_minutes
+            if hold_limit is None and minutes:
+                hold_limit = pos.entry_ts + timedelta(minutes=minutes)
             if hold_limit is not None and ts >= hold_limit:
                 self._close(symbol, price, ts, 'time', f'MAX HOLD reached — closing {symbol} at {px(price)}')
         self._emit_broker_events()

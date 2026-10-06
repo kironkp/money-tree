@@ -391,3 +391,43 @@ class TheOriginThePhoneUsesIsTrusted(TestCase):
                        secure=True, HTTP_ORIGIN=origin,
                        HTTP_REFERER=f'{origin}/accounts/login/')
         self.assertNotEqual(r.status_code, 403, f'CSRF rejected a POST from {origin}')
+
+
+class TheEquityTileShowsMoreThanToday(TestCase):
+    """Day and open P&L alone read $0.00 on a lane with no trade today, so every
+    quiet lane looked like it had made and lost nothing while forex was down
+    $1,042.50 since the reset."""
+
+    def setUp(self):
+        from datetime import datetime, time as dtime, timedelta
+        from decimal import Decimal
+
+        from django.utils import timezone
+
+        from main_app.models import Account, Instrument, Trade
+        from main_app.services.data import calendar as cal
+        self.client.force_login(make_user())
+        self.account = Account.for_mode('sim', 'forex')
+        self.account.equity = Decimal('8957.50')
+        self.account.day_start_equity = Decimal('8957.50')
+        self.account.epoch_started_at = datetime(2026, 9, 19, 16, 0, tzinfo=cal.ET)
+        self.account.save()
+        inst = Instrument.objects.create(symbol='EUR/USD', asset_class='forex', market='forex')
+        exit_ts = datetime.combine(cal.session_date(timezone.now()) - timedelta(days=3), dtime(12, 0), tzinfo=cal.ET)
+        Trade.objects.create(account=self.account, instrument=inst, side='long', qty=1000,
+                             entry_ts=exit_ts - timedelta(hours=1), exit_ts=exit_ts, entry_price=Decimal('1.1'),
+                             exit_price=Decimal('1.1'), pnl=Decimal('-5'), pnl_pct=Decimal('-0.1'))
+
+    def _panel(self, market):
+        return self.client.get(reverse('dashboard-panels'), {'account': 'sim', 'market': market}).content.decode()
+
+    def test_it_shows_pnl_since_the_reset_and_when_the_lane_last_traded(self):
+        body = self._panel('forex')
+        self.assertIn('day $0.00', body)
+        self.assertIn('since Sep 19 -$1,042.50', body)
+        self.assertIn('last trade 3 d ago', body)
+
+    def test_a_lane_never_reset_and_never_traded_says_so(self):
+        body = self._panel('crypto')
+        self.assertIn('lifetime $0.00', body)
+        self.assertIn('no trades yet', body)

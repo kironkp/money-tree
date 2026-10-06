@@ -47,6 +47,13 @@ class NewsCatalyst(Strategy):
     warmup_bars = 20
     live = False          # the agent sets this; backtests must never see verdicts
 
+    @property
+    def max_hold_minutes(self) -> int | None:
+        """The trade keeps the hold its verdict is graded on, whatever the lane's
+        max_hold, so the position still runs the barrier race it is scored on."""
+        from ..news_risk import GRADE_HOLD_MINUTES
+        return GRADE_HOLD_MINUTES.get(self.market) if self.market else None
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Instructions this instance is holding but has not yet spent, by symbol.

@@ -15,7 +15,7 @@ The whole thing is about twenty queries and forty milliseconds warm.
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 
 from django.db.models import Count, Sum
 from django.utils import timezone
@@ -52,6 +52,14 @@ def _job(log_name: str, max_age_min: int, if_dead: str) -> dict:
             'detail': f'it has not run recently, so {if_dead}'}
 
 
+def _lane_day_start(asset_class: str, now) -> datetime:
+    """When the lane's current day began: ET midnight, or the 17:00 ET roll for forex."""
+    d = cal.trading_day(now, asset_class)
+    if asset_class == 'forex':
+        return datetime.combine(d - timedelta(days=1), cal.FOREX_ROLL, tzinfo=cal.ET)
+    return datetime.combine(d, time(0), tzinfo=cal.ET)
+
+
 def state() -> dict:
     """One dict of node id -> live state. Every value is cheap or absent."""
     now = timezone.now()
@@ -64,12 +72,15 @@ def state() -> dict:
     runs = {}
     for r in AgentRun.objects.filter(status='running').order_by('-started_at'):
         runs.setdefault(r.market, r)
-    pnl = {row['instrument__market'] if 'instrument__market' in row else row['account__market']: row['p']
-           for row in Trade.objects.filter(exit_ts__gte=day_start)
-           .values('account__market').annotate(p=Sum('pnl'))}
-    counts = {row['account__market']: row['n']
-              for row in Trade.objects.filter(exit_ts__gte=day_start)
-              .values('account__market').annotate(n=Count('id'))}
+    # Closed trades since each lane's own day began (17:00 ET for forex), on the
+    # sim account only: replay/paper trades in the same market are not this lane.
+    starts = {lane: _lane_day_start(a.lane_asset_class, now) for lane, a in accounts.items()}
+    counts: dict[str, int] = {}
+    if starts:
+        for market, exit_ts in (Trade.objects.filter(account__mode=Mode.SIM, exit_ts__gte=min(starts.values()))
+                                .values_list('account__market', 'exit_ts')):
+            if exit_ts >= starts.get(market, exit_ts):
+                counts[market] = counts.get(market, 0) + 1
 
     # Each lane's own tolls. Kept per lane on purpose: degen and crypto pay 50 bps
     # a round trip while stocks and forex pay 1, so a single desk-wide fee number
@@ -85,7 +96,12 @@ def state() -> dict:
             health = getattr(run, 'health', 'running') or 'running'
             detail = f'{run.state or health} · since {run.started_at:%b %-d %H:%M}'
         equity = float(acct.equity) if acct else 0.0
-        day = float(pnl.get(lane) or 0)
+        # The dashboard tile's measure: equity against the lane's day start, open
+        # P&L included. Summing closed trades since ET midnight disagreed with it.
+        day = float(acct.day_pnl) if acct else 0.0
+        total = float(acct.total_pnl) if acct else 0.0
+        since = (f'since {acct.epoch_started_at.astimezone(cal.ET):%b %-d}'
+                 if acct and acct.epoch_started_at else 'lifetime')
         halted = bool(acct and getattr(acct, 'day_halted', False))
         c = costs.get(lane) or {}
         if c.get('trades'):
@@ -102,7 +118,7 @@ def state() -> dict:
             'status': 'halted' if halted else ('ok' if health in ('healthy', 'running', 'waiting')
                                                else 'warn' if run else 'idle'),
             'headline': f'${equity:,.0f}',
-            'sub': f'{_money(day)} today · {counts.get(lane, 0)} trades',
+            'sub': f'{_money(day)} today · {counts.get(lane, 0)} closed · {_money(total)} {since}',
             'detail': ((acct.day_halted_reason if halted else detail)[:140]
                        + ('  ·  ' + toll if toll else '')),
         }

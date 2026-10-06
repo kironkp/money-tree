@@ -124,7 +124,7 @@ class BrokerConformance:
 
     def test_a_partial_fill_emits_its_own_event_rather_than_being_rounded_away(self):
         b = self.make_broker()
-        b.liquidity_cap_pct = 0.001            # force the cap to bite
+        b.liquidity_cap_pct = 0.5              # force the cap to bite (500 of 1000; under 10% is dust, refused)
         self._prime(b, 100.0)
         b.submit(self._entry('part-1', qty=1000))
         self._prime(b, 100.0, T0 + timedelta(minutes=5))

@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime, time as dtime, timedelta
 
 import pandas as pd
 
-from .broker.sim import SimBroker
+from .broker.sim import LIQUIDITY_CAP_BY_CLASS, SimBroker
 from .data import calendar as cal
 from .engine import Engine, EngineConfig, MemoryRecorder
 from .metrics import compute_metrics, downsample_equity
@@ -65,6 +65,7 @@ def run_backtest(spec: BacktestSpec, frames: dict[str, pd.DataFrame],
               if len(df) and any(st.supports(spec.asset_classes.get(s, 'stock')) for st in strategies)}
     broker = SimBroker(spec.starting_cash, immediate_fills=False, slippage_bps=spec.risk.slippage_bps,
                        fee_bps=spec.fee_bps, liquidity_cap_pct=spec.liquidity_cap_pct,
+                       min_fill_pct=spec.risk.min_entry_size_pct,
                        asset_classes=spec.asset_classes, qty_increments=spec.qty_increments,
                        leverage=spec.risk.leverage)
     cfg = EngineConfig(timeframe=spec.timeframe, mode='bt', asset_classes=spec.asset_classes, risk=spec.risk,
@@ -173,7 +174,9 @@ def persist_result(run, spec: BacktestSpec, result: BacktestResult, max_trades: 
     run.metrics = result.metrics
     run.equity_curve = downsample_equity(result.equity)
     run.config_snapshot = {'risk': spec.risk.as_dict(), 'fee_bps': spec.fee_bps,
-                           'liquidity_cap_pct': spec.liquidity_cap_pct, 'starting_cash': spec.starting_cash}
+                           'liquidity_cap_pct': spec.liquidity_cap_pct,
+                           'liquidity_cap_by_class': dict(LIQUIDITY_CAP_BY_CLASS),
+                           'starting_cash': spec.starting_cash}
     run.status = 'done'
     run.duration_s = result.duration_s
     run.finished_at = timezone.now()

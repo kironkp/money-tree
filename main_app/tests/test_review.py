@@ -474,6 +474,8 @@ class AStrategyTheDeskHasAlreadyFailedIsNotLeftTrading(ReviewCase):
         self.addCleanup(lambda: setattr(P, 'qualification_assessment', self._orig))
 
     def test_a_failed_strategy_still_enabled_is_critical(self):
+        self.account.mode = 'paper'   # where money is real; sim only warns (below)
+        self.account.save(update_fields=['mode'])
         self._strategy()
         self._assess_as('quarantine')
         self.run_ops()
@@ -481,6 +483,16 @@ class AStrategyTheDeskHasAlreadyFailedIsNotLeftTrading(ReviewCase):
         self.assertEqual(f.severity, ReviewFinding.CRITICAL)
         self.assertIn('ENABLED and trading', f.detail)
         self.assertEqual(f.evidence['stats']['profit_factor'], 0.65)
+
+    def test_in_sim_a_failing_strategy_is_a_warning_that_a_retry_is_pending(self):
+        """In sim failing never means stopping, so this is not a critical that
+        repeats every 15 minutes; it says the fix loop has it."""
+        self._strategy()
+        self._assess_as('quarantine')
+        self.run_ops()
+        f = self.findings('missed_quarantine').get()
+        self.assertEqual(f.severity, ReviewFinding.WARN)
+        self.assertIn('failing — retry pending', f.title)
 
     def test_a_failed_strategy_already_disabled_is_only_a_warning(self):
         self._strategy(enabled=False)

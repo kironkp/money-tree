@@ -122,7 +122,8 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   buying power = equity × leverage − gross exposure − pending entries. Cash goes
   negative on a forex entry, equity does not. `forex_max_position_pct` 500 caps one
   position at 5× equity. Cost model = spread: `fee_bps_forex` 0.5 + `forex_slippage_bps`
-  0.3 per side (1.6 bps a round trip), cost gate 2×. `forex_max_hold_minutes` 240.
+  0.3 per side (1.6 bps a round trip), cost gate 2×. `forex_max_hold_minutes` 240
+  (1440 since 2026-10-06 — see "Fix, reset, retry").
 - Lane hours are now generic: `Account.lane_asset_class` / `is_open_at(now)`,
   `cal.is_open(ts, asset_class)`, `cal.next_open(ts, asset_class)`. The agent loop
   runs on `lane_open` + `_daily_roll`: stocks flatten at the bell and journal;
@@ -153,7 +154,9 @@ CDN, SQLite dev / Postgres on Heroku via `ON_HEROKU`, `VERSION` in settings.
   `unproven|qualified|quarantine`. Sim/replay may observe unproven versions;
   paper/live agents query only qualified versions. Thirty forward trades with
   PF < 1, non-positive expectancy, or non-positive net triggers sticky
-  quarantine and disables the strategy. New/manual params reset to unproven.
+  quarantine; on paper/live that disables the strategy, in sim it flags a
+  retry instead (`RiskEvent(kind='retry')`) and the strategy keeps trading.
+  New/manual params reset to unproven.
   `audit_qualifications [--market ...] [--apply]` explains or persists it.
 - The status strip reports **Operational**, **Evidence**, and **Execution**
   separately. A healthy feed is not a profitable strategy and a simulator may
@@ -355,6 +358,11 @@ missing symbol.
   and quarantines at 150+ trades with PF < 1. `Strategy.lifetime_halt` persists it
   so a version bump cannot release it — only an operator can. It fired on burst
   immediately (247 trades, PF 0.181, −$3,287.79) and on nothing else.
+  **In sim this is a verdict, not a stop (2026-10-06):** the lifetime record
+  still blocks graduation and is still persisted as a halt on paper/live, but in
+  sim nothing is disabled; the strategy keeps trading with `retry_pending` and
+  goes to the nightly fix loop. burst was re-enabled in sim that day; its halt
+  record stays.
 - **`burst` is now quarantined and disabled.** It was emitting only blocked
   signals anyway: its 1.50% target cannot clear 3× the 0.56% crypto round trip,
   so 219 signals in four days were refused by its own cost gate.
@@ -368,22 +376,70 @@ missing symbol.
   watchlist would not have produced a UNI verdict. 119 of 347 verdicts (34%)
   already map to no tradable instrument.
 
+## v1.72 — Fix, reset, retry (2026-10-06)
+
+Started from "all lanes show $0". Detail in `docs/LOGBOOK.md`.
+
+- **Sim fills.** `SimBroker`'s volume cap is per asset class
+  (`LIQUIDITY_CAP_BY_CLASS`): crypto 0 (Alpaca's venue volume is not available
+  liquidity — degen had been filling ~0.01% of plan), forex 0 (no centralized
+  volume), stocks/ETFs keep 1%. A capped fill under 10% of the order is rejected
+  whole, never held as dust. Crypto/degen research before this ran on dust fills.
+- **Report day** is the 24 h ending 17:00 ET (`report._bounds`); the calendar day
+  run at 20:30 ET missed every evening forex/crypto/degen trade. Dashboard tile
+  and map show since-reset P&L and last-trade age; the map's "today" is the
+  tile's `day_pnl` on the lane's own day roll, sim only.
+- **Fix loop** (`services/fix_loop.py`, `manage.py fix_lane --market forex|degen
+  [--apply]`, nightly `auto_research` for `retry_pending` rows). Lane regime =
+  timeframe × `min_reward_to_cost` × `max_hold` (lane-level AgentConfig, so
+  stocks/crypto are refused — they share fields). Install test: the selection
+  procedure's clean adaptive OOS must beat the CURRENT params replayed on the
+  same traded windows, on net and PF; the installed params are its latest pick,
+  not separately validated (evidence kind `sim_fix`, never counts toward
+  qualification). Churn guard: 30 forward trades or 14 days. `entry_session`
+  {all, skip_asia, london_ny} is a coarse forex entry filter, searched only when
+  an experiment asks (`Param.search=False`).
+- **Result.** Forex: hold 240 → 1440 at 15Min; ema_momentum v2 and
+  vwap_reversion v2 (london_ny) installed — ema −241 vs −915, vwap +97 vs −217
+  on the same windows. Degen: no edge in any of 8 regimes (every window's best
+  training PF < 1 after the 50 bps round trip); nothing installed, keeps trading.
+  ema wants 1Hour while vwap wants 15Min — one timeframe per lane is now the
+  binding constraint.
+
 ## Daily diagnosis (06:30)
 
-`.claude/workflows/daily-diagnosis.js` — a seven-agent Claude Code workflow run
-headlessly by `deploy/daily-diagnosis.sh` and `com.kiron.moneytree.diagnosis.plist`.
-Findings land as a `JournalEntry(kind='diagnosis')` via `manage.py record_diagnosis`.
+`deploy/daily-diagnosis.sh` + `com.kiron.moneytree.diagnosis.plist`: ONE
+synchronous `claude -p` on Sonnet (`--effort medium --max-turns 30
+--max-budget-usd 2`). Prompt in `deploy/daily-diagnosis-prompt.md`, answer
+validated against `deploy/daily-diagnosis-schema.json`; the script (not the
+agent) writes `run/diagnosis-<date>.json`, and `manage.py record_diagnosis`
+turns it into a `JournalEntry(kind='diagnosis')`. First run 2026-10-06:
+5 turns, 28 s, $0.30.
 
-06:30 because yesterday's numbers are settled by then (a mid-session reading once
-showed +$35.29 on a day that finished −$5.68), the 02:00 backup and 02:10 research
-have finished, and it is three hours before the open so a finding can still be
-acted on. The 17:30 report is the evening counterpart.
+Why one agent: the seven-agent Opus workflow cost $27–60 a run (~$410 of
+$440 over 14 days), and from 2026-09-28 every run hit Claude Code's 600 s
+background-task ceiling in -p mode and wrote nothing. A synchronous call
+has no background tasks to kill. `.claude/workflows/daily-diagnosis.js`
+stays for on-demand deep runs only.
 
-It is READ-ONLY by design: it diagnoses, it never fixes. Six agents check a FIXED
-list of known failure modes and report only what CHANGED — "nothing new" is a
-complete answer and the most common correct one — because a daily job told to find
-improvements will find some every day, which is overfitting with extra steps. The
-seventh is the only open-ended one.
+06:30 because yesterday's numbers are settled by then (a mid-session
+reading once showed +$35.29 on a day that finished −$5.68), the 02:00
+backup and 02:10 research have finished, and it is three hours before the
+open. The 17:30 report is the evening counterpart.
+
+READ-ONLY by construction: its only tools are Read/Grep/Glob and
+`sqlite3 -readonly -safe`. `--setting-sources user --strict-mcp-config` keeps
+project allow rules and MCP connectors out, and an explicit `--disallowedTools`
+list (Edit/Write, `.env`, pipenv/python/launchctl/git/rm) wins over any allow
+rule a settings file gains later — verified 2026-10-06 with `git status`
+explicitly allowed and still denied. The script gathers launchd, processes, git, CI,
+the funnel and yesterday's report as context first. It diagnoses, it never
+fixes. Six angles check a FIXED list of known failure modes and report only
+what CHANGED — "nothing new" is a complete answer and the most common
+correct one — because a daily job told to find improvements will find some
+every day, which is overfitting with extra steps. An angle that ran no query
+reports "not checked", never "nothing new". The seventh angle is the only
+open-ended one.
 
 ## Scoring epochs
 
@@ -393,7 +449,10 @@ default; `lane_costs(all_time=True)` and `promotion.lifetime_verdict()` always s
 every trade ever taken. **No trade is ever deleted.** That split is the whole
 design: deleting them would repeat what `evidence_since` did, which erased burst's
 earned quarantine and cost another $1,077.52. A reset moves the starting line; it
-must never buy a failed strategy a second life.
+must never buy a failed strategy a second life on paper or live. In sim a failing
+strategy is fixed and retried (a new version restarts its evidence at n=0), but its
+lifetime record still counts every trade and still keeps it off paper and live.
+The owner's rule (2026-10-06): in sim, stopping altogether is never an option.
 
 The command STOPS the agents, resets, then restarts them, in that order, because
 a running agent holds its broker in memory and its shutdown path persists that
@@ -433,6 +492,11 @@ First epoch: 2026-09-19, closing -$4,086.24 over 450 trades.
   backtest still wants SIP, which means SIP has to be kept current. Sync stock
   history at least weekly.
 
+- **News grading never follows lane config.** `news_risk.GRADE_HOLD_MINUTES`
+  pins each lane's barrier-race horizon at its preregistered value; changing a
+  lane's `max_hold` once silently moved forex grading from 4 h to 24 h under a
+  preregistered evaluation whose fingerprint could not see it. news_catalyst
+  holds for the same horizon via `Strategy.max_hold_minutes`.
 - Bars are stamped at bar START (Alpaca, Yahoo, synthetic alike). The live
   loop only acts on bars whose end + grace has passed
   (`store.complete_bars_only`), and never twice on one bar (`Engine.last_acted`).
@@ -447,7 +511,15 @@ First epoch: 2026-09-19, closing -$4,086.24 over 450 trades.
 - `enabled` is permission to observe at the configured stage, not proof.
   Newly seeded rows are disabled until research is deliberately promoted.
   Broker-backed modes must also see `qualification='qualified'`; quarantine is
-  sticky until a new version or an explicit reset to unproven.
+  sticky until a new version or an explicit reset to unproven. In sim,
+  quarantine is a verdict, not a stop: the sim agent loads quarantined rows, a
+  qualification change is not a config change there (it does not block
+  entries), and `Strategy.retry_pending` marks them for the fix loop.
+- **`kind='auto_eod'` is only the end-of-day journal.** It is the agent's
+  "already journalled today" marker and the EOD journal's update_or_create key.
+  Auto-research rows are `kind='research'` (migration 0030). Sharing the kind
+  silently stopped every 24/7 lane's journal, and with it the qualification
+  refresh, from 09-15 to 10-06.
 - SQLite runs WAL + IMMEDIATE + 30 s timeout: web, agent and optimizer all
   write it. Don't add a fourth chatty writer.
 - Template comments: `{# #}` is single-line only; multi-line → `{% comment %}`

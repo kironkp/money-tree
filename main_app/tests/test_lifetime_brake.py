@@ -58,6 +58,10 @@ class AVersionBumpCannotEraseALosingRecord(TestCase):
         self.assertTrue(assessment['lifetime_halt'])
 
     def test_the_halt_is_persisted_and_disables_the_strategy(self):
+        # Where money is real. In sim the verdict stands but nothing stops
+        # (test_sim_never_stops).
+        self.account.mode = 'paper'
+        self.account.save(update_fields=['mode'])
         self._trades(160, -13)
         promotion.refresh_qualification(self.row, self.account)
         self.row.refresh_from_db()

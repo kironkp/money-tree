@@ -285,6 +285,14 @@
     }
   },
   "registered_at": "2026-09-24T22:44:23.343122+00:00",
+  "selection_use_log": [
+    {
+      "at": "2026-10-06",
+      "by": "manage.py fix_lane --market forex (sim-only fix of the losing forex strategies)",
+      "note": "This window was used for SELECTION on 2026-10-06. No later qualification or promotion claim may treat it as untouched; promotion to paper/live still needs fresh forward evidence under the existing gates.",
+      "window": "2026-09-08..2026-09-24"
+    }
+  ],
   "superseded": [
     {
       "candidates": [

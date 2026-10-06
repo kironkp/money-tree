@@ -31,6 +31,14 @@ log = logging.getLogger('moneytree.news_risk')
 STRATEGY_KEY = 'news_catalyst'
 HALT_KIND = 'news_halt'
 
+# The barrier race a verdict is graded on, and the hold news_catalyst's own
+# trades keep, per lane: the lane holds in force when the arm was registered.
+# Frozen here because the lane holds no longer stay put: forex moved to 1440 on
+# 2026-10-06, which silently changed the horizon a preregistered evaluation is
+# scored on. Deliberately NOT in the fingerprint: adding it would change the
+# hash and restart the evaluation at n=0 for a value that did not change.
+GRADE_HOLD_MINUTES = {'stocks': 240, 'crypto': 240, 'degen': 180, 'forex': 240}
+
 
 def _day_start(now) -> datetime:
     return datetime.combine(cal.session_date(now), time(), tzinfo=cal.ET)

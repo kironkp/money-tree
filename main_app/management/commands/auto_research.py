@@ -18,13 +18,29 @@ from django.utils import timezone
 
 from main_app.models import Account, AgentConfig, Experiment, JournalEntry, Strategy
 from main_app.services.backtest import load_frames, run_backtest, spec_from_models
+from main_app.services.fix_loop import install_if_better, retry_due
+from main_app.services.strategies.base import ENTRY_SESSIONS
 from main_app.services.metrics import objective_value
 from main_app.services.optimize import evaluate_fixed_params, grid_from_schema, run_experiment
-from main_app.services.promotion import (promote, research_evidence_passes,
+from main_app.services.promotion import (promote, refresh_qualification, research_evidence_passes,
                                          walk_forward_evidence_passes)
 
 MIN_OOS_PF = 1.1
 MIN_VALIDATION_TRADES = 10
+
+
+def research_grid(row: Strategy) -> dict:
+    """The walk-forward grid for one strategy row.
+
+    The entry window is searched only for a failing forex strategy's fix.
+    Otherwise it is pinned to the row's OWN value: a v2 trading london_ny must be
+    researched at london_ny, not at the schema default.
+    """
+    if row.market == 'forex' and row.retry_pending:
+        overrides = {'entry_session': list(ENTRY_SESSIONS)}
+    else:
+        overrides = {'entry_session': [(row.params or {}).get('entry_session', 'all')]}
+    return grid_from_schema(row.key, overrides)
 
 
 def evidence_passes(metrics: dict, min_trades: int = MIN_VALIDATION_TRADES,
@@ -98,6 +114,12 @@ class Command(BaseCommand):
         if o['market']:
             rows = rows.filter(market=o['market'])
         end = date.today()
+        if not o['dry_run']:
+            # Refresh sim verdicts here as well as at each lane's end-of-day
+            # journal: a journal can miss a night (restarts, a crash), and a sim
+            # strategy whose verdict turned failing has to reach the fix loop.
+            for row in rows.filter(enabled=True, stage='sprout'):
+                refresh_qualification(row, Account.for_mode('sim', row.market))
         for row in rows:
             # Forex history comes from Yahoo, which keeps 59 days of intraday bars.
             days = o['days'] or {'stocks': 240, 'crypto': 540, 'degen': 120, 'forex': 58}[row.market]
@@ -105,7 +127,8 @@ class Command(BaseCommand):
             start = end - timedelta(days=days)
             tf = cfg.timeframe_for(row.market)
             self.stdout.write(f'{row.key} ({row.market}) — walk-forward {start}→{end} on {tf}, train {train}d / test {test}d')
-            exp = Experiment.objects.create(strategy_key=row.key, method='walk_forward', param_grid=grid_from_schema(row.key),
+            exp = Experiment.objects.create(strategy_key=row.key, method='walk_forward',
+                                            param_grid=research_grid(row),
                                             symbols=row.symbols, timeframe=tf, start=start, end=end, objective='profit_factor',
                                             min_trades=10, windows={'train_days': train, 'test_days': test})
             try:
@@ -151,6 +174,16 @@ class Command(BaseCommand):
                                                     f'passed the gate and beat the champion')[:300]
                         row.save(update_fields=['enabled', 'stage', 'qualification_reason'])
                         verdict += ' — UN-PARKED back to Sprout'
+            elif row.retry_pending:
+                # In sim failing never means stopping: if no candidate passed the
+                # gate, the fix loop may still install one that beats the current
+                # version out of sample. Never a disable.
+                due, why = retry_due(row, Account.for_mode('sim', row.market))
+                if due:
+                    fix, _ = install_if_better(row, exp, cfg, dry_run=o['dry_run'])
+                    verdict += f' · retry ({why}): {fix}'
+                else:
+                    verdict += f' · retry pending — {why}'
             validation['champion'] = champion
             validation['verdict'] = verdict
             validation['final_candidate_qualified'] = evidence_passes(candidate)
@@ -166,7 +199,7 @@ class Command(BaseCommand):
             exp.save(update_fields=['summary'])
             account = Account.for_mode(cfg.mode, row.market)
             JournalEntry.objects.create(
-                date=end, kind='auto_eod', account=account, title=f'Auto-research {row.key} ({row.market}): {verdict}',
+                date=end, kind='research', account=account, title=f'Auto-research {row.key} ({row.market}): {verdict}',
                 body=f'Walk-forward #{exp.pk} over {start}→{end}: adaptive-policy diagnostic '
                      f'{adaptive_oos.get("trades", 0)} trades, net {adaptive_oos.get("net_pnl", 0):+,.2f}, '
                      f'PF {adaptive_oos.get("profit_factor", 0):.2f}, decay {summary.get("decay")}. '

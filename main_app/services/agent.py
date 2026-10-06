@@ -64,12 +64,14 @@ STAGE_FOR_MODE = {
 
 
 def eligible_strategy_rows(mode: str, market: str):
-    """Strategies this execution mode may load; broker modes require proof."""
+    """Strategies this execution mode may load; broker modes require proof.
+
+    Sim and replay load every enabled row, quarantined ones included: in sim a
+    failing verdict sends a strategy to the nightly fix loop, never off the desk.
+    """
     rows = Strategy.objects.filter(enabled=True, stage__in=STAGE_FOR_MODE[mode], market=market)
     if mode in (Mode.PAPER, Mode.LIVE):
         return rows.filter(qualification=Qualification.QUALIFIED)
-    if mode != Mode.REPLAY:
-        return rows.exclude(qualification=Qualification.QUARANTINED)
     return rows
 
 
@@ -140,6 +142,7 @@ class Agent:
         for row in rows:
             strat = make_strategy(row.key, row.params)
             strat.name = row.name
+            strat.market = self.market
             # Only a live loop may read the News Agent's verdicts. A backtest that
             # could see them would be reading answers written after the bar.
             strat.live = self.mode != Mode.REPLAY
@@ -172,6 +175,7 @@ class Agent:
             self.broker = SimBroker(float(self.account.cash), immediate_fills=(self.mode == Mode.SIM),
                                     slippage_bps=risk_cfg.slippage_bps, fee_bps=fee_bps,
                                     liquidity_cap_pct=float(self.cfg.liquidity_cap_pct),
+                                    min_fill_pct=risk_cfg.min_entry_size_pct,
                                     asset_classes=self.asset_classes, qty_increments=self.qty_increments,
                                     leverage=risk_cfg.leverage)
             if self.mode == Mode.SIM:
@@ -199,11 +203,9 @@ class Agent:
         # A restart between the close and midnight must not re-run end of day: that
         # would re-flatten, rewrite the journal and pay for a second coach review of a
         # day already closed. If today's journal exists, treat the day as done.
-        if self.mode != Mode.REPLAY:
-            from main_app.models import JournalEntry
-            if JournalEntry.objects.filter(account=self.account, kind='auto_eod', date=today).exists():
-                self.eod_done = today
-                self.journal_done = today
+        if self.mode != Mode.REPLAY and self._eod_already_written(today):
+            self.eod_done = today
+            self.journal_done = today
         n_cards = hydrate_cards(self.account, self.engine)
         if self.mode in (Mode.PAPER, Mode.LIVE):
             self.reconcile(timezone.now(), announce=True)
@@ -240,9 +242,24 @@ class Agent:
         self.narrator.flush()
 
     def _strategy_snapshot(self) -> dict:
+        # Qualification decides what a broker-backed lane may load, so a change
+        # there must block entries until a restart. In sim it decides nothing,
+        # and a verdict written at the EOD journal would otherwise stop the lane.
+        broker = self.mode in (Mode.PAPER, Mode.LIVE)
         rows = Strategy.objects.filter(market=self.market)
-        return {r.key: (r.version, r.enabled, r.stage, r.qualification,
+        return {r.key: (r.version, r.enabled, r.stage, r.qualification if broker else None,
                         tuple(sorted(r.symbols or [])), float(r.allocation_pct)) for r in rows}
+
+    def _eod_already_written(self, today: date) -> bool:
+        """Today's end-of-day journal exists, so a restart must not redo the day.
+
+        Only kind='auto_eod' counts. Auto-research wrote its rows under that kind
+        until 2026-10-06; every lane restarted after the 02:10 research run then
+        believed today's journal was done, and the 24/7 lanes stopped journalling
+        (and refreshing qualification) for three weeks.
+        """
+        from main_app.models import JournalEntry
+        return JournalEntry.objects.filter(account=self.account, kind='auto_eod', date=today).exists()
 
     def _acquire_lock(self) -> None:
         settings.RUN_DIR.mkdir(exist_ok=True)

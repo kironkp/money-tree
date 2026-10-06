@@ -10,8 +10,19 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
+
+ET = ZoneInfo('America/New_York')
+# Coarse entry windows, by the ET hour of the bar that raises the entry. Three
+# presets and no free per-hour list on purpose: a 24-hour subset searched on a
+# few hundred trades fits the noise. Exits are never filtered.
+ENTRY_SESSIONS = {
+    'all': None,
+    'skip_asia': lambda h: not (h >= 19 or h < 3),   # no entries 19:00–02:59 ET
+    'london_ny': lambda h: 3 <= h < 12,             # entries 03:00–11:59 ET only
+}
 
 
 @dataclass(frozen=True)
@@ -24,6 +35,9 @@ class Param:
     step: Any = None
     choices: tuple = ()
     help: str = ''
+    # False keeps the optimizer at the default unless an experiment asks for the
+    # values explicitly, so a new filter does not multiply every nightly grid.
+    search: bool = True
 
     def coerce(self, value):
         if self.type == 'int':
@@ -140,6 +154,11 @@ def volume_rule(ctx: Context, relvol, threshold: float) -> Rule:
     return Rule('volume', ok, text, value=value, threshold=float(threshold))
 
 
+def entry_session_param() -> Param:
+    return Param('entry_session', 'choice', 'all', choices=tuple(ENTRY_SESSIONS), search=False,
+                 help='Entry window in ET: all, skip_asia (none 19:00–02:59), london_ny (03:00–11:59 only)')
+
+
 class Strategy:
     key = 'base'
     name = 'Base'
@@ -149,6 +168,10 @@ class Strategy:
     params: tuple[Param, ...] = ()
     warmup_bars = 30           # bars needed before on_bar may emit
     intraday = True            # engine flattens at the close
+    # Minutes a position from this strategy may be held before a time exit, or
+    # None for the lane's max_hold. Crypto and forex only (stocks close daily).
+    max_hold_minutes: int | None = None
+    market: str = ''           # the lane, when the agent knows it
 
     def __init__(self, params: dict | None = None):
         self.p = self.defaults()
@@ -173,6 +196,11 @@ class Strategy:
     @classmethod
     def supports(cls, asset_class: str) -> bool:
         return asset_class in cls.asset_classes
+
+    def entry_allowed(self, ts: datetime) -> bool:
+        """Whether `entry_session` (if this strategy has one) admits an entry at ts."""
+        test = ENTRY_SESSIONS.get(self.p.get('entry_session', 'all'))
+        return test is None or test(ts.astimezone(ET).hour)
 
     def symbol_state(self, symbol: str) -> dict:
         return self.state.setdefault(symbol, {})

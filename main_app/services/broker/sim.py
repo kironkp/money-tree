@@ -7,7 +7,9 @@ Fill model
 - Targets: limit orders — fill at the level, no slippage.
 - Fees: `fee_bps` of notional per fill, per asset class.
 - Liquidity: a fill may not exceed `liquidity_cap_pct` of the bar's volume;
-  the remainder is canceled ('liquidity').
+  the remainder is canceled ('liquidity'). The cap is per asset class and off
+  for crypto (see `LIQUIDITY_CAP_BY_CLASS`). An entry the cap would cut below
+  `min_fill_pct` of its size is canceled whole rather than filled as dust.
 - Whole shares for stocks; crypto rounds down to the asset's increment;
   forex trades whole units of the base currency.
 - Buying power = equity × leverage − open exposure − pending entries. Leverage
@@ -34,6 +36,13 @@ def round_qty(qty: float, increment: float) -> float:
 SELL_REGULATORY_BPS = 0.3
 # Annualised borrow for an easy-to-borrow large cap, in bps of notional.
 DEFAULT_BORROW_BPS = 40.0
+# Per-asset-class override of `liquidity_cap_pct`; 0 disables the cap. Alpaca's
+# crypto venue prints a sliver of the market's trades (pulse quotes the mid for
+# the same reason), so 1% of its bar volume turned $2,000 degen entries into
+# $0.17 ones and every degen P&L rounded to $0.00. Spot FX has no centralized
+# volume at all (Yahoo reports 0). Size is already bounded by the risk
+# manager's max_position_pct.
+LIQUIDITY_CAP_BY_CLASS = {'crypto': 0.0, 'forex': 0.0}
 
 
 class SimBroker(Broker):
@@ -41,6 +50,7 @@ class SimBroker(Broker):
 
     def __init__(self, cash: float, *, immediate_fills: bool = False, slippage_bps: float = 3.0,
                  fee_bps: dict | None = None, liquidity_cap_pct: float = 1.0,
+                 liquidity_cap_by_class: dict | None = None, min_fill_pct: float = 10.0,
                  asset_classes: dict | None = None, qty_increments: dict | None = None, leverage: float = 1.0,
                  borrow_bps_per_year: dict | None = None):
         self._cash = float(cash)
@@ -54,6 +64,9 @@ class SimBroker(Broker):
         # anything harder, so this table never has to model a special.
         self.borrow_bps_per_year = {'*': DEFAULT_BORROW_BPS, **(borrow_bps_per_year or {})}
         self.liquidity_cap_pct = float(liquidity_cap_pct)
+        self.liquidity_cap_by_class = {**LIQUIDITY_CAP_BY_CLASS, **(liquidity_cap_by_class or {})}
+        # Same floor as RiskConfig.min_entry_size_pct (v1.32): no dust entries.
+        self.min_fill_pct = float(min_fill_pct)
         self.asset_classes = asset_classes or {}
         self.qty_increments = qty_increments or {}
         self._positions: dict[str, Position] = {}
@@ -102,6 +115,10 @@ class SimBroker(Broker):
 
     def asset_class(self, symbol: str) -> str:
         return self.asset_classes.get(symbol, 'stock')
+
+    def liquidity_cap(self, symbol: str) -> float:
+        """The share of bar volume one fill may take, in percent; 0 = no cap."""
+        return float(self.liquidity_cap_by_class.get(self.asset_class(symbol), self.liquidity_cap_pct))
 
     def _increment(self, symbol: str) -> float:
         return float(self.qty_increments.get(symbol, 0.0001 if self.asset_class(symbol) == 'crypto' else 1.0))
@@ -198,11 +215,17 @@ class SimBroker(Broker):
                 return
             order.qty = min(order.qty, abs(pos.qty))
         qty = order.qty - order.filled_qty
-        if bar_volume is not None and bar_volume > 0 and self.liquidity_cap_pct > 0:
-            cap = round_qty(bar_volume * self.liquidity_cap_pct / 100.0, self._increment(order.symbol))
+        cap_pct = self.liquidity_cap(order.symbol)
+        if bar_volume is not None and bar_volume > 0 and cap_pct > 0:
+            cap = round_qty(bar_volume * cap_pct / 100.0, self._increment(order.symbol))
             if cap <= 0:
                 order.status = 'canceled'
                 order.error = 'liquidity: bar volume too small'
+                self.open_orders.pop(order.id, None)
+                return
+            if order.leg == 'entry' and cap < order.qty * self.min_fill_pct / 100.0:
+                order.status = 'canceled'
+                order.error = 'liquidity: would be dust'
                 self.open_orders.pop(order.id, None)
                 return
             if qty > cap:

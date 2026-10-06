@@ -16,7 +16,9 @@ from main_app.tests.helpers import enable_strategy, seed_db
 class JournalSummarisesTheDayAndCatchesDrift(TestCase):
     def setUp(self):
         self.cfg, self.instruments = seed_db(('QQQ',), with_bars=False)
-        self.account = Account.for_mode('sim')
+        # Paper: the account where failing still stops a strategy. In sim it never
+        # does — see test_sim_never_stops.
+        self.account = Account.for_mode('paper')
         self.row = enable_strategy('orb', symbols=['QQQ'])
         promote(self.row, self.row.params, 'backtest #1', metrics={'expectancy': 5.0, 'trades': 40, 'profit_factor': 1.5})
         # Promoted a month ago, traded since: forward evidence has to post-date the
@@ -329,3 +331,52 @@ class SlippageIsACostAndIsReportedAsOne(TestCase):
         c = lane_costs(self.account)
         self.assertEqual(c['fee_share'], 0.0)                           # up, so the old number is silent
         self.assertAlmostEqual(c['cost_share'], 3.0 / 21.0 * 100, places=4)
+
+
+class TheReportWindowEndsAtTheNewYorkClose(TestCase):
+    """The 17:30 PT report used the ET calendar day, so a forex trade closing at
+    21:00 ET was after that evening's report and before the next day's window:
+    it was in no report at all. The window is now (d−1 17:00 ET, d 17:00 ET]."""
+
+    D = date(2026, 10, 5)
+
+    def setUp(self):
+        from main_app.models import Instrument
+        self.inst = Instrument.objects.create(symbol='EUR/USD', asset_class='forex', market='forex')
+        self.account = Account.objects.create(mode='sim', market='forex', starting_cash=10000, cash=10000)
+
+    def _trade_at(self, d, hh, mm):
+        ts = datetime.combine(d, datetime.min.time().replace(hour=hh, minute=mm), tzinfo=cal.ET)
+        Trade.objects.create(account=self.account, instrument=self.inst, strategy_key='ema_momentum', side='long',
+                             qty=1000, entry_ts=ts - timedelta(hours=1), exit_ts=ts,
+                             entry_price=Decimal('1.05'), exit_price=Decimal('1.06'), pnl=Decimal('-10'),
+                             pnl_pct=Decimal('-0.1'), fees=Decimal('1'), bars_held=4, exit_reason='stop')
+
+    def _n(self, d):
+        from main_app.services.report import lane_pnl
+        return lane_pnl(self.account, d)['trades']
+
+    def test_an_evening_trade_lands_in_the_next_report(self):
+        self._trade_at(self.D - timedelta(days=1), 21, 0)
+        self.assertEqual(self._n(self.D), 1)
+        self.assertEqual(self._n(self.D - timedelta(days=1)), 0)
+
+    def test_a_trade_after_the_close_belongs_to_tomorrows_report(self):
+        self._trade_at(self.D, 17, 30)
+        self.assertEqual(self._n(self.D), 0)
+        self.assertEqual(self._n(self.D + timedelta(days=1)), 1)
+
+    def test_a_trade_at_exactly_the_close_is_counted_once(self):
+        self._trade_at(self.D, 17, 0)
+        self.assertEqual(self._n(self.D) + self._n(self.D + timedelta(days=1)), 1)
+        self.assertEqual(self._n(self.D), 1)
+
+    def test_consecutive_windows_have_no_gap_and_no_overlap_across_dst(self):
+        from main_app.services.report import _bounds
+        d = date(2026, 10, 28)  # spans the 2026-11-01 DST change
+        for _ in range(10):
+            a, b = _bounds(d)
+            self.assertEqual(b, _bounds(d + timedelta(days=1))[0])
+            self.assertEqual(b.astimezone(cal.ET).hour, 17)
+            self.assertEqual(a.astimezone(cal.ET).hour, 17)
+            d += timedelta(days=1)

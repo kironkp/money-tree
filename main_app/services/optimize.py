@@ -43,7 +43,7 @@ def grid_from_schema(strategy_key: str, overrides: dict | None = None, max_point
         if p.name in overrides and overrides[p.name] not in (None, '', []):
             vals = overrides[p.name]
             grid[p.name] = [p.coerce(v) for v in (vals if isinstance(vals, (list, tuple)) else [vals])]
-        elif p.type == 'bool':
+        elif p.type == 'bool' or not p.search:
             grid[p.name] = [p.default]
         else:
             grid[p.name] = p.grid(max_points)
@@ -243,6 +243,16 @@ def evaluate_fixed_params(spec: BacktestSpec, frames: dict, windows: list[dict],
             'equity': downsample_equity(equity, 400)}
 
 
+def with_risk_overrides(spec: BacktestSpec, overrides: dict | None) -> BacktestSpec:
+    """The same spec under different RiskConfig values (a lane 'regime')."""
+    if not overrides:
+        return spec
+    unknown = set(overrides) - set(spec.risk.__dict__)
+    if unknown:
+        raise ValueError(f'unknown risk overrides: {sorted(unknown)}')
+    return replace(spec, risk=replace(spec.risk, **overrides))
+
+
 # --- Django side ---------------------------------------------------------
 
 def run_experiment(exp) -> None:
@@ -265,7 +275,8 @@ def run_experiment(exp) -> None:
             last_progress[0] = time.time()
 
     try:
-        spec = spec_from_models(exp.strategy_key, {}, exp.symbols, exp.timeframe, cfg)
+        spec = with_risk_overrides(spec_from_models(exp.strategy_key, {}, exp.symbols, exp.timeframe, cfg),
+                                   exp.risk_overrides)
         frames = load_frames(exp.symbols, exp.timeframe, exp.start, exp.end)
         bench = None
         if spec.benchmark_symbol not in frames:
@@ -273,7 +284,11 @@ def run_experiment(exp) -> None:
             if bench is not None and len(bench) == 0:
                 bench = None
         grid = exp.param_grid or grid_from_schema(exp.strategy_key)
-        combos = enumerate_combos(grid, 'random' if exp.method == 'random' else 'grid')
+        # A walk-forward may ask for a random sample instead of the spread grid
+        # ({'search': 'random', 'max_combos': 40} in windows) when it must run fast.
+        search = (exp.windows or {}).get('search')
+        combos = enumerate_combos(grid, 'random' if exp.method == 'random' or search == 'random' else 'grid',
+                                  max_combos=(exp.windows or {}).get('max_combos'))
         summary = {'objective': exp.objective, 'min_trades': exp.min_trades, 'grid': grid, 'combos': len(combos)}
         if exp.method in ('grid', 'random'):
             exp.total_runs = len(combos)

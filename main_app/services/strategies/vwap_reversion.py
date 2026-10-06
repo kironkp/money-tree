@@ -10,7 +10,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import indicators as ind
-from .base import Context, Param, Rule, Signal, Strategy
+from .base import Context, Param, Rule, Signal, Strategy, entry_session_param
 
 
 class VwapReversion(Strategy):
@@ -24,6 +24,7 @@ class VwapReversion(Strategy):
         Param('stop_atr_mult', 'float', 1.5, 0.5, 2.5, 0.5, help='Stop distance in ATRs'),
         Param('min_bar_pos', 'int', 6, 3, 12, 3, help='Bars into the session before trading'),
         Param('max_bars_held', 'int', 24, 6, 48, 6, help='Give up after this many bars'),
+        entry_session_param(),
     )
     warmup_bars = 40
 

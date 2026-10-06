@@ -240,8 +240,17 @@ def qualification_assessment(row: Strategy, account: Account | None) -> dict:
 
 
 def refresh_qualification(row: Strategy, account: Account | None) -> tuple[dict, bool]:
-    """Persist evidence state; quarantine disables entries until a new version."""
+    """Persist evidence state.
+
+    Broker-backed accounts (paper, live): quarantine disables entries until a new
+    version, and a failing lifetime record is persisted as a halt only an operator
+    can lift. Sim and replay: failing never means stopping (owner's policy,
+    2026-10-06). The verdict is still stored, so it still blocks graduation, but
+    the strategy stays enabled and is flagged for the nightly fix loop instead.
+    """
+    from main_app.models import Mode, RiskEvent
     assessment = qualification_assessment(row, account)
+    broker = account is not None and account.mode in (Mode.PAPER, Mode.LIVE)
     state_changed = row.qualification != assessment['state']
     needs_save = state_changed or row.qualification_reason != assessment['reason']
     if needs_save:
@@ -249,17 +258,25 @@ def refresh_qualification(row: Strategy, account: Account | None) -> tuple[dict,
         row.qualification_reason = assessment['reason'][:300]
         row.qualification_updated_at = timezone.now()
         fields = ['qualification', 'qualification_reason', 'qualification_updated_at']
-        if assessment['state'] == Qualification.QUARANTINED and row.enabled:
+        if broker and assessment['state'] == Qualification.QUARANTINED and row.enabled:
             row.enabled = False
             fields.append('enabled')
         # Persist the lifetime halt so it survives the next promotion. Without
         # this the brake would be recomputed from an evidence window that a
         # version bump has already reset, which is the hole it exists to close.
-        if assessment['lifetime_halt'] and not row.lifetime_halt:
+        # Sim recomputes it from every trade instead, so a fixed version can
+        # earn its way out while the record keeps it off paper and live.
+        if broker and assessment['lifetime_halt'] and not row.lifetime_halt:
             row.lifetime_halt = True
             row.lifetime_halt_reason = assessment['reason'][:300]
             fields += ['lifetime_halt', 'lifetime_halt_reason']
         row.save(update_fields=fields)
+    if state_changed and not broker and account is not None and assessment['state'] == Qualification.QUARANTINED:
+        RiskEvent.objects.create(
+            account=account, kind='retry',
+            message=f'{row.key}: failing — retry pending. {assessment["reason"]}'[:300],
+            data={'strategy': row.key, 'version': row.version, 'lifetime': assessment['lifetime_halt']},
+        )
     return assessment, state_changed
 
 

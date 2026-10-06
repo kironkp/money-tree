@@ -12,7 +12,7 @@ the lane traded. A lane that did nothing still has to say why.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date, datetime, time as dtime, timedelta
+from datetime import date, datetime, timedelta
 from statistics import median
 
 from django.utils import timezone
@@ -34,10 +34,21 @@ LANES = (Market.FOREX, Market.DEGEN, Market.CRYPTO, Market.STOCKS)
 LANE_TITLE = {Market.STOCKS: 'Stocks', Market.CRYPTO: 'Crypto', Market.DEGEN: 'Degen', Market.FOREX: 'Forex'}
 
 
+WINDOW_LABEL = '24 h to 5 pm ET'
+
+
 def _bounds(d: date) -> tuple[datetime, datetime]:
-    """The report day in Eastern time, which is how the app stamps everything."""
-    start = datetime.combine(d, dtime(0, 0), tzinfo=cal.ET)
-    return start, start + timedelta(days=1)
+    """The report's window, (d−1 17:00 ET, d 17:00 ET]. Filter as `__gt=a, __lte=b`.
+
+    It used to be the ET calendar day. The report runs at 17:30 PT (20:30 ET),
+    so a forex/crypto/degen trade closing between 20:30 and midnight ET fell into
+    no report at all: Oct 4's forex closed 5 trades for −$230.18 and the report
+    said "+0.00 on 0 trades". Ending at the New York close leaves no gap and no
+    overlap between consecutive reports. It is also forex's own day roll, and
+    stocks close at 16:00, inside it.
+    """
+    return (datetime.combine(d - timedelta(days=1), cal.FOREX_ROLL, tzinfo=cal.ET),
+            datetime.combine(d, cal.FOREX_ROLL, tzinfo=cal.ET))
 
 
 def _pct(n, d):
@@ -163,7 +174,7 @@ def _slippage_cost(account: Account, trade_qs, moved: float) -> tuple[float, boo
 
 def lane_pnl(account: Account, d: date) -> dict:
     a, b = _bounds(d)
-    trades = list(Trade.objects.filter(account=account, exit_ts__gte=a, exit_ts__lt=b).select_related('instrument'))
+    trades = list(Trade.objects.filter(account=account, exit_ts__gt=a, exit_ts__lte=b).select_related('instrument'))
     pnls = [float(t.pnl) for t in trades]
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p <= 0]
@@ -213,7 +224,7 @@ def lane_learned(account: Account, d: date, cfg: AgentConfig) -> list[dict]:
     enabled = [r for r in rows if r.enabled]
 
     # 1. Research: what last night's walk-forward actually concluded.
-    for entry in JournalEntry.objects.filter(kind='auto_eod', created_at__gte=a - timedelta(days=1),
+    for entry in JournalEntry.objects.filter(kind='research', created_at__gte=a - timedelta(days=1),
                                              account=account).order_by('-created_at')[:6]:
         if entry.title.startswith('Auto-research'):
             out.append({'source': 'research', 'text': entry.title.replace('Auto-research ', ''),
@@ -255,7 +266,7 @@ def lane_learned(account: Account, d: date, cfg: AgentConfig) -> list[dict]:
                                   if p['fees'] > abs(p['net'] + p['fees']) * 0.5 else ''})
 
     # 3. Gates: what stopped trades that wanted to happen.
-    sigs = Signal.objects.filter(account=account, ts__gte=a, ts__lt=b)
+    sigs = Signal.objects.filter(account=account, ts__gt=a, ts__lte=b)
     total, acted = sigs.count(), sigs.filter(acted=True).count()
     blocked = Counter(s.split(' (')[0] for s in
                       sigs.filter(acted=False).exclude(blocked_reason='').values_list('blocked_reason', flat=True))
@@ -325,7 +336,7 @@ def lane_learned(account: Account, d: date, cfg: AgentConfig) -> list[dict]:
     run = AgentRun.objects.filter(account=account).order_by('-started_at').first()
     if run is None or run.status != 'running':
         out.append({'source': 'ops', 'text': 'no agent process was running for this lane', 'detail': ''})
-    for e in RiskEvent.objects.filter(account=account, ts__gte=a, ts__lt=b).exclude(kind='qualification')[:5]:
+    for e in RiskEvent.objects.filter(account=account, ts__gt=a, ts__lte=b).exclude(kind='qualification')[:5]:
         out.append({'source': 'ops', 'text': f'{e.kind}: {e.message[:160]}', 'detail': ''})
     return out
 
@@ -496,7 +507,7 @@ def render_text(rep: dict) -> str:
     t = rep['total']
     L.append(f"MoneyTree — {rep['date']:%A %B %-d, %Y}")
     L.append('=' * 60)
-    L.append(f"Today across all four lanes: {t['net']:+,.2f} on {t['trades']} trades")
+    L.append(f"{WINDOW_LABEL} across all four lanes: {t['net']:+,.2f} on {t['trades']} trades")
     L.append(f"Equity {t['equity']:,.2f} of {t['starting_cash']:,.2f} seeded "
               f"({t['total_pnl']:+,.2f} {rep.get('since', 'lifetime')})")
     L.append('')
@@ -511,13 +522,13 @@ def render_text(rep: dict) -> str:
     for lane in rep['lanes']:
         p = lane['pnl']
         L.append(f"── {lane['title'].upper()} " + '─' * (56 - len(lane['title'])))
-        L.append(f"P&L today {p['net']:+,.2f} on {p['trades']} trades"
+        L.append(f"P&L {WINDOW_LABEL} {p['net']:+,.2f} on {p['trades']} trades"
                  + (f" ({p['win_rate']:.0f}% won, fees {p['fees']:,.2f}, expectancy {p['expectancy']:+.2f}/trade)"
                     if p['trades'] else '')
                  + f" · equity {p['equity']:,.2f} ({p['total_pnl']:+,.2f} "
                  + f"{rep.get('since', 'lifetime')})")
         if p['trades']:
-            L.append(f"  Cost of running it today: moved {p['moved']:,.0f}, paid {p['fees']:,.2f} "
+            L.append(f"  Cost of running it, {WINDOW_LABEL}: moved {p['moved']:,.0f}, paid {p['fees']:,.2f} "
                      f"({p['fee_bps']:.1f} bps) — {p['net_before_fees']:+,.2f} before fees")
         lc = p['lifetime']
         if lc['trades']:
@@ -589,7 +600,7 @@ def render_html(rep: dict) -> str:
          f'style="max-width:640px;margin:0 auto">',
          '<tr><td>',
          f'<div style="font-size:19px;font-weight:700">🌳 MoneyTree</div>',
-         f'<div style="color:{DIM};font-size:13px;margin-top:2px">{rep["date"]:%A %B %-d, %Y}</div>',
+         f'<div style="color:{DIM};font-size:13px;margin-top:2px">{rep["date"]:%A %B %-d, %Y} · {WINDOW_LABEL}</div>',
          f'<div style="margin:14px 0 4px;font-size:28px;font-weight:700;color:{tone(t["net"])};'
          f'font-variant-numeric:tabular-nums">{t["net"]:+,.2f}</div>',
          f'<div style="color:{DIM};font-size:12px">across all four lanes on {t["trades"]} trade'

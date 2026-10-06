@@ -344,6 +344,22 @@ def _check_missed_quarantine(ctx: Ctx, rec) -> None:
         if a.get('state') != 'quarantine' or row.qualification == 'quarantine':
             continue
         stats = a.get('stats') or {}
+        if ctx.account.mode in ('sim', 'replay'):
+            # In sim failing never means stopping: the verdict sends the strategy
+            # to the nightly fix loop and it keeps trading meanwhile. Worth a
+            # warning until the verdict is stored; never a critical every 15 min.
+            rec.record('missed_quarantine', ReviewFinding.WARN,
+                       f'{ctx.account.market}/{row.key} is failing — retry pending',
+                       f'{a.get("reason", "")} In sim the strategy keeps trading; the nightly '
+                       f'auto-research run stores the verdict and looks for a better version.',
+                       account=ctx.account,
+                       evidence={'strategy': row.key, 'stored': row.qualification,
+                                 'assessed': a.get('state'), 'enabled': row.enabled,
+                                 'reason': a.get('reason', ''),
+                                 'stats': {k: stats.get(k) for k in
+                                           ('trades', 'profit_factor', 'expectancy', 'net_pnl')}},
+                       fp_parts=('missed_quarantine', ctx.account.pk, row.key))
+            continue
         rec.record('missed_quarantine',
                    ReviewFinding.CRITICAL if row.enabled else ReviewFinding.WARN,
                    f'{ctx.account.market}/{row.key} is marked {row.qualification} but assesses as quarantine',

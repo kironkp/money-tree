@@ -428,6 +428,28 @@ Started from "all lanes show $0". Detail in `docs/LOGBOOK.md`.
   timeframe is a per-strategy candidate in the fix loop; the lane regime is only
   `min_reward_to_cost` × `max_hold`.
 
+## v1.74 — Degen on slow bars
+
+- Degen's 50 bps round trip beats every intraday setup. On slow bars it does not:
+  ema_momentum @4Hour, hold 1 d was ≈ break-even after taker costs over 2 years
+  (95 OOS trades, gross +543, net +3.46). On the five windows both versions could
+  host it beat the 15Min ema on net AND PF (−79.55 PF 0.94 over 59 trades vs
+  −3,359.99 PF 0.32 over 281), so **degen ema v2 runs at 4Hour with its own
+  1440-min hold**; burst keeps the lane's 180.
+- `Strategy.max_hold_minutes` is a per-row override (None = the lane's);
+  news_catalyst's graded horizon still wins over it. The agent snapshot must
+  include it so a change raises `config_changed`.
+- ema's "two bars into the session" gate applies only below 1Day — on daily bars
+  every bar is its own session, so it could never enter. ema @1Day looked good over
+  14 windows (+274 PF 1.71) but lost the like-for-like test on its only overlap
+  (PF 0.18 vs 0.28 on 11 trades vs 212): fewer trades is not a better strategy.
+- Maker entries (Alpaca crypto 15/25 bps) would lift the 4Hour result to ~+10–14
+  bps a trade on an optimistic bar-level fill model; the ~1.5-day build is
+  deferred (estimate in LOGBOOK).
+- Release discipline: the full suite runs after the LAST edit and before the tag.
+  v1.73's tag points at a commit with two erroring provenance tests that v1.74
+  fixed.
+
 ## Daily diagnosis (06:30)
 
 `deploy/daily-diagnosis.sh` + `com.kiron.moneytree.diagnosis.plist`: ONE

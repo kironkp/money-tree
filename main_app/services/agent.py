@@ -255,7 +255,8 @@ class Agent:
         broker = self.mode in (Mode.PAPER, Mode.LIVE)
         rows = Strategy.objects.filter(market=self.market)
         return {r.key: (r.version, r.enabled, r.stage, r.qualification if broker else None,
-                        tuple(sorted(r.symbols or [])), float(r.allocation_pct), (r.timeframe or '').strip())
+                        tuple(sorted(r.symbols or [])), float(r.allocation_pct), (r.timeframe or '').strip(),
+                        r.max_hold_minutes)
                 for r in rows}
 
     def _eod_already_written(self, today: date) -> bool:

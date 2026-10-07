@@ -297,3 +297,20 @@ class AStrategyMayHoldLongerThanItsLane(SimpleTestCase):
         lane = time_exits(None)
         self.assertTrue(lane and max(lane) <= 195, 'the fixture must hit the lane hold or this proves nothing')
         self.assertTrue(all(m >= 1440 for m in time_exits(1440)))
+
+
+class ChangingAHoldOnARunningLaneNeedsARestart(TestCase):
+    """The strategy is loaded once with its own hold; poll_controls raises
+    config_changed whenever this snapshot differs from the one taken at startup."""
+
+    def test_max_hold_is_part_of_the_strategy_snapshot(self):
+        from main_app.models import Mode, Strategy
+        from main_app.services.agent import Agent
+        row = Strategy.objects.create(key='ema_momentum', name='e', market='degen', enabled=True, stage='sprout')
+        for mode in (Mode.SIM, Mode.PAPER):
+            agent = Agent.__new__(Agent)
+            agent.market, agent.mode = 'degen', mode
+            before = agent._strategy_snapshot()
+            row.max_hold_minutes = 1440 if row.max_hold_minutes is None else None
+            row.save(update_fields=['max_hold_minutes'])
+            self.assertNotEqual(agent._strategy_snapshot(), before, mode)

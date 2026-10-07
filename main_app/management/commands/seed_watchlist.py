@@ -61,7 +61,7 @@ class Command(BaseCommand):
         for cls in all_strategies():
             for market in wanted.get(cls.key, [Market.STOCKS]):
                 row, created = Strategy.objects.get_or_create(key=cls.key, market=market, defaults={
-                    'name': cls.name, 'params': cls.defaults(), 'timeframe': cfg.timeframe_for(market),
+                    'name': cls.name, 'params': cls.defaults(), 'timeframe': '',   # '' follows the lane
                     'symbols': by_market[market], 'notes': cls.description,
                     'enabled': False, 'stage': 'seed',
                 })

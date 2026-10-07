@@ -5,6 +5,51 @@ records the observed problem, its cause, what changed, how it was verified,
 and what remains unproven. A green test suite means the software behaves as
 specified; it does **not** mean a trading strategy is profitable.
 
+## Release 1.73 (2026-10-06) — A strategy's own timeframe inside a lane
+
+Status: built, reviewed, and applied to forex ema_momentum (v3 @1Hour). Unproven.
+
+### Why
+
+Item 7 found that forex ema works only on 1Hour bars and vwap only on 15Min,
+but a lane ran one timeframe. As one lane-wide setting the two scored −$144
+combined; each on its own timeframe scored about +$560.
+
+### What changed
+
+- `data/resample.py`: base bars are resampled causally into a whole-multiple
+  timeframe. Intraday buckets are clock-aligned in UTC; a day is the lane's
+  session (00:00 UTC crypto, 17:00 ET forex). A coarse bar exists only once the
+  base bar closing it is complete, and a missing closing bar emits it one bar
+  late, never early. Missing volume stays missing.
+- The engine keeps one feed per lane. Each strategy runs on its own timeframe
+  (`Strategy.timeframe`; '' follows the lane's base, migration 0033). Its rules,
+  signals and symbol state update only when its own bar completes. Fills, stops,
+  targets and time exits run on every base bar. `max_bars_held` counts the
+  strategy's own bars, and `last_acted` is keyed on its own bar. Backtest,
+  replay and live share one path (`Engine.prepare_symbol`), so research and live
+  cannot drift.
+- A finer or non-multiple timeframe falls back to the base with a `timeframe`
+  alert. A stocks lane refuses anything above 1Hour, because UTC buckets would
+  straddle the session.
+- The fix loop and `fix_lane` treat timeframe as a per-strategy candidate. The
+  lane regime is now `min_reward_to_cost` × `max_hold`. Nightly research, the
+  strategy page's backtest, and the h10 baselines all run a strategy on the
+  lane's base bars at its own timeframe.
+
+### Evidence
+
+- Parity on real forex bars (ema v2 params, 07-15..10-05): native Yahoo 1Hour
+  vs 1Hour resampled from 15Min gave the same 41 entries, net +$128.76 vs
+  +$141.03. The difference is exits being checked on the finer bars.
+- Forex ema under the current regime (15Min base, mrc 2, hold 1440): the
+  selection procedure at 1Hour scored +$326.06 (PF 1.86, 23 trades) against the
+  current v2 at 15Min, −$247.98 (PF 0.84, 68 trades), on the same 5 traded
+  windows. Installed as v3 @1Hour. It is a small sample. The gate did not pass
+  (the final window's PF was 1.81 against 0.63, but the gate needs more trades).
+  This was an operator-approved one-off install that bypassed the churn guard,
+  because v2 had been installed the same day. The guard counts from v3.
+
 ## Release 1.72 (2026-10-06) — Fix the losers, reset their numbers, keep them trading
 
 Status: forex applied; degen measured, no fix found. Nothing is qualified by

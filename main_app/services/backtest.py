@@ -31,6 +31,9 @@ class BacktestSpec:
     qty_increments: dict = field(default_factory=dict)
     benchmark_symbol: str = 'SPY'
     act_from: object = None  # warm-up cutoff (datetime) — bars before it feed indicators only
+    # The strategy's own timeframe when coarser than `timeframe` (the lane's base):
+    # its bars are resampled causally from the base bars, exactly as live does it.
+    strategy_timeframe: str = ''
 
 
 @dataclass
@@ -55,12 +58,14 @@ def run_backtest(spec: BacktestSpec, frames: dict[str, pd.DataFrame],
         strategies = []
         for item in spec.params.get('strategies', []):
             st = make_strategy(item['key'], item.get('params'))
+            st.timeframe = item.get('timeframe', '') or ''
             strategies.append(st)
             allocations[st.key] = float(item.get('allocation_pct', 100))
             if item.get('symbols'):
                 strategy_symbols[st.key] = set(item['symbols'])
     else:
         strategies = [make_strategy(spec.strategy_key, spec.params)]
+        strategies[0].timeframe = spec.strategy_timeframe or ''
     frames = {s: df for s, df in frames.items()
               if len(df) and any(st.supports(spec.asset_classes.get(s, 'stock')) for st in strategies)}
     broker = SimBroker(spec.starting_cash, immediate_fills=False, slippage_bps=spec.risk.slippage_bps,
@@ -109,7 +114,7 @@ def date_bounds(start: date, end: date) -> tuple[datetime, datetime]:
 # --- Django side ---------------------------------------------------------
 
 def spec_from_models(strategy_key: str, params: dict, symbols: list, timeframe: str, cfg,
-                     starting_cash=None) -> BacktestSpec:
+                     starting_cash=None, strategy_timeframe: str = '') -> BacktestSpec:
     from main_app.models import Instrument, market_for_symbols
     instruments = {i.symbol: i for i in Instrument.objects.filter(symbol__in=symbols)}
     # The lane's own limits and cost model (leverage and spread for forex, the
@@ -123,6 +128,7 @@ def spec_from_models(strategy_key: str, params: dict, symbols: list, timeframe: 
         liquidity_cap_pct=float(cfg.liquidity_cap_pct),
         asset_classes={s: instruments[s].asset_class for s in symbols if s in instruments},
         qty_increments={s: float(instruments[s].qty_increment) for s in symbols if s in instruments},
+        strategy_timeframe=strategy_timeframe or '',
     )
 
 
@@ -148,7 +154,8 @@ def run_backtest_for_model(run) -> None:
     run.status = 'running'
     run.save(update_fields=['status'])
     try:
-        spec = spec_from_models(run.strategy_key, run.params, run.symbols, run.timeframe, cfg, run.starting_cash)
+        spec = spec_from_models(run.strategy_key, run.params, run.symbols, run.timeframe, cfg, run.starting_cash,
+                                strategy_timeframe=run.strategy_timeframe)
         frames = load_frames(run.symbols, run.timeframe, run.start, run.end)
         bench = None
         if spec.benchmark_symbol not in frames:
@@ -176,6 +183,7 @@ def persist_result(run, spec: BacktestSpec, result: BacktestResult, max_trades: 
     run.config_snapshot = {'risk': spec.risk.as_dict(), 'fee_bps': spec.fee_bps,
                            'liquidity_cap_pct': spec.liquidity_cap_pct,
                            'liquidity_cap_by_class': dict(LIQUIDITY_CAP_BY_CLASS),
+                           'strategy_timeframe': spec.strategy_timeframe,
                            'starting_cash': spec.starting_cash}
     run.status = 'done'
     run.duration_s = result.duration_s

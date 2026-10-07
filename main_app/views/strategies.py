@@ -12,6 +12,7 @@ from main_app.forms import strategy_param_form
 from main_app.models import (Account, AgentConfig, BacktestRun, Instrument, Qualification, Stage, Strategy,
                              market_for_symbols)
 from main_app.services.backtest import run_backtest_for_model
+from main_app.services.fix_loop import own_timeframe
 from main_app.services.promotion import (STAGE_ACCOUNT_MODE, STAGE_LABEL, STAGE_ORDER, graduation_checklist,
                                          live_stats, next_stage, previous_stage, qualification_assessment)
 from main_app.services.strategies import STRATEGIES, get_strategy_class
@@ -104,7 +105,9 @@ def strategy_detail(request, market, key):
             row.params = params
             row.symbols = [s for s in request.POST.getlist('symbols') if Instrument.objects.filter(symbol=s).exists()]
             row.allocation_pct = request.POST.get('allocation_pct') or row.allocation_pct
-            row.timeframe = cfg.timeframe_for(market)  # the market's timeframe is the only one that runs
+            # Strategy.timeframe is the strategy's own (v1.73): blank or the lane's base
+            # runs on the lane's bars, a whole multiple runs on bars resampled from them.
+            # An edit leaves it as it is.
             row.notes = request.POST.get('notes', row.notes)
             if changed:
                 row.version += 1
@@ -139,7 +142,10 @@ def strategy_backtest(request, market, key):
     cfg = AgentConfig.get()
     days = int(request.POST.get('days', 60) or 60)
     end = date.today()
-    run = BacktestRun.objects.create(strategy_key=key, params=row.params, symbols=row.symbols, timeframe=row.timeframe,
+    base = cfg.timeframe_for(market)
+    # The lane's base bars, with the strategy on its own timeframe — as auto_research and live run it.
+    run = BacktestRun.objects.create(strategy_key=key, params=row.params, symbols=row.symbols, timeframe=base,
+                                     strategy_timeframe=own_timeframe(row, base),
                                      start=end - timedelta(days=days), end=end, starting_cash=cfg.starting_cash,
                                      tag=f'{row.key} v{row.version}')
     try:
@@ -162,7 +168,7 @@ def strategy_create_missing(request):
         markets = [('stocks', stocks)] + ([('crypto', cryptos)] if 'crypto' in cls.asset_classes else [])
         for market, symbols in markets:
             _, created = Strategy.objects.get_or_create(key=cls.key, market=market, defaults={
-                'name': cls.name, 'params': cls.defaults(), 'timeframe': cls.default_timeframe, 'symbols': symbols,
+                'name': cls.name, 'params': cls.defaults(), 'timeframe': '', 'symbols': symbols,
                 'notes': cls.description})
             n += created
     messages.success(request, f'{n} strategy rows created')

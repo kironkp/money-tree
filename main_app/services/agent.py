@@ -143,6 +143,9 @@ class Agent:
             strat = make_strategy(row.key, row.params)
             strat.name = row.name
             strat.market = self.market
+            # Blank or the lane's own timeframe means base; a whole multiple runs on
+            # bars resampled from the lane's feed (the engine checks and falls back).
+            strat.timeframe = (row.timeframe or '').strip()
             # Only a live loop may read the News Agent's verdicts. A backtest that
             # could see them would be reading answers written after the bar.
             strat.live = self.mode != Mode.REPLAY
@@ -248,7 +251,8 @@ class Agent:
         broker = self.mode in (Mode.PAPER, Mode.LIVE)
         rows = Strategy.objects.filter(market=self.market)
         return {r.key: (r.version, r.enabled, r.stage, r.qualification if broker else None,
-                        tuple(sorted(r.symbols or [])), float(r.allocation_pct)) for r in rows}
+                        tuple(sorted(r.symbols or [])), float(r.allocation_pct), (r.timeframe or '').strip())
+                for r in rows}
 
     def _eod_already_written(self, today: date) -> bool:
         """Today's end-of-day journal exists, so a restart must not redo the day.
@@ -713,7 +717,9 @@ class Agent:
         for s in symbols:
             strategies = self.strategies_for(s)
             inst = self.instruments[s]
-            window = load_frame(inst, self.timeframe, limit=WINDOW_BARS, exclude_sources=self.exclude_sources,
+            # A coarser strategy needs its warm-up in ITS bars: lookback × ratio base bars.
+            limit = max([WINDOW_BARS] + [(st.warmup_bars + 10) * self.engine.ratio(st.key) for st in strategies])
+            window = load_frame(inst, self.timeframe, limit=limit, exclude_sources=self.exclude_sources,
                                 source=self.live_source.get(self.asset_classes[s]))
             window = complete_bars_only(window, self.timeframe, now, grace)
             if len(window) == 0:
@@ -726,13 +732,12 @@ class Agent:
             if not new_positions:
                 continue
             ac = self.asset_classes[s]
-            need = max((st.warmup_bars for st in strategies), default=0)
+            need = max((st.warmup_bars * self.engine.ratio(st.key) for st in strategies), default=0)
             if strategies and len(window) < need:
                 self.say('bar', f'{s}: {len(window)}/{need} {self.live_source.get(self.asset_classes[s], "")} bars stored — '
                          'indicators still warming up, no decisions yet (sync this feed\'s history on the Data page).', symbol=s,
                          phase='observe')
-            prepared = {st.key: st.prepare(window, ac, self.timeframe) for st in strategies}
-            rows = {k: list(df.itertuples(index=True)) for k, df in prepared.items()}
+            prep = self.engine.prepare_symbol(s, window, strategies)
             base_rows = list(window.itertuples(index=True))
             mtc = _mtc(window.index, ac).tolist()
             stale = new_positions[:-1] if missed else []
@@ -741,11 +746,15 @@ class Agent:
                 if i in stale:
                     self.risk.blocks['catchup'] = 'catching up on missed bars — no entries from stale data'
                     try:
-                        self.engine.process_bar(s, ts, base_rows[i], {k: r[i] for k, r in rows.items()}, prepared, i, mtc[i])
+                        rows_i, idx_i = prep.at(i)
+                        self.engine.process_bar(s, ts, base_rows[i], rows_i, prep.frames, i, mtc[i],
+                                                index_by_strategy=idx_i)
                     finally:
                         self.risk.blocks.pop('catchup', None)
                 else:
-                    self.engine.process_bar(s, ts, base_rows[i], {k: r[i] for k, r in rows.items()}, prepared, i, mtc[i])
+                    rows_i, idx_i = prep.at(i)
+                    self.engine.process_bar(s, ts, base_rows[i], rows_i, prep.frames, i, mtc[i],
+                                            index_by_strategy=idx_i)
                 self.last_processed[s] = ts
                 processed += 1
         # Every symbol's bar is swept; now judge the entries. Before this, a slot
@@ -836,9 +845,7 @@ class Agent:
                 frames[s] = df
         if not frames:
             raise RuntimeError(f'no {self.timeframe} bars stored for {d} — sync history first (/data/ or `manage.py sync_bars`)')
-        prepared = {s: {st.key: st.prepare(df, self.asset_classes[s], self.timeframe) for st in self.strategies_for(s)}
-                    for s, df in frames.items()}
-        rows = {s: {k: list(df.itertuples(index=True)) for k, df in per.items()} for s, per in prepared.items()}
+        prepared = {s: self.engine.prepare_symbol(s, df, self.strategies_for(s)) for s, df in frames.items()}
         base_rows = {s: list(df.itertuples(index=True)) for s, df in frames.items()}
         mtc = {s: _mtc(df.index, self.asset_classes[s]).tolist() for s, df in frames.items()}
         events = []
@@ -863,7 +870,9 @@ class Agent:
                 self.last_bar_ts = last_ts
                 self.heartbeat(f'replay {ts.astimezone(cal.ET):%H:%M} ET — equity {acct.equity:,.2f}', state='ticking')
                 self._sleep(min(pause, 10.0))
-            self.engine.process_bar(s, ts, base_rows[s][i], {k: r[i] for k, r in rows[s].items()}, prepared[s], i, mtc[s][i])
+            rows_i, idx_i = prepared[s].at(i)
+            self.engine.process_bar(s, ts, base_rows[s][i], rows_i, prepared[s].frames, i, mtc[s][i],
+                                    index_by_strategy=idx_i)
             # Replay walks one (symbol, ts) at a time already ordered by ts, so
             # settling up to this bar keeps the same semantics as live.
             self.engine.settle(upto_ts=ts)

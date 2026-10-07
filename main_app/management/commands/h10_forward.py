@@ -30,6 +30,7 @@ from datetime import datetime, timedelta, timezone
 from django.core.management.base import BaseCommand
 
 from main_app.models import AgentConfig, Bar, Instrument, Strategy
+from main_app.services.fix_loop import own_timeframe
 # run_window is re-exported: it used to live here, and the tests and the other two
 # research commands import it from this module. It moved to the service so that no
 # command references a raw loader or runner directly.
@@ -229,29 +230,31 @@ class Command(BaseCommand):
         self.stdout.write(self.style.MIGRATE_HEADING('\n  Baselines on the SAME window'))
         self.stdout.write('    flat (no trades)              net       0.00   <- the honest benchmark')
         result['baselines'] = {'flat': {'net': 0.0}}
-        # Each live row is replayed on ITS OWN timeframe with the forex lane's own
-        # RiskConfig and no H10 overrides — that is what "baseline" has to mean.
+        # Each live row is replayed as the lane runs it — the lane's base bars, the
+        # strategy on its own timeframe ('' follows the base) — with the forex
+        # lane's own RiskConfig and no H10 overrides. That is what "baseline" means.
+        base = AgentConfig.get().forex_timeframe
+        tf_frames = frames if base == H10_TIMEFRAME else research_frames(H10_PAIRS, base, window)
         for row in Strategy.objects.filter(market='forex', enabled=True).order_by('key'):
-            tf_frames = (frames if row.timeframe == H10_TIMEFRAME
-                         else research_frames(H10_PAIRS, row.timeframe, window))
+            own = own_timeframe(row, base)
             tr, sl = run_window(row.key, dict(row.params), {}, tf_frames, start, end,
-                                timeframe=row.timeframe, pairs=H10_PAIRS)
+                                timeframe=base, pairs=H10_PAIRS, strategy_timeframe=own)
             m = _measure(tr, sl)
-            m['timeframe'] = row.timeframe
+            m['timeframe'] = own or base
             m['risk'] = 'forex lane live RiskConfig'
             # A baseline that cannot reach the window start is not a baseline for
             # this window, and saying so is the whole point of printing it.
             cov = coverage(tf_frames, start, end)
             m['coverage'] = cov
-            gaps = coverage_gaps(cov, start, row.timeframe)
+            gaps = coverage_gaps(cov, start, base)
             m['coverage_gaps'] = gaps
             result['baselines'][row.key] = m
-            self._row(f'{row.key} ({row.timeframe}, live risk)', m)
+            self._row(f'{row.key} ({own or base}, live risk)', m)
             for sym, c in sorted(cov.items()):
                 self.stdout.write(f'        {sym:9} {c["bars"]:5} bars  '
                                   f'{(c["first"] or "-")[:16]} .. {(c["last"] or "-")[:16]}')
             for g in gaps:
-                self.stdout.write(w(f'        WARNING {row.timeframe} does not cover the window '
+                self.stdout.write(w(f'        WARNING {base} does not cover the window '
                                     f'start — {g}'))
             if gaps:
                 self.stdout.write(w('        this baseline measured a SHORTER window than H10 '

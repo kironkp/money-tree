@@ -292,3 +292,43 @@ class NightlyResearchKeepsTheRowsOwnEntryWindow(TestCase):
                          ['all', 'skip_asia', 'london_ny'])
         self.assertEqual(research_grid(self._row(market='degen', qualification=Qualification.QUARANTINED,
                                                  session='all'))['entry_session'], ['all'])
+
+
+class AFixMayMoveAStrategyToItsOwnTimeframe(TestCase):
+    """v1.73: a candidate can run on a coarser timeframe than the lane's base. The
+    current version is replayed at ITS timeframe, and an install moves the row."""
+
+    def setUp(self):
+        self.row = Strategy.objects.create(key='ema_momentum', name='EMA', market='forex', enabled=True,
+                                           stage='sprout', qualification=Qualification.QUARANTINED,
+                                           params={'fast': 9}, symbols=['EUR/USD'], timeframe='15Min')
+        self.exp = Experiment.objects.create(strategy_key='ema_momentum', method='walk_forward',
+                                             symbols=['EUR/USD'], timeframe='15Min', strategy_timeframe='1Hour',
+                                             start=datetime(2026, 8, 9).date(), end=datetime(2026, 10, 6).date(),
+                                             windows={'train_days': 21, 'test_days': 7},
+                                             best_params={'fast': 11})
+
+    def test_the_current_version_is_compared_at_its_own_timeframe_and_the_install_moves_it(self):
+        with mock.patch.object(fix_loop, 'compare_on_oos', return_value={
+                'beats': True, 'windows': 3, 'current': {'net_pnl': -50.0, 'profit_factor': 0.8, 'trades': 20},
+                'procedure': {'net_pnl': 40.0, 'profit_factor': 1.2, 'trades': 12}}) as cmp:
+            verdict, _ = fix_loop.install_if_better(self.row, self.exp, cfg=None)
+        self.assertEqual(cmp.call_args.kwargs['current_timeframe'], '')       # base: the row's 15Min
+        self.row.refresh_from_db()
+        self.assertIn('candidate on 1Hour, current on 15Min', verdict)
+        self.assertEqual(self.row.timeframe, '1Hour')
+        self.assertEqual(self.row.history[-1]['evidence']['previous_timeframe'], '')
+
+    def test_the_same_params_on_a_different_timeframe_are_not_a_re_find(self):
+        self.exp.best_params = {'fast': 9}
+        with mock.patch.object(fix_loop, 'compare_on_oos', return_value={
+                'beats': False, 'windows': 3, 'current': {'net_pnl': 10.0, 'profit_factor': 1.1, 'trades': 20},
+                'procedure': {'net_pnl': 5.0, 'profit_factor': 1.0, 'trades': 12}}):
+            verdict, _ = fix_loop.install_if_better(self.row, self.exp, cfg=None)
+        self.assertNotIn('re-found', verdict)
+        self.assertIn('no fix found', verdict)
+
+    def test_fix_lane_only_offers_whole_multiples(self):
+        from main_app.management.commands.fix_lane import candidate_timeframes
+        self.assertEqual(candidate_timeframes('15Min', ['1Hour', '5Min', '15Min', '4Hour']),
+                         ['15Min', '1Hour', '4Hour'])

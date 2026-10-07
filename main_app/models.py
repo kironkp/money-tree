@@ -625,7 +625,7 @@ class Signal(models.Model):
 
 class RiskEvent(models.Model):
     ALERT_KINDS = ('daily_loss', 'kill_switch', 'missed_ticks', 'external_position', 'error', 'drift', 'qualification', 'reconcile',
-                   'disconnected', 'config_changed', 'watchdog', 'unprotected')
+                   'disconnected', 'config_changed', 'watchdog', 'unprotected', 'timeframe')
     account = models.ForeignKey(Account, on_delete=models.CASCADE, related_name='risk_events')
     ts = models.DateTimeField(default=timezone.now)
     kind = models.CharField(max_length=32)
@@ -709,7 +709,9 @@ class Strategy(models.Model):
     params = models.JSONField(default=dict, blank=True)
     enabled = models.BooleanField(default=False)
     symbols = models.JSONField(default=list, blank=True)
-    timeframe = models.CharField(max_length=8, default='5Min')
+    # The strategy's own timeframe. '' follows the lane's base (and moves with it);
+    # an explicit whole multiple of the base runs on bars resampled from it.
+    timeframe = models.CharField(max_length=8, blank=True, default='')
     allocation_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('100'))
     stage = models.CharField(max_length=8, choices=Stage.choices, default=Stage.SEED)
     # Enabled controls whether a strategy may be observed at its stage.
@@ -773,6 +775,9 @@ class Experiment(models.Model):
     # RiskConfig fields to run this experiment under instead of the lane's live
     # values, e.g. {'min_reward_to_cost': 4.0, 'max_hold_minutes': 1440}.
     risk_overrides = models.JSONField(default=dict, blank=True)
+    # The strategy's own timeframe when coarser than `timeframe` (the lane's base);
+    # its bars are resampled from the base bars as live does. Blank = base.
+    strategy_timeframe = models.CharField(max_length=8, blank=True, default='')
     min_trades = models.PositiveIntegerField(default=10)
     status = models.CharField(max_length=10, default='queued')  # queued running done failed
     progress = models.FloatField(default=0)
@@ -797,6 +802,7 @@ class BacktestRun(models.Model):
     params = models.JSONField(default=dict, blank=True)
     symbols = models.JSONField(default=list, blank=True)
     timeframe = models.CharField(max_length=8, default='5Min')
+    strategy_timeframe = models.CharField(max_length=8, blank=True, default='')  # '' = `timeframe`
     start = models.DateField()
     end = models.DateField()
     starting_cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))

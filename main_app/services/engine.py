@@ -20,9 +20,36 @@ from .broker.base import Broker, OrderReq
 from .data import calendar as cal
 from .indicators import minutes_to_close as _mtc
 from .indicators import session_key
+from .data.resample import resample_complete
 from .risk import Decision, RiskConfig, RiskManager
 from .strategies.base import Context, PositionView, Rule, Signal, Strategy
 from .timeframes import tf_minutes
+
+
+class PreparedSymbol:
+    """One symbol's prepared frames for every strategy.
+
+    Strategies on the lane's base timeframe share the base index. A coarser
+    strategy gets its own frame, built causally from the base bars, plus a map
+    from base position to the coarse bar that position completes (None between).
+    Backtest, replay and live all build this the same way.
+    """
+
+    def __init__(self, frames: dict, maps: dict):
+        self.frames = frames                                   # key -> prepared DataFrame
+        self.rows = {k: list(df.itertuples(index=True)) for k, df in frames.items()}
+        self.maps = maps                                       # key -> list[int | None], coarse only
+
+    def at(self, i: int) -> tuple[dict, dict]:
+        """(row per strategy, that strategy's own index) at base position i. A
+        coarse strategy whose bar does not complete at i gets row None."""
+        rows, idx = {}, {}
+        for key, r in self.rows.items():
+            m = self.maps.get(key)
+            j = i if m is None else m[i]
+            rows[key] = None if j is None else r[j]
+            idx[key] = j
+        return rows, idx
 
 log = logging.getLogger('moneytree.engine')
 
@@ -180,7 +207,12 @@ class Engine:
         self.current_day = None
         self.bars_with_position = 0
         self.bars_seen = 0
-        self.last_acted: dict[tuple[str, str], datetime] = {}  # (strategy, symbol) -> bar ts
+        self.last_acted: dict[tuple[str, str], datetime] = {}  # (strategy, symbol) -> its own bar's ts
+        # Each strategy's own timeframe: the lane's base, or a whole multiple of it.
+        self.timeframes = {s.key: self._resolve_timeframe(s) for s in strategies}
+        # A coarse strategy's latest rules, carried between its bars so the symbol
+        # state does not forget it for three of every four base bars.
+        self._coarse_rules: dict[tuple[str, str], tuple[datetime, list]] = {}
         self.cards: dict[str, CardState] = {}
         # Entries waiting for the whole bar to be swept. See handle_signal.
         self.queued: list[_Candidate] = []
@@ -188,6 +220,49 @@ class Engine:
         self.names = {s.key: getattr(s, 'name', s.key) for s in strategies}
 
     # --- helpers ----------------------------------------------------------
+    def _resolve_timeframe(self, strat: Strategy) -> str:
+        """A finer or non-multiple timeframe cannot be built from the lane's feed:
+        say so and run the strategy on the base. Never disable it."""
+        base = self.cfg.timeframe
+        want = (getattr(strat, 'timeframe', '') or '').strip()
+        if not want or want == base:
+            return base
+        try:
+            ok = tf_minutes(want) > tf_minutes(base) and tf_minutes(want) % tf_minutes(base) == 0
+        except ValueError:
+            ok = False
+        classes = set(self.cfg.asset_classes.values()) or {'stock'}
+        # Stocks trade a 09:30–16:00 session; above an hour, UTC-clock buckets would
+        # straddle the open and the close. Session-aligned buckets are not built.
+        stock_cap = ok and classes <= {'stock', 'etf'} and tf_minutes(want) > 60
+        if ok and not stock_cap:
+            return want
+        from django.utils import timezone as _tz
+        msg = (f'{strat.key}: timeframe {want} is above 1Hour, which a stocks lane does not resample; '
+               f'running it on {base}' if stock_cap else
+               f'{strat.key}: timeframe {want} is not a whole multiple of the lane\'s {base}; '
+               f'running it on {base}')
+        log.warning(msg)
+        self.rec.on_risk_event('timeframe', msg, _tz.now(), {'strategy': strat.key, 'wanted': want, 'base': base})
+        self.say('risk', msg, strategy_key=strat.key, phase='alert')
+        return base
+
+    def ratio(self, strategy_key: str) -> int:
+        """Base bars per bar of the strategy's own timeframe."""
+        return max(1, tf_minutes(self.timeframes.get(strategy_key, self.cfg.timeframe)) // self.tfm)
+
+    def prepare_symbol(self, symbol: str, df: pd.DataFrame, strategies: list[Strategy] | None = None) -> PreparedSymbol:
+        ac = self.asset_class(symbol)
+        frames, maps = {}, {}
+        for strat in (self.strategies if strategies is None else strategies):
+            tf = self.timeframes.get(strat.key, self.cfg.timeframe)
+            if tf == self.cfg.timeframe:
+                frames[strat.key] = strat.prepare(df, ac, tf)
+            else:
+                coarse, maps[strat.key] = resample_complete(df, self.cfg.timeframe, tf, ac)
+                frames[strat.key] = strat.prepare(coarse, ac, tf)
+        return PreparedSymbol(frames, maps)
+
     @property
     def observing(self) -> bool:
         return self.narrator is not None
@@ -238,8 +313,10 @@ class Engine:
             return None
         if strategy_key is not None and pos.strategy_key and pos.strategy_key != strategy_key:
             return None
+        # bars_held is counted in the asking strategy's own bars (max_bars_held means its bars).
+        held = pos.bars_held // self.ratio(strategy_key) if strategy_key else pos.bars_held
         return PositionView(qty=pos.qty, avg_price=pos.avg_price, entry_ts=pos.entry_ts,
-                            bars_held=pos.bars_held, stop=pos.stop, target=pos.target)
+                            bars_held=held, stop=pos.stop, target=pos.target)
 
     def strategy_exposure(self, strategy_key: str) -> float:
         open_exposure = sum(abs(p.market_value()) for p in self.broker.positions.values()
@@ -344,8 +421,13 @@ class Engine:
 
     # --- the decision for one bar ----------------------------------------
     def process_bar(self, symbol: str, ts: datetime, bar, rows_by_strategy: dict, frames_by_strategy: dict,
-                    i: int, minutes_to_close: float | None, act: bool = True) -> None:
-        """The whole decision for one completed bar of one symbol."""
+                    i: int, minutes_to_close: float | None, act: bool = True,
+                    index_by_strategy: dict | None = None) -> None:
+        """The whole decision for one completed BASE bar of one symbol.
+
+        A coarser strategy is evaluated only on the base bar that completes one of
+        its own bars (`index_by_strategy` gives its index; its row is None between).
+        Fills, stops, targets and time exits run on every base bar regardless."""
         asset_class = self.asset_class(symbol)
         self.start_day_if_new(ts, asset_class)
         self.broker.on_bar(symbol, bar, ts)
@@ -367,13 +449,17 @@ class Engine:
         fired = False
         for strat in (self.strategies if act else ()):
             row = rows_by_strategy.get(strat.key)
-            if row is None or i < strat.warmup_bars:
+            j = i if index_by_strategy is None else index_by_strategy.get(strat.key)
+            if row is None or j is None or j < strat.warmup_bars:
                 continue
             key = (strat.key, symbol)
-            if self.last_acted.get(key) == ts:
-                continue  # never act twice on one bar
-            self.last_acted[key] = ts
-            ctx = Context(symbol=symbol, asset_class=asset_class, timeframe=self.cfg.timeframe, ts=ts,
+            stamp = getattr(row, 'Index', None)
+            own_ts = stamp.to_pydatetime() if hasattr(stamp, 'to_pydatetime') else ts
+            if self.last_acted.get(key) == own_ts:
+                continue  # never act twice on one bar of the strategy's own timeframe
+            self.last_acted[key] = own_ts
+            ctx = Context(symbol=symbol, asset_class=asset_class,
+                          timeframe=self.timeframes.get(strat.key, self.cfg.timeframe), ts=ts,
                           position=self.position_view(symbol, strat.key), bar_pos=int(getattr(row, 'bar_pos', 0)),
                           minutes_to_close=mtc_val, extra={'bar_age_bars': self._bar_age_bars(ts)})
             rules: list[Rule] = []
@@ -383,12 +469,14 @@ class Engine:
                 except Exception:
                     rules = []
             try:
-                signals = strat.on_bar(ctx, row, frames_by_strategy[strat.key], i)
+                signals = strat.on_bar(ctx, row, frames_by_strategy[strat.key], j)
             except Exception as exc:  # a strategy bug must not kill the loop
                 log.exception('strategy %s failed on %s %s', strat.key, symbol, ts)
                 self.rec.on_risk_event('error', f'{strat.key} raised {exc!r} on {symbol}', ts)
                 self.say('error', f'{strat.key} crashed on {symbol}: {exc!r}', symbol, strat.key, ts, phase='alert')
                 continue
+            if self.timeframes.get(strat.key, self.cfg.timeframe) != self.cfg.timeframe:
+                self._coarse_rules[(symbol, strat.key)] = (own_ts, rules)
             for sig in signals:
                 if sig.action in ('buy', 'sell') and not strat.entry_allowed(sig.ts):
                     # Outside the strategy's entry window: not a blocked trade,
@@ -398,8 +486,12 @@ class Engine:
                 fired = True
                 self.handle_signal(sig, strat, ctx, row, rules)
             evaluated.append((strat.key, rules))
-        if self.observing and evaluated and not fired:
-            self._record_state(symbol, ts, bar, evaluated)
+        if self.observing and not fired:
+            done = {k for k, _ in evaluated}
+            carried = [(k, rules) for (sym, k), (_, rules) in self._coarse_rules.items()
+                       if sym == symbol and k not in done]
+            if evaluated or carried:
+                self._record_state(symbol, ts, bar, evaluated + carried)
         self._time_exits(symbol, ts, bar, mtc_val)
         self._emit_broker_events()
 
@@ -418,7 +510,11 @@ class Engine:
             rules_out.extend(r.as_dict(key) for r in rules)
             passed = sum(1 for r in rules if r.ok)
             best = max(best, passed / len(rules))
-            parts.append(f'{self.names.get(key, key)}: ' + '; '.join(r.text for r in rules) + '.')
+            label = self.names.get(key, key)
+            if (symbol, key) in self._coarse_rules:
+                as_of = self._coarse_rules[(symbol, key)][0]
+                label += f' ({self.timeframes[key]}, as of {as_of.astimezone(cal.ET):%H:%M})'
+            parts.append(f'{label}: ' + '; '.join(r.text for r in rules) + '.')
         when = ts.astimezone(cal.ET).strftime('%H:%M')
         head = f'{when} {symbol} bar closed at {px(price)}.'
         if holding:
@@ -710,18 +806,14 @@ class Engine:
         self.rec.on_equity(ts, a.cash, a.positions_value, a.equity, self.risk.day_pnl(a.equity))
 
     # --- historical driver -------------------------------------------------
-    def prepare_frames(self, frames: dict[str, pd.DataFrame]) -> dict[str, dict[str, pd.DataFrame]]:
-        out: dict[str, dict[str, pd.DataFrame]] = {}
+    def prepare_frames(self, frames: dict[str, pd.DataFrame]) -> dict[str, PreparedSymbol]:
+        out: dict[str, PreparedSymbol] = {}
         for symbol, df in frames.items():
             ac = self.asset_class(symbol)
-            out[symbol] = {}
-            for strat in self.strategies:
-                if not strat.supports(ac):
-                    continue
-                allowed = self.cfg.strategy_symbols.get(strat.key)
-                if allowed and symbol not in allowed:
-                    continue
-                out[symbol][strat.key] = strat.prepare(df, ac, self.cfg.timeframe)
+            strategies = [s for s in self.strategies if s.supports(ac)
+                          and not (self.cfg.strategy_symbols.get(s.key)
+                                   and symbol not in self.cfg.strategy_symbols[s.key])]
+            out[symbol] = self.prepare_symbol(symbol, df, strategies)
         return out
 
     def run_frames(self, frames: dict[str, pd.DataFrame], equity_every_bar: bool = True,
@@ -730,18 +822,18 @@ class Engine:
         Bars before `act_from` are warm-up: they feed indicators and marks but
         no strategy acts on them."""
         prepared = self.prepare_frames(frames)
-        rows: dict[str, dict[str, list]] = {}
+        base_rows: dict[str, list] = {}
         mtc: dict[str, list] = {}
         sessions: dict[str, list] = {}
-        for symbol, per_strat in prepared.items():
-            rows[symbol] = {k: list(df.itertuples(index=True)) for k, df in per_strat.items()}
+        for symbol, prep in prepared.items():
             base = frames[symbol]
+            base_rows[symbol] = list(base.itertuples(index=True))
             ac = self.asset_class(symbol)
             mtc[symbol] = _mtc(base.index, ac).tolist()
             sessions[symbol] = [str(x) for x in session_key(base.index, ac)]
         events = []
         for symbol, df in frames.items():
-            if symbol not in prepared or not prepared[symbol]:
+            if symbol not in prepared or not prepared[symbol].frames:
                 continue
             for i, ts in enumerate(df.index):
                 events.append((ts.to_pydatetime(), symbol, i))
@@ -754,15 +846,14 @@ class Engine:
                 pos = self.broker.positions.get(symbol)
                 # Stocks flatten at the bell; crypto and forex days roll with positions open.
                 if pos is not None and pos.qty != 0 and self.cfg.flatten_intraday and self.asset_class(symbol) not in ('crypto', 'forex'):
-                    prev_bar = next(iter(rows[symbol].values()))[i - 1]
+                    prev_bar = base_rows[symbol][i - 1]
                     self._close(symbol, float(prev_bar.close), prev_bar.Index.to_pydatetime(), 'eod',
                                 f'END OF DAY — closing {symbol} at the last bar')
                     self._emit_broker_events()
                 for strat in self.strategies:
                     strat.on_session_end(symbol)
             prev_session[symbol] = sess
-            per_strat_rows = rows[symbol]
-            bar = next(iter(per_strat_rows.values()))[i]
+            bar = base_rows[symbol][i]
             # The driver walks events in (ts, symbol) order, so everything for a
             # timestamp has been swept once the timestamp advances. Settling on
             # that boundary gives the backtest the same sequencing as live —
@@ -772,8 +863,9 @@ class Engine:
             # in there flattens, and the queue belongs to the session that ended.
             if last_ts is not None and ts != last_ts:
                 self.settle(upto_ts=last_ts)
-            self.process_bar(symbol, ts, bar, {k: r[i] for k, r in per_strat_rows.items()}, prepared[symbol], i, mtc[symbol][i],
-                             act=(act_from is None or ts >= act_from))
+            rows_i, idx_i = prepared[symbol].at(i)
+            self.process_bar(symbol, ts, bar, rows_i, prepared[symbol].frames, i, mtc[symbol][i],
+                             act=(act_from is None or ts >= act_from), index_by_strategy=idx_i)
             if equity_every_bar and ts != last_ts:
                 self.record_equity(ts)
             last_ts = ts

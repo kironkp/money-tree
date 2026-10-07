@@ -275,7 +275,8 @@ def run_experiment(exp) -> None:
             last_progress[0] = time.time()
 
     try:
-        spec = with_risk_overrides(spec_from_models(exp.strategy_key, {}, exp.symbols, exp.timeframe, cfg),
+        spec = with_risk_overrides(spec_from_models(exp.strategy_key, {}, exp.symbols, exp.timeframe, cfg,
+                                                    strategy_timeframe=exp.strategy_timeframe),
                                    exp.risk_overrides)
         frames = load_frames(exp.symbols, exp.timeframe, exp.start, exp.end)
         bench = None

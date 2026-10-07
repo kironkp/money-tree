@@ -172,6 +172,7 @@ class Strategy:
     # None for the lane's max_hold. Crypto and forex only (stocks close daily).
     max_hold_minutes: int | None = None
     market: str = ''           # the lane, when the agent knows it
+    timeframe: str = ''        # own timeframe when coarser than the lane's; '' = the lane's
 
     def __init__(self, params: dict | None = None):
         self.p = self.defaults()

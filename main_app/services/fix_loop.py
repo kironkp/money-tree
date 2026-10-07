@@ -78,15 +78,24 @@ def traded_windows(exp) -> list[dict]:
         int(w.get('step_days', 0)) or None) if x['n'] in traded]
 
 
-def compare_on_oos(exp, current_params: dict, cfg) -> dict:
+def own_timeframe(row: Strategy, base: str) -> str:
+    """The row's strategy timeframe as a spec wants it: '' when it is the base."""
+    tf = (row.timeframe or '').strip()
+    return '' if tf in ('', base) else tf
+
+
+def compare_on_oos(exp, current_params: dict, cfg, current_timeframe: str | None = None) -> dict:
     """The procedure's adaptive OOS against the current params, fixed, under the
-    same regime on the same windows: the ones the procedure traded."""
+    same regime on the same windows: the ones the procedure traded. The current
+    params run at the CURRENT strategy timeframe, which may differ from the
+    candidate's: the question is whether to replace what is trading."""
     windows = traded_windows(exp)
     procedure = (exp.summary or {}).get('oos') or {}
     if not windows:
         return {'current': {}, 'procedure': _subset(procedure), 'beats': False, 'windows': 0}
-    spec = with_risk_overrides(spec_from_models(exp.strategy_key, {}, exp.symbols, exp.timeframe, cfg),
-                               exp.risk_overrides)
+    tf = exp.strategy_timeframe if current_timeframe is None else current_timeframe
+    spec = with_risk_overrides(spec_from_models(exp.strategy_key, {}, exp.symbols, exp.timeframe, cfg,
+                                                strategy_timeframe=tf), exp.risk_overrides)
     frames = load_frames(exp.symbols, exp.timeframe, exp.start, exp.end)
     current = evaluate_fixed_params(spec, frames, windows, current_params)['metrics']
     beats = (float(procedure.get('net_pnl', 0) or 0) > float(current.get('net_pnl', 0) or 0)
@@ -96,7 +105,7 @@ def compare_on_oos(exp, current_params: dict, cfg) -> dict:
 
 
 def install_if_better(row: Strategy, exp, cfg, current_params: dict | None = None,
-                      dry_run: bool = False) -> tuple[str, dict]:
+                      dry_run: bool = False, note: str = '') -> tuple[str, dict]:
     """Step 2 and 3 of the selection. Returns (verdict, comparison)."""
     candidate = sim_candidate(exp)
     # Defaults first: stored params predate newer knobs such as entry_session.
@@ -104,13 +113,17 @@ def install_if_better(row: Strategy, exp, cfg, current_params: dict | None = Non
                **(row.params if current_params is None else current_params)}
     if not candidate:
         return 'no fix found — the walk-forward produced no candidate', {}
-    cmp = compare_on_oos(exp, current, cfg)
+    current_tf = own_timeframe(row, exp.timeframe)
+    new_tf = exp.strategy_timeframe or ''
+    cmp = compare_on_oos(exp, current, cfg, current_timeframe=current_tf)
     c, k = cmp['procedure'], cmp['current']
     line = (f'selection procedure net {c.get("net_pnl", 0):+,.2f} PF {c.get("profit_factor", 0):.2f} '
             f'(adaptive OOS, {c.get("trades", 0)} trades) vs current net {k.get("net_pnl", 0):+,.2f} '
             f'PF {k.get("profit_factor", 0):.2f} ({k.get("trades", 0)} trades) on the same '
             f'{cmp["windows"]} traded test windows')
-    if dict(candidate) == {key: current.get(key) for key in candidate}:
+    if new_tf != current_tf:
+        line += f'; candidate on {new_tf or exp.timeframe}, current on {current_tf or exp.timeframe}'
+    if new_tf == current_tf and dict(candidate) == {key: current.get(key) for key in candidate}:
         return f'no fix found — the search re-found the current params ({line})', cmp
     if not cmp['beats']:
         return f'no fix found — {line}', cmp
@@ -118,9 +131,13 @@ def install_if_better(row: Strategy, exp, cfg, current_params: dict | None = Non
         return f'WOULD INSTALL v{row.version + 1} in sim — {line}', cmp
     promote(row, candidate, source=f'sim fix loop, experiment #{exp.pk}', metrics=c,
             note=('selection procedure beat current out-of-sample; the installed params are its latest '
-                  'pick, not separately validated. Not a gated promotion.'),
+                  'pick, not separately validated. Not a gated promotion.' + (f' {note}' if note else '')),
             evidence={'kind': 'sim_fix', 'experiment': exp.pk, 'windows': cmp['windows'],
-                      'current': k, 'previous_params': current, 'risk_overrides': exp.risk_overrides or {}})
+                      'current': k, 'previous_params': current, 'previous_timeframe': current_tf,
+                      'timeframe': new_tf, 'risk_overrides': exp.risk_overrides or {}})
+    if new_tf != current_tf:
+        row.timeframe = new_tf          # '' = follow the lane's base; explicit only for a coarse choice
+        row.save(update_fields=['timeframe'])
     return f'INSTALLED v{row.version} in sim — {line}', cmp
 
 

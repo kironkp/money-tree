@@ -406,6 +406,28 @@ Started from "all lanes show $0". Detail in `docs/LOGBOOK.md`.
   ema wants 1Hour while vwap wants 15Min — one timeframe per lane is now the
   binding constraint.
 
+## v1.73 — a strategy's own timeframe inside a lane
+
+- The lane polls ONE feed at its base (`cfg.timeframe_for(market)`).
+  `Strategy.timeframe` is `''` = follow the lane (migration 0033 blanked every row
+  that equalled its base), or a whole multiple of the base for a deliberate coarse
+  choice. A finer or non-multiple value falls back to base with a 'timeframe'
+  alert, never a disable. Stocks refuse anything above 1Hour: UTC-clock buckets
+  would leave a last bucket that never closes in session.
+- The engine resamples causally from base bars (`resample.bucket_starts`, UTC
+  clock, bar-start stamps): a coarse bar exists only once all its base bars are
+  complete. prepare/on_bar/explain/rules for a coarse strategy run only then;
+  entries fill at the next base bar; stops, targets and time exits are checked on
+  EVERY base bar; `max_bars_held` counts the strategy's own bars. One path for
+  backtest, replay and live — research and the strategy page backtest on the base
+  plus `strategy_timeframe`, never on native coarse bars.
+- Parity, forex ema at 1Hour, 07-15..10-05: native Yahoo 1Hour vs resampled
+  15Min → 41/41 identical entries, net +128.76 vs +141.03 (finer exit checks).
+- forex ema_momentum v3 runs at 1Hour (+326.06 PF 1.86 over 23 trades vs v2's
+  −247.98 PF 0.84 on the same windows); vwap_reversion v2 stays at 15Min. A
+  timeframe is a per-strategy candidate in the fix loop; the lane regime is only
+  `min_reward_to_cost` × `max_hold`.
+
 ## Daily diagnosis (06:30)
 
 `deploy/daily-diagnosis.sh` + `com.kiron.moneytree.diagnosis.plist`: ONE

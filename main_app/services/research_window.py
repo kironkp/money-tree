@@ -122,7 +122,8 @@ def research_frames(symbols, timeframe: str, window: Window) -> dict[str, pd.Dat
 
 
 def run_window(key: str, params: dict, risk_over: dict, frames, start, end, *,
-               timeframe: str, pairs, cost_mult: float = 1.0) -> tuple[list, float]:
+               timeframe: str, pairs, cost_mult: float = 1.0,
+               strategy_timeframe: str = '') -> tuple[list, float]:
     """Replay one strategy over the half-open window [start, end).
 
     Lives here rather than in a command because it is the choke point: every
@@ -144,7 +145,10 @@ def run_window(key: str, params: dict, risk_over: dict, frames, start, end, *,
 
     from .backtest import run_backtest, spec_from_models
 
-    spec = spec_from_models(key, params, list(pairs), timeframe, AgentConfig.get())
+    # `timeframe` is the bars in `frames`; a strategy on a coarser timeframe of its
+    # own runs on bars resampled from them, exactly as the live lane does.
+    spec = spec_from_models(key, params, list(pairs), timeframe, AgentConfig.get(),
+                            strategy_timeframe=strategy_timeframe)
     if risk_over:
         spec.risk = replace(spec.risk, **risk_over)
     if cost_mult != 1.0:

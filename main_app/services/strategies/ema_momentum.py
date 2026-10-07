@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from .. import indicators as ind
+from ..timeframes import tf_minutes
 from .base import Context, Param, Rule, Signal, Strategy, entry_session_param, volume_evidence, volume_rule
 
 
@@ -55,7 +56,10 @@ class EmaMomentum(Strategy):
             if pos.qty < 0 and cross_up:
                 return [Signal('close', ctx.symbol, ctx.ts, float(bar.close), reason='EMA cross up')]
             return []
-        if bar.bar_pos < 2 or not volume_evidence(ctx.asset_class, bar.relvol, self.p['min_relvol'])[0]:
+        # Skip a session's first two bars intraday. On daily bars every bar is its
+        # own session, so the gate would refuse every entry.
+        if (tf_minutes(ctx.timeframe) < 1440 and bar.bar_pos < 2) or \
+                not volume_evidence(ctx.asset_class, bar.relvol, self.p['min_relvol'])[0]:
             return []
         risk = self.p['stop_atr_mult'] * bar.atr
         if cross_up and self.p['rsi_min'] <= bar.rsi <= self.p['rsi_max']:

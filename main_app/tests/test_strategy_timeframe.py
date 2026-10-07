@@ -217,3 +217,83 @@ class H10BaselinesReplayRowsAsTheLaneRunsThem(TestCase):
             except Exception:
                 pass                     # empty frames may stop it later; the spec call is what is pinned
         self.assertEqual(spec.call_args.kwargs['strategy_timeframe'], '1Hour')
+
+
+class EmaSkipsASessionsFirstBarsOnlyIntraday(SimpleTestCase):
+    """On daily bars every bar is its own session, so `bar_pos < 2` refused every
+    entry and a 1Day walk-forward could never trade (item 10.1, 2026-10-06)."""
+
+    V3 = {'fast': 13, 'slow': 27, 'rsi_min': 40.0, 'rsi_max': 65.0, 'stop_atr_mult': 2.5, 'rr': 2.0,
+          'min_relvol': 1.5, 'entry_session': 'all'}
+
+    def _signals(self, timeframe, bar_pos, asset_class='forex', params=None):
+        from types import SimpleNamespace
+
+        from main_app.services.strategies.base import Context
+        strat = make_strategy('ema_momentum', params or self.V3)
+        bar = SimpleNamespace(ema_diff=0.001, ema_diff_prev=-0.001, atr=0.002, rsi=55.0, relvol=float('nan'),
+                              bar_pos=bar_pos, close=1.1)
+        ctx = Context(symbol='EUR/USD', asset_class=asset_class, timeframe=timeframe, ts=T0, bar_pos=bar_pos)
+        return strat.on_bar(ctx, bar, None, 50)
+
+    def test_daily_bars_can_enter_on_any_bar(self):
+        self.assertEqual([s.action for s in self._signals('1Day', 0)], ['buy'])
+        crypto = self._signals('1Day', 0, asset_class='crypto', params={'min_relvol': 0.0})
+        self.assertEqual([s.action for s in crypto], ['buy'])
+
+    def test_the_intraday_gate_is_unchanged_including_forex_v3_on_1Hour(self):
+        for tf in ('15Min', '1Hour'):
+            self.assertEqual(self._signals(tf, 0), [], tf)
+            self.assertEqual(self._signals(tf, 1), [], tf)
+            self.assertEqual([s.action for s in self._signals(tf, 2)], ['buy'], tf)
+
+
+class AStrategyMayHoldLongerThanItsLane(SimpleTestCase):
+    """Degen ema@4Hour holds a day; burst in the same lane keeps the lane's 180 minutes."""
+
+    def test_ema_keeps_its_own_hold_while_burst_keeps_the_lanes(self):
+        from main_app.services.broker.base import Position
+        from main_app.services.risk import RiskManager
+        from main_app.services.strategies.base import set_own_hold
+        ema, burst = make_strategy('ema_momentum'), make_strategy('burst')
+        self.assertTrue(set_own_hold(ema, 1440))
+        self.assertTrue(set_own_hold(burst, None))              # None leaves the lane's
+        ac = {'ADA/USD': 'crypto', 'SOL/USD': 'crypto'}
+        risk = RiskConfig(max_hold_minutes=180)
+        broker = SimBroker(10_000, immediate_fills=True, slippage_bps=0, asset_classes=ac)
+        broker.hydrate(10_000, [Position('ADA/USD', 100, 1.0, T0, strategy_key='ema_momentum', last_price=1.0),
+                                Position('SOL/USD', 10, 10.0, T0, strategy_key='burst', last_price=10.0)])
+        engine = Engine([ema, burst], broker, EngineConfig(timeframe='15Min', asset_classes=ac, risk=risk),
+                        MemoryRecorder(), RiskManager(risk))
+        bar = type('Bar', (), {'open': 1.0, 'high': 1.0, 'low': 1.0, 'close': 1.0, 'volume': 0})()
+        for sym in ac:
+            engine._time_exits(sym, T0 + timedelta(minutes=181), bar, None)
+        self.assertNotIn('SOL/USD', broker.positions)           # burst: the lane's 180
+        self.assertIn('ADA/USD', broker.positions)              # ema: its own 1440
+        engine._time_exits('ADA/USD', T0 + timedelta(minutes=1441), bar, None)
+        self.assertNotIn('ADA/USD', broker.positions)
+
+    def test_news_catalyst_keeps_its_graded_hold(self):
+        from main_app.services.strategies.base import set_own_hold
+        news = make_strategy('news_catalyst')
+        news.market = 'degen'
+        self.assertFalse(set_own_hold(news, 1440))
+        self.assertEqual(news.max_hold_minutes, 180)
+
+    def test_research_and_backtests_carry_the_rows_hold(self):
+        from main_app.models import Strategy
+        from main_app.services.fix_loop import row_risk
+        self.assertEqual(row_risk(Strategy(max_hold_minutes=1440)), {'max_hold_minutes': 1440})
+        self.assertEqual(row_risk(Strategy()), {})
+        frames = {'X/USD': walk(24 * 4 * 20, seed=5)}
+
+        def time_exits(hold):
+            spec = BacktestSpec('ema_momentum', {'min_relvol': 0.0}, ['X/USD'], '15Min', 10000.0,
+                                RiskConfig(max_hold_minutes=180), asset_classes={'X/USD': 'crypto'},
+                                strategy_max_hold=hold)
+            return [(t.exit_ts - t.entry_ts).total_seconds() / 60
+                    for t in run_backtest(spec, frames).trades if t.exit_reason == 'time']
+
+        lane = time_exits(None)
+        self.assertTrue(lane and max(lane) <= 195, 'the fixture must hit the lane hold or this proves nothing')
+        self.assertTrue(all(m >= 1440 for m in time_exits(1440)))

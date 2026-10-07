@@ -18,10 +18,10 @@ from django.utils import timezone
 
 from main_app.models import Account, AgentConfig, Experiment, JournalEntry, Strategy
 from main_app.services.backtest import load_frames, run_backtest, spec_from_models
-from main_app.services.fix_loop import install_if_better, own_timeframe, retry_due
+from main_app.services.fix_loop import install_if_better, own_timeframe, retry_due, row_risk
 from main_app.services.strategies.base import ENTRY_SESSIONS
 from main_app.services.metrics import objective_value
-from main_app.services.optimize import evaluate_fixed_params, grid_from_schema, run_experiment
+from main_app.services.optimize import evaluate_fixed_params, grid_from_schema, run_experiment, with_risk_overrides
 from main_app.services.promotion import (promote, refresh_qualification, research_evidence_passes,
                                          walk_forward_evidence_passes)
 
@@ -130,6 +130,7 @@ class Command(BaseCommand):
             exp = Experiment.objects.create(strategy_key=row.key, method='walk_forward',
                                             param_grid=research_grid(row),
                                             strategy_timeframe=own_timeframe(row, tf),
+                                            risk_overrides=row_risk(row),
                                             symbols=row.symbols, timeframe=tf, start=start, end=end, objective='profit_factor',
                                             min_trades=10, windows={'train_days': train, 'test_days': test})
             try:
@@ -146,8 +147,8 @@ class Command(BaseCommand):
             # Champion and candidate are evaluated on the exact same final
             # held-out window. The stitched adaptive result remains useful as
             # a diagnostic, but cannot justify installing one static config.
-            spec = spec_from_models(row.key, row.params, row.symbols, tf, cfg,
-                                    strategy_timeframe=own_timeframe(row, tf))
+            spec = with_risk_overrides(spec_from_models(row.key, row.params, row.symbols, tf, cfg,
+                                                        strategy_timeframe=own_timeframe(row, tf)), row_risk(row))
             frames = load_frames(row.symbols, tf, start, end)
             bench = load_frames([spec.benchmark_symbol], tf, start, end).get(spec.benchmark_symbol)
             if bench is not None and len(bench) == 0:

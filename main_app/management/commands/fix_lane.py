@@ -34,7 +34,7 @@ from django.utils import timezone
 
 from main_app.models import AgentConfig, Experiment, JournalEntry, Account, Market, Strategy
 from main_app.services.backtest import load_frames, spec_from_models
-from main_app.services.fix_loop import choose_regime, install_if_better, own_timeframe, regime_key
+from main_app.services.fix_loop import choose_regime, install_if_better, own_timeframe, regime_key, row_risk
 from main_app.services.optimize import evaluate_fixed_params, grid_from_schema, run_experiment, with_risk_overrides
 from main_app.services.promotion import promote
 from main_app.services.strategies.base import ENTRY_SESSIONS
@@ -217,7 +217,8 @@ class Command(BaseCommand):
             # The champion is what is trading: the current params at the current timeframe.
             spec = with_risk_overrides(
                 spec_from_models(row.key, row.params, row.symbols, exp.timeframe, cfg,
-                                 strategy_timeframe=own_timeframe(row, exp.timeframe)), exp.risk_overrides)
+                                 strategy_timeframe=own_timeframe(row, exp.timeframe)),
+                {**(exp.risk_overrides or {}), **row_risk(row)})
             frames = load_frames(row.symbols, exp.timeframe, exp.start, exp.end)
             champion = evaluate_fixed_params(spec, frames, [window], row.params)['metrics']
         verdict, should_promote = comparable_verdict(exp.best_params or {}, row.params,

@@ -154,6 +154,17 @@ def volume_rule(ctx: Context, relvol, threshold: float) -> Rule:
     return Rule('volume', ok, text, value=value, threshold=float(threshold))
 
 
+def set_own_hold(strat: 'Strategy', minutes) -> bool:
+    """Give a strategy its own max hold (None leaves the lane's). Returns False for
+    a strategy that pins its hold itself (news_catalyst keeps its graded race)."""
+    if minutes is None:
+        return True
+    if isinstance(getattr(type(strat), 'max_hold_minutes', None), property):
+        return False
+    strat.max_hold_minutes = int(minutes)
+    return True
+
+
 def entry_session_param() -> Param:
     return Param('entry_session', 'choice', 'all', choices=tuple(ENTRY_SESSIONS), search=False,
                  help='Entry window in ET: all, skip_asia (none 19:00–02:59), london_ny (03:00–11:59 only)')

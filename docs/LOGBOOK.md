@@ -5,6 +5,88 @@ records the observed problem, its cause, what changed, how it was verified,
 and what remains unproven. A green test suite means the software behaves as
 specified; it does **not** mean a trading strategy is profitable.
 
+## Release 1.74 (2026-10-06) — Degen on slow bars
+
+Status: researched. Degen ema_momentum v2 is installed at **4Hour with its own
+1440-minute hold**. Burst keeps the lane's 180. 1Day was not installed. The
+cause being tested: a 50 bps round trip beats every short-term degen setup, so
+slow bars were tried, where 50 bps is small next to the move.
+
+### Context (adaptive OOS, ema_momentum, 25 bps a side, 20 random combos a window)
+
+- 4Hour, resampled from 1Hour (2024-10..2026-10, train 180 d / test 60 d):
+  hold 1 d made 95 trades, +$3.46, PF 1.00, with fees of $539.71. That is a
+  real gross edge of about +$543 that costs consumed entirely. Hold 3 d:
+  −$768.59, PF 0.52. Hold 7 d: −$330.10, PF 0.81.
+- 1Day, native bars (2021-01..2026-10, train 365 d / test 120 d, 14 windows):
+  hold 1 d made 50 trades, −$1.33, PF 1.00. **Hold 3 d: 38 trades, +$273.97,
+  PF 1.71. Hold 7 d: 43 trades, +$337.51, PF 1.61.** These are the first
+  positive OOS degen results, but the samples are small and the two most recent
+  windows lost money in both.
+- First 1Day run: ema_momentum's `bar_pos < 2` gate refused every daily bar
+  (each is its own session), so the 1Day walk-forward traded 0 of 14 windows.
+  The gate now applies only below 1440 minutes; the intraday gate is unchanged.
+  Burst was not tested: its percent grid is calibrated for minute bars.
+- Parity, the latest pick at 1Day: native vs resampled from 15Min
+  (2025-11..2026-10) gave 27 of 28 identical entries, net +$618.93 vs
+  +$576.30. Native vs resampled from 1Hour (2024-10..2026-10) gave 50 of 50
+  identical, net +$829.21 vs +$709.21.
+
+### Decision (like-for-like, on the windows both versions can host)
+
+The 15Min history starts 2025-11, so only windows 13 (2025-12-11..2026-04-09)
+and 14 (2026-04-10..2026-08-07) can host the current degen ema at 15Min.
+
+| | trades | net | PF |
+|---|---|---|---|
+| 1Day procedure, hold 3 d | 11 | −195.01 | 0.178 |
+| 1Day procedure, hold 7 d | 11 | −258.95 | 0.109 |
+| current ema v1 @15Min, lane hold 180 | 212 | −2,654.66 | 0.275 |
+
+The procedure lost far less but had the worse PF, so it failed the net-and-PF
+test. **Not installed.** The full 14-window result is context only. Note also
+what the current version does at full size: −$2,654.66 over those eight months.
+
+### Decision on 4Hour (installed)
+
+The same like-for-like test, on the 4Hour test windows that 15Min bars can host
+(W5–W9, 2025-12-02..2026-09-27): the procedure (each window's own pick, hold
+1 d) made 59 trades, −$79.55, PF 0.94, with fees of $383.46. The current
+ema v1 @15Min (lane hold 180) made 281 trades, −$3,359.99, PF 0.319. It beats
+current on both net and PF, so the latest pick (fast 7, slow 31, rsi 60–75,
+stop 1.0 ATR, rr 4.0, min_relvol 1.5) is installed as v2 @4Hour with its own
+hold of 1440 (`Strategy.max_hold_minutes`, a new per-row hold; None means the
+lane's). It is still negative, so this is the never-stop rule replacing a
+version that is far worse, not proof of an edge. Parity: resampled to 4Hour
+from the 15Min base vs from the 1Hour base gave 41 of 41 identical entries
+(net +$185.42 vs +$195.98). Warm-up: the agent loads 800 base bars; the
+strategy needs 640.
+
+### Maker-entry cost estimate (item 10.2, estimate only, nothing built)
+
+Alpaca crypto, at our volume (under $100k over 30 days): **15 bps maker, 25 bps
+taker**. A resting order is a maker; a market or marketable limit is a taker.
+The 4Hour hold-1d result was replayed exactly (95 trades, gross +543.16, fees
+539.71, net +3.46; exits: 58 time, 20 stop, 9 signal, 8 target). Each trade was
+then re-priced with a limit entry at the decision price that fills only if a
+1Hour bar trades strictly through it. It is charged taker if marketable on
+arrival, and the trade is skipped if it never fills.
+
+| entry / exit | filled | net |
+|---|---|---|
+| taker / taker (today) | 95 | +3.46 |
+| maker, always fills (fee saving only) | 95 | +111.13 |
+| maker, 1 h to fill / taker | 84 | +153.66 |
+| maker, 4 h to fill / taker | 88 | +106.94 (the 7 missed trades were winners, +37.80: adverse selection) |
+| maker, 4 h / maker exits on targets | 88 | +115.62 |
+
+It flips positive, but the edge is thin: roughly 10–14 bps a trade on $1,133
+average notional, from one 2-year walk-forward. The bar-level trade-through
+model is optimistic for Alpaca's sparse crypto venue, where queue position and
+missed prints are not modelled. A build (opt-in limit entries with a time
+limit, maker/taker fees by fill type, a strict trade-through rule, an expired
+card state, and the Alpaca limit path) is estimated at 1–1.5 days. Not started.
+
 ## Release 1.73 (2026-10-06) — A strategy's own timeframe inside a lane
 
 Status: built, reviewed, and applied to forex ema_momentum (v3 @1Hour). Unproven.

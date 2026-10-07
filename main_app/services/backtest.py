@@ -15,6 +15,7 @@ from .engine import Engine, EngineConfig, MemoryRecorder
 from .metrics import compute_metrics, downsample_equity
 from .risk import RiskConfig, RiskManager
 from .strategies import make_strategy
+from .strategies.base import set_own_hold
 
 
 @dataclass
@@ -34,6 +35,7 @@ class BacktestSpec:
     # The strategy's own timeframe when coarser than `timeframe` (the lane's base):
     # its bars are resampled causally from the base bars, exactly as live does it.
     strategy_timeframe: str = ''
+    strategy_max_hold: int | None = None      # the strategy's own max hold; None = risk.max_hold_minutes
 
 
 @dataclass
@@ -59,6 +61,7 @@ def run_backtest(spec: BacktestSpec, frames: dict[str, pd.DataFrame],
         for item in spec.params.get('strategies', []):
             st = make_strategy(item['key'], item.get('params'))
             st.timeframe = item.get('timeframe', '') or ''
+            set_own_hold(st, item.get('max_hold_minutes'))
             strategies.append(st)
             allocations[st.key] = float(item.get('allocation_pct', 100))
             if item.get('symbols'):
@@ -66,6 +69,7 @@ def run_backtest(spec: BacktestSpec, frames: dict[str, pd.DataFrame],
     else:
         strategies = [make_strategy(spec.strategy_key, spec.params)]
         strategies[0].timeframe = spec.strategy_timeframe or ''
+        set_own_hold(strategies[0], spec.strategy_max_hold)
     frames = {s: df for s, df in frames.items()
               if len(df) and any(st.supports(spec.asset_classes.get(s, 'stock')) for st in strategies)}
     broker = SimBroker(spec.starting_cash, immediate_fills=False, slippage_bps=spec.risk.slippage_bps,
@@ -114,7 +118,8 @@ def date_bounds(start: date, end: date) -> tuple[datetime, datetime]:
 # --- Django side ---------------------------------------------------------
 
 def spec_from_models(strategy_key: str, params: dict, symbols: list, timeframe: str, cfg,
-                     starting_cash=None, strategy_timeframe: str = '') -> BacktestSpec:
+                     starting_cash=None, strategy_timeframe: str = '',
+                     strategy_max_hold: int | None = None) -> BacktestSpec:
     from main_app.models import Instrument, market_for_symbols
     instruments = {i.symbol: i for i in Instrument.objects.filter(symbol__in=symbols)}
     # The lane's own limits and cost model (leverage and spread for forex, the
@@ -129,6 +134,7 @@ def spec_from_models(strategy_key: str, params: dict, symbols: list, timeframe: 
         asset_classes={s: instruments[s].asset_class for s in symbols if s in instruments},
         qty_increments={s: float(instruments[s].qty_increment) for s in symbols if s in instruments},
         strategy_timeframe=strategy_timeframe or '',
+        strategy_max_hold=strategy_max_hold,
     )
 
 
@@ -155,7 +161,7 @@ def run_backtest_for_model(run) -> None:
     run.save(update_fields=['status'])
     try:
         spec = spec_from_models(run.strategy_key, run.params, run.symbols, run.timeframe, cfg, run.starting_cash,
-                                strategy_timeframe=run.strategy_timeframe)
+                                strategy_timeframe=run.strategy_timeframe, strategy_max_hold=run.strategy_max_hold)
         frames = load_frames(run.symbols, run.timeframe, run.start, run.end)
         bench = None
         if spec.benchmark_symbol not in frames:
@@ -184,6 +190,7 @@ def persist_result(run, spec: BacktestSpec, result: BacktestResult, max_trades: 
                            'liquidity_cap_pct': spec.liquidity_cap_pct,
                            'liquidity_cap_by_class': dict(LIQUIDITY_CAP_BY_CLASS),
                            'strategy_timeframe': spec.strategy_timeframe,
+                           'strategy_max_hold': spec.strategy_max_hold,
                            'starting_cash': spec.starting_cash}
     run.status = 'done'
     run.duration_s = result.duration_s

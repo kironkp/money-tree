@@ -712,6 +712,9 @@ class Strategy(models.Model):
     # The strategy's own timeframe. '' follows the lane's base (and moves with it);
     # an explicit whole multiple of the base runs on bars resampled from it.
     timeframe = models.CharField(max_length=8, blank=True, default='')
+    # The strategy's own max hold, in minutes; None uses the lane's. A daily-scale
+    # strategy must not stretch the lane's hold for everything else in it.
+    max_hold_minutes = models.PositiveIntegerField(null=True, blank=True)
     allocation_pct = models.DecimalField(max_digits=6, decimal_places=2, default=Decimal('100'))
     stage = models.CharField(max_length=8, choices=Stage.choices, default=Stage.SEED)
     # Enabled controls whether a strategy may be observed at its stage.
@@ -803,6 +806,7 @@ class BacktestRun(models.Model):
     symbols = models.JSONField(default=list, blank=True)
     timeframe = models.CharField(max_length=8, default='5Min')
     strategy_timeframe = models.CharField(max_length=8, blank=True, default='')  # '' = `timeframe`
+    strategy_max_hold = models.PositiveIntegerField(null=True, blank=True)        # None = the lane's
     start = models.DateField()
     end = models.DateField()
     starting_cash = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal('10000'))

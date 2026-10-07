@@ -78,13 +78,19 @@ def traded_windows(exp) -> list[dict]:
         int(w.get('step_days', 0)) or None) if x['n'] in traded]
 
 
+def row_risk(row: Strategy) -> dict:
+    """The row's own risk values for research: its max hold, when it has one."""
+    return {'max_hold_minutes': int(row.max_hold_minutes)} if row.max_hold_minutes else {}
+
+
 def own_timeframe(row: Strategy, base: str) -> str:
     """The row's strategy timeframe as a spec wants it: '' when it is the base."""
     tf = (row.timeframe or '').strip()
     return '' if tf in ('', base) else tf
 
 
-def compare_on_oos(exp, current_params: dict, cfg, current_timeframe: str | None = None) -> dict:
+def compare_on_oos(exp, current_params: dict, cfg, current_timeframe: str | None = None,
+                   current_risk: dict | None = None) -> dict:
     """The procedure's adaptive OOS against the current params, fixed, under the
     same regime on the same windows: the ones the procedure traded. The current
     params run at the CURRENT strategy timeframe, which may differ from the
@@ -95,7 +101,8 @@ def compare_on_oos(exp, current_params: dict, cfg, current_timeframe: str | None
         return {'current': {}, 'procedure': _subset(procedure), 'beats': False, 'windows': 0}
     tf = exp.strategy_timeframe if current_timeframe is None else current_timeframe
     spec = with_risk_overrides(spec_from_models(exp.strategy_key, {}, exp.symbols, exp.timeframe, cfg,
-                                                strategy_timeframe=tf), exp.risk_overrides)
+                                                strategy_timeframe=tf),
+                               {**(exp.risk_overrides or {}), **(current_risk or {})})
     frames = load_frames(exp.symbols, exp.timeframe, exp.start, exp.end)
     current = evaluate_fixed_params(spec, frames, windows, current_params)['metrics']
     beats = (float(procedure.get('net_pnl', 0) or 0) > float(current.get('net_pnl', 0) or 0)
@@ -115,7 +122,7 @@ def install_if_better(row: Strategy, exp, cfg, current_params: dict | None = Non
         return 'no fix found — the walk-forward produced no candidate', {}
     current_tf = own_timeframe(row, exp.timeframe)
     new_tf = exp.strategy_timeframe or ''
-    cmp = compare_on_oos(exp, current, cfg, current_timeframe=current_tf)
+    cmp = compare_on_oos(exp, current, cfg, current_timeframe=current_tf, current_risk=row_risk(row))
     c, k = cmp['procedure'], cmp['current']
     line = (f'selection procedure net {c.get("net_pnl", 0):+,.2f} PF {c.get("profit_factor", 0):.2f} '
             f'(adaptive OOS, {c.get("trades", 0)} trades) vs current net {k.get("net_pnl", 0):+,.2f} '

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import fcntl
 import logging
+import math
 import os
 import signal
 import time
@@ -38,6 +39,7 @@ from .ledger import D as D_, DBRecorder, hydrate_broker, hydrate_cards, open_ord
 from .narrator import Narrator
 from .risk import RiskConfig, RiskManager
 from .strategies import make_strategy
+from .strategies.base import set_own_hold
 from .timeframes import floor_to_bar, tf_delta, tf_minutes
 
 log = logging.getLogger('moneytree.agent')
@@ -146,6 +148,8 @@ class Agent:
             # Blank or the lane's own timeframe means base; a whole multiple runs on
             # bars resampled from the lane's feed (the engine checks and falls back).
             strat.timeframe = (row.timeframe or '').strip()
+            if not set_own_hold(strat, row.max_hold_minutes):
+                log.warning('%s pins its own hold; the row\'s max_hold_minutes is ignored', row.key)
             # Only a live loop may read the News Agent's verdicts. A backtest that
             # could see them would be reading answers written after the bar.
             strat.live = self.mode != Mode.REPLAY
@@ -836,7 +840,12 @@ class Agent:
         from .journal import write_eod_journal
         d = self.replay_date
         a, b = date_bounds(d, d)
-        warm_start = a - timedelta(days=5 if tf_minutes(self.timeframe) < 60 else 30)
+        # Enough history for the slowest strategy's warm-up in ITS bars (a 4Hour
+        # strategy on a 15Min lane needs days, not the hours its base bars cover).
+        need_days = max([5 if tf_minutes(self.timeframe) < 60 else 30]
+                        + [math.ceil((st.warmup_bars + 10) * tf_minutes(self.engine.timeframes[st.key]) / 1440)
+                           for st in self.strategies])
+        warm_start = a - timedelta(days=need_days)
         frames = {}
         for s, inst in self.instruments.items():
             df = load_frame(inst, self.timeframe, warm_start, b)

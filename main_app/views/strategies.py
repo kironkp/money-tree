@@ -146,6 +146,7 @@ def strategy_backtest(request, market, key):
     # The lane's base bars, with the strategy on its own timeframe — as auto_research and live run it.
     run = BacktestRun.objects.create(strategy_key=key, params=row.params, symbols=row.symbols, timeframe=base,
                                      strategy_timeframe=own_timeframe(row, base),
+                                     strategy_max_hold=row.max_hold_minutes,
                                      start=end - timedelta(days=days), end=end, starting_cash=cfg.starting_cash,
                                      tag=f'{row.key} v{row.version}')
     try:

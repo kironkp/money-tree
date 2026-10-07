@@ -233,28 +233,28 @@ class Command(BaseCommand):
         # Each live row is replayed as the lane runs it — the lane's base bars, the
         # strategy on its own timeframe ('' follows the base) — with the forex
         # lane's own RiskConfig and no H10 overrides. That is what "baseline" means.
-        base = AgentConfig.get().forex_timeframe
-        tf_frames = frames if base == H10_TIMEFRAME else research_frames(H10_PAIRS, base, window)
+        lane_tf = AgentConfig.get().forex_timeframe
+        tf_frames = frames if lane_tf == H10_TIMEFRAME else research_frames(H10_PAIRS, lane_tf, window)
         for row in Strategy.objects.filter(market='forex', enabled=True).order_by('key'):
-            own = own_timeframe(row, base)
+            own = own_timeframe(row, lane_tf)
             tr, sl = run_window(row.key, dict(row.params), {}, tf_frames, start, end,
-                                timeframe=base, pairs=H10_PAIRS, strategy_timeframe=own)
+                                timeframe=lane_tf, pairs=H10_PAIRS, strategy_timeframe=own)
             m = _measure(tr, sl)
-            m['timeframe'] = own or base
+            m['timeframe'] = own or lane_tf
             m['risk'] = 'forex lane live RiskConfig'
             # A baseline that cannot reach the window start is not a baseline for
             # this window, and saying so is the whole point of printing it.
             cov = coverage(tf_frames, start, end)
             m['coverage'] = cov
-            gaps = coverage_gaps(cov, start, base)
+            gaps = coverage_gaps(cov, start, lane_tf)
             m['coverage_gaps'] = gaps
             result['baselines'][row.key] = m
-            self._row(f'{row.key} ({own or base}, live risk)', m)
+            self._row(f'{row.key} ({own or lane_tf}, live risk)', m)
             for sym, c in sorted(cov.items()):
                 self.stdout.write(f'        {sym:9} {c["bars"]:5} bars  '
                                   f'{(c["first"] or "-")[:16]} .. {(c["last"] or "-")[:16]}')
             for g in gaps:
-                self.stdout.write(w(f'        WARNING {base} does not cover the window '
+                self.stdout.write(w(f'        WARNING {lane_tf} does not cover the window '
                                     f'start — {g}'))
             if gaps:
                 self.stdout.write(w('        this baseline measured a SHORTER window than H10 '

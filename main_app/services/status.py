@@ -64,7 +64,12 @@ def build_status(account: Account, cfg: AgentConfig, run) -> dict:
     if run and run.last_bar_ts:
         bar_age = (now - (run.last_bar_ts + tf)).total_seconds()
     market_open = account.is_open_at(now)
-    if run and market_open and (bar_age is None or bar_age > 2 * tf.total_seconds()):
+    # Only time the feed was due counts as late. At a lane's open the last bar
+    # is the previous session's, and Yahoo's forex bars resume two hours after
+    # the forex market does.
+    due = cal.feed_resumes_at(now, account.lane_asset_class)
+    late = bar_age if bar_age is None or due is None else min(bar_age, (now - due).total_seconds())
+    if run and market_open and (late is None or late > 2 * tf.total_seconds()):
         operational_blockers.append('market data is stale' if bar_age is not None else 'no completed bar seen yet')
     # reconciliation
     rec_age = _age(account.last_reconcile_at)

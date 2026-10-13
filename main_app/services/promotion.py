@@ -146,6 +146,7 @@ def live_stats(row: Strategy, account: Account | None, days: int = 60) -> dict:
     slips = [float(x) for x in fills]
     return {
         'trades': n, 'sessions': sessions, 'net_pnl': sum(pnls), 'win_rate': (len(wins) / n * 100) if n else 0.0,
+        'gross_loss': gross_loss,
         'profit_factor': (gross_win / gross_loss) if gross_loss else (gross_win if gross_win else 0.0),
         'expectancy': (sum(pnls) / n) if n else 0.0, 'max_drawdown_pct': max_dd,
         'slippage_median_bps': median(slips) if slips else None, 'last_20_expectancy': (sum(pnls[-20:]) / min(n, 20)) if n else 0.0,
@@ -322,3 +323,50 @@ def graduation_checklist(row: Strategy, account: Account | None, cfg: AgentConfi
     return {'stage': row.stage, 'stage_label': STAGE_LABEL[row.stage], 'next': nxt,
             'next_label': STAGE_LABEL[nxt] if nxt else None, 'items': items,
             'ready': all(i['ok'] for i in items) and nxt is not None, 'stats': stats, 'baseline': base}
+
+
+# What a row at each stage graduates INTO, in the words the owner asked in.
+READY_FOR = {Stage.SAPLING: 'real money', Stage.SPROUT: 'Alpaca paper'}
+
+
+def readiness(cfg: AgentConfig | None = None) -> dict:
+    """Which rows pass every graduation check today and, failing that, the closest.
+
+    Ready has one definition, `graduation_checklist`, read against the account
+    the row's own stage trades on. Read-only: an account that does not exist is
+    not created here, and the checklist reads it as no forward trades.
+
+    "Closest" is the best forward profit factor among rows that have closed a
+    trade, not the most boxes ticked. A quarantined row ticks the trade-count
+    box precisely because it lost for long enough. A row with fewer forward
+    trades than research itself asks for is considered only when no row has
+    that many: one early winner is not a record.
+    """
+    cfg = cfg or AgentConfig.get()
+    ready, traded = [], []
+    for stage, into in READY_FOR.items():
+        for row in Strategy.objects.filter(stage=stage).order_by('market', 'key'):
+            account = Account.objects.filter(mode=STAGE_ACCOUNT_MODE[stage], market=row.market).first()
+            check = graduation_checklist(row, account, cfg)
+            stats = check['stats']
+            step = into
+            if row.market == 'forex':
+                # The agent refuses forex on paper and live: no broker adapter.
+                step = f'{"paper" if stage == Stage.SPROUT else into} (no forex broker yet)'
+            entry = {'row': row, 'label': f'{row.market} {row.key}', 'step': step, 'check': check,
+                     # Shown, never hidden: a disabled row can still pass or be closest.
+                     'parked': not row.enabled,
+                     'trades': stats['trades'], 'profit_factor': stats.get('profit_factor', 0.0),
+                     # live_stats reports the gross win as the profit factor when
+                     # nothing has lost a dollar yet, which is dollars, not a ratio.
+                     # A scratch trade is not a loss, and a row of nothing but
+                     # scratches has not won either: it keeps its PF of 0.00.
+                     'unbeaten': (bool(stats['trades']) and stats.get('gross_loss') == 0
+                                  and stats.get('profit_factor', 0.0) > 0)}
+            if check['ready']:
+                ready.append(entry)
+            elif stats['trades']:
+                traded.append(entry)
+    closest = max(traded, key=lambda e: (e['trades'] >= RESEARCH_REQUIREMENTS['trades'], e['unbeaten'],
+                                         e['profit_factor'], e['trades']), default=None)
+    return {'ready': ready, 'closest': closest}

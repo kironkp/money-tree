@@ -38,10 +38,13 @@ branch=$("$GIT" rev-parse --abbrev-ref HEAD)
 [ "$branch" = 'main' ] || say "note: on branch $branch, not main"
 
 # --- research upkeep, before the backup so tonight's snapshot carries it ------
-# maintain_bars refreshes the 1Hour forex series that no agent trades (it stopped
-# dead for 17 days and nothing noticed, because staleness was only ever checked
-# for series something was actively trading). h10_shadow then appends H10's newly
-# completed forward round trips to docs/h10-shadow.json.
+# maintain_bars refreshes the series research reads and no agent writes: the 1Hour
+# forex frames H10 is measured on (they stopped dead for 17 days and nothing
+# noticed, because staleness was only ever checked for series something was
+# actively trading), and the SIP copy of the stocks lane's bars that the nightly
+# walk-forwards backtest on (the live loop writes only IEX, so it stopped for 25
+# days). h10_shadow then appends H10's newly completed forward round trips to
+# docs/h10-shadow.json.
 #
 # Neither places an order, writes a Strategy row, or changes a risk limit.
 #

@@ -212,7 +212,12 @@ def _check_limits(ctx: Ctx, rec) -> None:
 
 
 def _check_stale_data(ctx: Ctx, rec) -> None:
-    """Bars that stopped arriving while the market was open."""
+    """Bars that stopped arriving while the market was open.
+
+    Only time the feed was due counts. At a lane's open the newest bar is the
+    previous session's last one, and reading the night or the weekend as its age
+    halted forex every Sunday and stocks every morning on a feed that was fine.
+    """
     from main_app.models import Bar
     from main_app.services.data import calendar as cal
     ac = ctx.account.lane_asset_class
@@ -226,19 +231,40 @@ def _check_stale_data(ctx: Ctx, rec) -> None:
                    'The lane has no price history. Nothing may be traded on it.',
                    account=ctx.account, fp_parts=('stale_data', ctx.account.pk, 'none'))
         return
-    age_min = (ctx.now - newest[0]).total_seconds() / 60
+    due = cal.feed_resumes_at(ctx.now, ac)
+    waiting = due is not None and newest[0] < due      # no bar yet this session
+    since = due if waiting else newest[0]
+    age_min = (ctx.now - since).total_seconds() / 60
     tfm = _lane_bar_minutes(ctx.account)
     allowed = tfm * STALE_BARS_ALLOWED
-    if age_min > allowed:
-        rec.record('stale_data', ReviewFinding.CRITICAL,
-                   f'newest bar is {age_min:.0f} min old on a {tfm:g}-minute lane while the market is open',
-                   f'Latest bar {newest[1]} at {newest[0]:%Y-%m-%d %H:%M}, which is {age_min / tfm:.1f} bars ago '
-                   f'against an allowance of {STALE_BARS_ALLOWED}. Decisions taken on data this old are taken '
-                   f'on a price that no longer exists.',
-                   account=ctx.account,
-                   evidence={'age_min': round(age_min, 1), 'bars_late': round(age_min / tfm, 1),
-                             'timeframe_min': tfm, 'symbol': newest[1]},
-                   fp_parts=('stale_data', ctx.account.pk, int(age_min // max(1, allowed))))
+    if age_min <= allowed:
+        if waiting:
+            # Not late, and not seen either. With no bar from this session the
+            # check has confirmed nothing, so it may not close a finding the
+            # last session left open.
+            ctx.skip('stale_data', 'no bar yet this session, within the allowance')
+        return
+    bucket = int(age_min // max(1, allowed))
+    if waiting:
+        # Its own fingerprint. The bucket restarts from the feed-due time, so
+        # without the marker a late Monday would reopen some old mid-session
+        # finding and carry that row's title into the halt reason.
+        fp = ('stale_data', ctx.account.pk, 'due', bucket)
+        title = f'no bar {age_min:.0f} min after the feed was due on a {tfm:g}-minute lane'
+        detail = (f'Latest bar {newest[1]} at {newest[0]:%Y-%m-%d %H:%M} is from the previous session. Bars '
+                  f'were due from {due:%Y-%m-%d %H:%M} UTC, which is {age_min / tfm:.1f} bars ago ')
+    else:
+        fp = ('stale_data', ctx.account.pk, bucket)
+        title = f'newest bar is {age_min:.0f} min old on a {tfm:g}-minute lane while the market is open'
+        detail = f'Latest bar {newest[1]} at {newest[0]:%Y-%m-%d %H:%M}, which is {age_min / tfm:.1f} bars ago '
+    rec.record('stale_data', ReviewFinding.CRITICAL, title,
+               f'{detail}against an allowance of {STALE_BARS_ALLOWED}. Decisions taken on data this old are '
+               f'taken on a price that no longer exists.',
+               account=ctx.account,
+               evidence={'age_min': round(age_min, 1), 'bars_late': round(age_min / tfm, 1),
+                         'timeframe_min': tfm, 'symbol': newest[1],
+                         'measured_from': 'feed_due' if waiting else 'newest_bar'},
+               fp_parts=fp)
 
 
 def _lane_bar_minutes(account: Account) -> float:

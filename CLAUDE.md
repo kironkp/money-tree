@@ -450,6 +450,78 @@ Started from "all lanes show $0". Detail in `docs/LOGBOOK.md`.
   v1.73's tag points at a commit with two erroring provenance tests that v1.74
   fixed.
 
+## 2026-10-12 — systems check: false halts, stale stock history
+
+Unreleased, on top of v1.74 (no version bump, no tag). Started from a full
+systems check; three of four lanes had been halted on bars that were fresh.
+
+- **A check's silence is judged per lane.** `run_operational` kept one `skipped`
+  set for the whole run, so stocks skipping `stale_data` outside its session
+  stopped forex, crypto and degen from closing their own findings: all three sat
+  halted on fresh bars until the first run after the stock open (2026-10-12
+  13:31 UTC). A check may now close a lane's findings only if it looked at that
+  lane — not skipped there, not crashed there.
+- **Staleness counts only time the feed was due.** `_check_stale_data` measures
+  from the later of the newest bar and `cal.feed_resumes_at()`. Before a
+  session's first bar it skips rather than passes (not late is not seen, so it
+  closes nothing); three bars of silence after the feed was due still halts,
+  under its own fingerprint (`'due'`) so it never reopens an old mid-session row
+  and borrows that row's title for the halt reason.
+- **The Yahoo forex feed resumes two hours after the forex market opens.** The
+  calendar opens Sunday 17:00 ET; the first bar is Monday 00:00 Europe/London
+  (108 of 109 weekends since 2024-09, three hours in the weeks the clocks
+  disagree). `calendar.YAHOO_FOREX_REOPEN` is a property of Yahoo, not of forex:
+  a broker feed needs its own. The agent still treats the lane as open from
+  17:00 ET and polls for bars that cannot exist yet — harmless, left alone.
+- **Stock research reads SIP, and now something refreshes it.** The live loop
+  writes only IEX, so the SIP copy stopped on 2026-09-17 and experiments
+  #444–447 ran with no bars for the last 25 days of their window.
+  `maintain_bars.research_series()` adds every stocks strategy's symbols,
+  enabled or not (auto_research walks them all), at the lane base to the 02:00
+  refresh (provider `alpaca`); backfilled 2026-10-12, 11,754 bars.
+- **The freshness report judges the copy research reads.** For a research
+  series it takes `best_source`'s copy and compares it with `cal.last_close()`,
+  the last completed session, market open or shut; a research series with no
+  bars at all prints as `STALE (no bars at all)`. Summed across feeds, a fresh
+  IEX copy had hidden the dead SIP one, and the 02:00 run never sees the stock
+  market open. Every other series is still judged on the wall clock while its
+  market is open — do not move that branch to `feed_resumes_at`: tried, and 90
+  long-dead series read "ok" because lateness restarted at each session open.
+- **"Read" means the lane's base timeframe.** An enabled strategy reads
+  `timeframe_for(market)` whatever `Strategy.timeframe` says ('' follows the
+  lane, a coarse one resamples from base). Keyed on the literal field, no lane
+  base had counted as read since v1.73.
+- The status strip's "market data is stale" blocker counts only time the feed
+  was due (`cal.feed_resumes_at`). Tests that depend on market hours pin the
+  clock: `test_maintain_bars` on the real clock failed every Sunday CI run.
+- **The evening report says when a strategy can take its next step.** One line
+  under the header every day, text and HTML: the rows that pass every graduation
+  check and what they are ready for, or "Real money: nothing ready" plus the
+  closest row (trades toward 30, forward PF, and the step it is short of). While
+  a row is ready the subject leads with it — "READY for Alpaca paper: …" for
+  Sprout, "READY for real money: …" for Sapling — every evening until an
+  operator promotes it. Nothing records that it was said; the state is the row
+  itself. The report never promotes.
+- Ready has one definition, `promotion.graduation_checklist`.
+  `promotion.readiness()` walks Sprout and Sapling rows against the account for
+  that stage's mode and never creates one. "Closest" is the best forward profit
+  factor among rows with at least 10 forward trades (thinner samples only when
+  none has 10), not the most checks passed: a quarantined row passes the
+  trade-count check by losing for long enough. A disabled row is shown as
+  "(parked)"; a forex row is "paper (no forex broker yet)". If the walk fails
+  the line reads "Real money: status unavailable" and the report still goes out.
+- Three things send mail, all to `REPORT_EMAIL`: `daily_report`,
+  `review/findings.alert()` and allauth. The first two use
+  `EmailMultiAlternatives`, which a grep for `send_mail`/`EmailMessage` misses.
+- **Still open.** A STALE line reaches nobody: `maintain_bars` exits 0, the push
+  log says "bar refresh ok", and the diagnosis does not read
+  `run/research-upkeep.log`. `check_crashed` is in `HALTING_CHECKS` and in no
+  `RAISES` list, so one crashed check halts its lane until an operator clears
+  it. The public funnel name in v1.40 stopped resolving: the node's tailnet name
+  is now `kironkps-macbook-pro-15`, and the funnel config and `FUNNEL_HOST`
+  still say `-2`. The machine was off 2026-10-07 20:12 → 10-10 23:54 PT and
+  nothing off the machine noticed.
+
 ## Daily diagnosis (06:30)
 
 `deploy/daily-diagnosis.sh` + `com.kiron.moneytree.diagnosis.plist`: ONE
@@ -533,8 +605,9 @@ First epoch: 2026-09-19, closing -$4,086.24 over 450 trades.
   walk-forward had been fitting to a window ending 16 days earlier while the
   dashboard looked current. `store.covering_frame` picks the freshest feed that
   covers the window and is the right call for anything asking about now; a
-  backtest still wants SIP, which means SIP has to be kept current. Sync stock
-  history at least weekly.
+  backtest still wants SIP, which means SIP has to be kept current. Since
+  2026-10-12 `maintain_bars` refreshes it at 02:00 for every stocks strategy's
+  symbols; before that it was a manual weekly sync that nobody ran for 25 days.
 
 - **News grading never follows lane config.** `news_risk.GRADE_HOLD_MINUTES`
   pins each lane's barrier-race horizon at its preregistered value; changing a
@@ -551,7 +624,8 @@ First epoch: 2026-09-19, closing -$4,086.24 over 450 trades.
 - Session times come from offsets before the close (early closes, DST safe).
 - Crypto: no brackets, no shorts, 25 bps taker fees, sessions at 00:00 UTC,
   positions age out via `max_hold_minutes`. Forex: sessions roll 17:00 ET, the
-  week closes Friday 17:00 ET, leverage 10×, whole units, Yahoo bars only.
+  week closes Friday 17:00 ET, leverage 10×, whole units, Yahoo bars only
+  (the week's first bar is Monday 00:00 London, two hours after the open).
 - `enabled` is permission to observe at the configured stage, not proof.
   Newly seeded rows are disabled until research is deliberately promoted.
   Broker-backed modes must also see `qualification='qualified'`; quarantine is

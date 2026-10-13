@@ -10,7 +10,8 @@ from django.conf import settings
 from django.core.mail import EmailMultiAlternatives
 from django.core.management.base import BaseCommand
 
-from main_app.services.report import WINDOW_LABEL, build_report, render_html, render_text, save_journal
+from main_app.services.report import (WINDOW_LABEL, build_report, readiness_subject, render_html, render_text,
+                                      save_journal)
 
 
 class Command(BaseCommand):
@@ -47,7 +48,8 @@ class Command(BaseCommand):
             self.stderr.write('no mail server configured — not emailed')
             return
         t = rep['total']
-        subject = (f"MoneyTree {rep['date']:%b %-d}: {t['net']:+,.2f} ({WINDOW_LABEL}) · "
+        subject = (readiness_subject(rep)
+                   + f"MoneyTree {rep['date']:%b %-d}: {t['net']:+,.2f} ({WINDOW_LABEL}) · "
                    + ' · '.join(f"{lane['title']} {lane['pnl']['net']:+,.0f}" for lane in rep['lanes']))
         try:
             msg = EmailMultiAlternatives(subject, text, settings.DEFAULT_FROM_EMAIL, [to])

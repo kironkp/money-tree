@@ -11,6 +11,7 @@ the lane traded. A lane that did nothing still has to say why.
 """
 from __future__ import annotations
 
+import logging
 from collections import Counter
 from datetime import date, datetime, timedelta
 from statistics import median
@@ -23,10 +24,12 @@ from main_app.models import (Account, AgentConfig, AgentRun, Experiment, Journal
 from .data import calendar as cal
 from .briefing import latest as latest_briefing
 from .news import digest as news_digest
-from .promotion import baseline_metrics, live_stats, qualification_assessment
+from .promotion import REQUIREMENTS, baseline_metrics, live_stats, qualification_assessment, readiness
 from .spend import day_spend, projected_monthly, range_spend
 from .journal import DRIFT_MIN_TRADES as DRIFT_TRADES
 from .risk import RiskConfig
+
+log = logging.getLogger('moneytree.report')
 
 # Order the owner reads them in. Forex leads because it was the section he had to
 # scroll past everything else to reach.
@@ -465,6 +468,60 @@ def lane_improve(account: Account, d: date, cfg: AgentConfig, learned: list[dict
     return out
 
 
+# --- readiness --------------------------------------------------------------
+
+def _readiness() -> dict | None:
+    """The graduation walk, or None when it could not run.
+
+    Never raises: this is one line of the report, and the report has to be
+    built and sent without it.
+    """
+    try:
+        return readiness()
+    except Exception:
+        log.exception('readiness walk failed; the report says so and goes out anyway')
+        return None
+
+
+def _ready_by_step(found: dict, versions: bool) -> str:
+    by_step = {}
+    for e in found['ready']:
+        by_step.setdefault(e['step'], []).append(e['label'] + (f" v{e['row'].version}" if versions else '')
+                                                 + (' (parked)' if e['parked'] else ''))
+    return ' · '.join(f"READY for {step}: {', '.join(names)}" for step, names in by_step.items())
+
+
+def readiness_line(rep: dict) -> str:
+    """One line, every evening: what could take the next step, or how far off the closest row is."""
+    found = rep.get('readiness')
+    if found is None:
+        return 'Real money: status unavailable (the readiness check failed; see run/report.log).'
+    if found['ready']:
+        return (_ready_by_step(found, versions=True) + '. Every graduation check passes; '
+                'promoting is still a manual step on the strategy page.')
+    c = found['closest']
+    if c is None:
+        return 'Real money: nothing ready. No Sprout or Sapling strategy has closed a trade yet.'
+    row = c['row']
+    state = [row.stage, row.get_qualification_display().lower()] + (['parked'] if c['parked'] else [])
+    # The step is named because the line opens "Real money": a Sprout row is
+    # short of paper, and paper is a whole stage short of that.
+    record = (f"no losing trade yet on the way to {c['step']}" if c['unbeaten'] else
+              f"PF {c['profit_factor']:.2f} against the {REQUIREMENTS['profit_factor']} it needs for {c['step']}")
+    return (f"Real money: nothing ready. Closest: {c['label']} v{row.version} ({', '.join(state)}): "
+            f"{c['trades']} of {REQUIREMENTS['trades']} trades, {record}.")
+
+
+def readiness_subject(rep: dict) -> str:
+    """Leads the subject while a row is ready, and is empty otherwise.
+
+    It repeats every evening until the operator promotes the row. Nothing
+    records that it was said: the state is the row itself.
+    """
+    found = rep.get('readiness')
+    return _ready_by_step(found, versions=False) + ' · ' if found and found['ready'] else ''
+
+
 # --- assembly --------------------------------------------------------------
 
 def build_report(d: date | None = None, mode: str = Mode.SIM) -> dict:
@@ -497,7 +554,7 @@ def build_report(d: date | None = None, mode: str = Mode.SIM) -> dict:
     if len(epochs) == 1 and (start := epochs.pop()):
         since = f'since the reset on {timezone.localtime(start):%b %-d}'
     return {'date': d, 'mode': mode, 'lanes': lanes, 'generated_at': timezone.now(), 'spend': spend,
-            'since': since,
+            'since': since, 'readiness': _readiness(),
             'total': {'net': total_net, 'trades': total_trades, 'equity': total_equity,
                       'starting_cash': total_start, 'total_pnl': total_equity - total_start}}
 
@@ -510,6 +567,7 @@ def render_text(rep: dict) -> str:
     L.append(f"{WINDOW_LABEL} across all four lanes: {t['net']:+,.2f} on {t['trades']} trades")
     L.append(f"Equity {t['equity']:,.2f} of {t['starting_cash']:,.2f} seeded "
               f"({t['total_pnl']:+,.2f} {rep.get('since', 'lifetime')})")
+    L.append(readiness_line(rep))
     L.append('')
     L.append('  ' + '  '.join(f"{lane['title'].upper():<9}" for lane in rep['lanes']))
     L.append('  ' + '  '.join(f"{lane['pnl']['net']:>+9,.2f}" for lane in rep['lanes']))
@@ -606,6 +664,8 @@ def render_html(rep: dict) -> str:
          f'<div style="color:{DIM};font-size:12px">across all four lanes on {t["trades"]} trade'
          f'{"" if t["trades"] == 1 else "s"} · equity {t["equity"]:,.2f} of {t["starting_cash"]:,.0f} seeded '
          f'· lifetime {t["total_pnl"]:+,.2f}</div>',
+         f'<div style="margin-top:10px;font-size:13px;color:{UP if readiness_subject(rep) else DIM}">'
+         f'{readiness_line(rep)}</div>',
          '</td></tr>']
 
     # The scoreboard: two rows of two, so four lanes fit a phone without scrolling.

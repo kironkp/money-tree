@@ -42,10 +42,12 @@ def run_operational(accounts=None, trigger: str = 'schedule', broker=None,
     rec = Recorder(run)
     accounts = list(accounts if accounts is not None else reviewable_accounts())
     ran, failed, notes, skipped = [], [], [], set()
+    looked = {}                    # account pk -> the checks that looked at THAT lane
     try:
         with readonly_config():
             for account in accounts:
                 ctx = ops.Ctx(account=account, now=now, broker=broker)
+                crashed = set()
                 for name, fn in ops.CHECKS.items():
                     try:
                         fn(ctx, rec)
@@ -53,6 +55,7 @@ def run_operational(accounts=None, trigger: str = 'schedule', broker=None,
                             ran.append(name)
                     except Exception as exc:
                         failed.append(name)
+                        crashed.add(name)
                         log.exception('operational check %s failed on %s', name, account.market)
                         rec.record('check_crashed', ReviewFinding.CRITICAL,
                                    f'the {name} check crashed',
@@ -61,6 +64,8 @@ def run_operational(accounts=None, trigger: str = 'schedule', broker=None,
                                    fp_parts=('check_crashed', account.pk, name))
                 notes += [f'{account.market}: {n}' for n in ctx.notes]
                 skipped |= ctx.skipped
+                looked[account.pk] = [n for n in ops.CHECKS
+                                      if n not in crashed and n not in ctx.skipped]
 
             # Only checks that actually LOOKED may close findings.
             #
@@ -73,9 +78,16 @@ def run_operational(accounts=None, trigger: str = 'schedule', broker=None,
             # lifting the halt. The lane resumed trading against books that still
             # disagreed with the venue. Same shape for stale_data every time the
             # market closes.
-            looked = [n for n in ran if n not in failed and n not in skipped]
-            closable = [k for name in looked for k in ops.RAISES.get(name, [])]
-            closed = rec.sweep_resolved(closable, accounts)
+            #
+            # And "looked" is a fact about one lane, not about the run. It was
+            # one set for every account, so stocks skipping stale_data outside
+            # its session stopped forex, crypto and degen from closing their
+            # own stale_data findings on bars that were fresh: a lane halted on
+            # a Sunday stayed halted until the stock market opened on Monday.
+            closed = []
+            for account in accounts:
+                closable = [k for name in looked[account.pk] for k in ops.RAISES.get(name, [])]
+                closed += rec.sweep_resolved(closable, [account])
 
             halting = [f for f in rec.opened + rec.repeated
                        if f.severity == ReviewFinding.CRITICAL and f.check_key in ops.HALTING_CHECKS]

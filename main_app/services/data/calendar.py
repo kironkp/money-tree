@@ -179,9 +179,72 @@ def forex_week_close(ts: datetime) -> datetime | None:
     return _to_utc(d, FOREX_ROLL)
 
 
+def forex_week_open(ts: datetime) -> datetime | None:
+    """Sunday 17:00 ET of the week containing ts, or None when closed."""
+    if not forex_is_open(ts):
+        return None
+    d = ts.astimezone(ET).date()
+    while d.weekday() != 6:
+        d -= timedelta(days=1)
+    return _to_utc(d, FOREX_ROLL)
+
+
 def forex_day(ts: datetime) -> date:
     """Forex days roll at the New York close: 17:00 ET Sunday already belongs to Monday."""
     return (ts.astimezone(ET) + timedelta(hours=7)).date()
+
+
+# --- when a lane's bars resume, which is not always when its market opens ---
+# The Yahoo forex FEED restarts later than the forex MARKET. Measured on EUR/USD
+# 1Hour, 109 weekends from 2024-09 to 2026-10: the first bar after the weekend
+# is stamped Monday 00:00 Europe/London on 108 of them (the other, 2026-05-04,
+# started at 04:00 UTC). That is two hours after the Sunday 17:00 ET open, three
+# in the weeks the two clocks change on different dates. It is a property of
+# Yahoo, not of forex: a broker feed will resume at its own time and has to be
+# given its own constant rather than inheriting this one.
+LONDON = ZoneInfo('Europe/London')
+YAHOO_FOREX_REOPEN = time(0, 0)     # Monday, London time
+
+
+def session_open(ts: datetime, asset_class: str = 'stock') -> datetime | None:
+    """When the session containing ts opened: None when the market is closed,
+    and None for crypto, which never closed and so has no open to measure from."""
+    if asset_class == 'crypto':
+        return None
+    if asset_class == 'forex':
+        return forex_week_open(ts)
+    s = session_at(ts)
+    return s.open_utc if s else None
+
+
+def last_close(ts: datetime, asset_class: str = 'stock') -> datetime | None:
+    """The close of the last session that had finished by ts: the bell for
+    stocks, the 17:00 ET roll of a weekday for forex. None for crypto."""
+    if asset_class == 'crypto':
+        return None
+    et = ts.astimezone(ET)
+    if asset_class == 'forex':
+        d = et.date() if et.time() >= FOREX_ROLL else et.date() - timedelta(days=1)
+        while d.weekday() > 4:
+            d -= timedelta(days=1)
+        return _to_utc(d, FOREX_ROLL)
+    s = session_for(et.date())
+    if s is None or s.close_utc > ts:
+        s = previous_session(et.date())
+    return s.close_utc if s else None
+
+
+def feed_resumes_at(ts: datetime, asset_class: str = 'stock') -> datetime | None:
+    """When bars for the session containing ts were due to start arriving.
+
+    The session's open, except for forex, where it is Yahoo's later reopen. It
+    can be in the future: the market is open and the feed is not due yet.
+    """
+    opened = session_open(ts, asset_class)
+    if opened is None or asset_class != 'forex':
+        return opened
+    monday = opened.astimezone(ET).date() + timedelta(days=1)
+    return max(opened, datetime.combine(monday, YAHOO_FOREX_REOPEN, tzinfo=LONDON).astimezone(UTC))
 
 
 def load_overrides(rows) -> int:

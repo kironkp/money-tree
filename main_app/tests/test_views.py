@@ -322,6 +322,55 @@ class StatusStripTellsTheTruth(TestCase):
         self.assertEqual(row.stage, 'sprout')
 
 
+class TheStaleDataBlockerCountsOnlyTimeTheFeedWasDue(TestCase):
+    """At a lane's open the last bar the agent saw is the previous session's.
+    Reading the night or the weekend as lateness put "market data is stale" on
+    the strip for ten minutes after every stock open, and for two hours every
+    Sunday while Yahoo's forex bars had not resumed yet."""
+
+    def blockers(self, market, now, last_bar_ts):
+        from types import SimpleNamespace
+        from unittest import mock
+
+        from main_app.models import Account, AgentConfig
+        from main_app.services import status
+        account, cfg = Account.for_mode('sim', market), AgentConfig.get()
+        run = SimpleNamespace(health='healthy', heartbeat_age_s=1, last_bar_ts=last_bar_ts, data_source='test',
+                              state='waiting', message='', next_action_at=None)
+        with mock.patch.object(status.timezone, 'now', return_value=now):
+            return status.build_status(account, cfg, run)['operational']['blockers']
+
+    def test_forex_on_sunday_evening_before_yahoo_resumes(self):
+        friday = datetime(2026, 10, 9, 20, 45, tzinfo=UTC)
+        self.assertEqual(self.blockers('forex', datetime(2026, 10, 11, 22, 30, tzinfo=UTC), friday), [])   # 18:30 ET
+
+    def test_stocks_three_minutes_after_the_bell(self):
+        monday = datetime(2026, 10, 12, 19, 55, tzinfo=UTC)
+        self.assertEqual(self.blockers('stocks', datetime(2026, 10, 13, 13, 33, tzinfo=UTC), monday), [])  # 09:33 ET
+
+    def test_a_feed_that_stops_mid_session_still_blocks(self):
+        now = datetime(2026, 10, 14, 15, 0, tzinfo=UTC)          # Wednesday 11:00 ET
+        self.assertEqual(self.blockers('forex', now, now - timedelta(hours=1)), ['market data is stale'])
+        self.assertEqual(self.blockers('stocks', now, now - timedelta(minutes=30)), ['market data is stale'])
+
+    def test_a_feed_still_silent_well_after_it_was_due_blocks_too(self):
+        friday = datetime(2026, 10, 9, 20, 45, tzinfo=UTC)
+        self.assertEqual(self.blockers('forex', datetime(2026, 10, 11, 23, 45, tzinfo=UTC), friday),
+                         ['market data is stale'])                # 45 min after Monday 00:00 London
+
+    def test_the_open_allows_exactly_the_lateness_mid_session_does(self):
+        """Both paths count from the start of the first bar that has not
+        arrived: the end of the last bar seen mid-session, the feed-due time at
+        the open. Each trips two bars after it."""
+        friday = datetime(2026, 10, 9, 20, 45, tzinfo=UTC)
+        due = datetime(2026, 10, 11, 23, 0, tzinfo=UTC)          # Monday 00:00 London
+        for last_seen, missing in ((friday, due),                                # the week's first bar never came
+                                   (due, due + timedelta(minutes=15))):          # it came; the next one did not
+            self.assertEqual(self.blockers('forex', missing + timedelta(minutes=30), last_seen), [])
+            self.assertEqual(self.blockers('forex', missing + timedelta(minutes=31), last_seen),
+                             ['market data is stale'])
+
+
 class PortfolioBacktestRunsAllEnabledStrategies(TestCase):
     def test_portfolio_run_has_per_strategy_breakdown(self):
         # The view backtests [today − days, today], so the fixture has to sit

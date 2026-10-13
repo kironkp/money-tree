@@ -10,7 +10,7 @@ on a real fault, stays quiet on a healthy desk, survives a restart without
 either forgetting or repeating itself, notices when the fault goes away, and
 cannot quietly change the thing it is reviewing.
 """
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from django.test import TestCase
@@ -587,6 +587,227 @@ class OneLanesReviewDoesNotEraseAnothersEvidence(ReviewCase):
                         "forex's review closed crypto's finding")
         self.assertTrue(Account.objects.get(pk=self.other.pk).review_halt)
         self.assertEqual(Position.objects.filter(account=self.other).exclude(qty=0).count(), 1)
+
+
+class TwoLanesOnAPinnedClock(ReviewCase):
+    """Forex beside stocks at a chosen moment. The cases below turn on which
+    market is open and when its feed was due, so they cannot use the real clock."""
+
+    def setUp(self):
+        super().setUp()
+        from main_app.models import Bar
+        Bar.objects.all().delete()           # the baseline bar is stamped at the real clock
+        self.spy = Instrument.objects.create(symbol='SPY', asset_class='etf', market='stocks')
+        self.stocks = Account.objects.create(mode='sim', market='stocks', name='Stocks (sim)',
+                                             starting_cash=10000, cash=10000, equity=10000)
+
+    def bar(self, inst, ts):
+        from main_app.models import Bar
+        return Bar.objects.create(instrument=inst, timeframe='15Min' if inst == self.inst else '5Min',
+                                  ts=ts, open=1, high=1, low=1, close=1, volume=1)
+
+    def review(self, now, accounts=None):
+        return run_operational(accounts=accounts or [self.stocks, self.account], notify=False, now=now)
+
+    def stale(self, account):
+        return self.findings('stale_data').filter(account=account)
+
+    def halted(self, account):
+        return Account.objects.get(pk=account.pk).review_halt
+
+
+class ALanesCleanPassClosesItsOwnFindingWhateverAnotherLaneSkipped(TwoLanesOnAPinnedClock):
+    """"Skipped" was one set for the whole run. Stocks skips stale_data whenever
+    its market is shut, so no other lane could close a stale_data finding outside
+    stock hours: forex, crypto and degen all sat halted on fresh bars until the
+    13:31 UTC run on 2026-10-12, the first after the stock open."""
+
+    def test_forex_recovers_while_the_stock_market_is_shut(self):
+        now = datetime(2026, 10, 12, 2, 0, tzinfo=UTC)          # Sunday 22:00 ET
+        self.bar(self.inst, now - timedelta(hours=2))
+        self.review(now)
+        self.assertTrue(self.stale(self.account).exists())
+        self.assertTrue(self.halted(self.account))
+
+        now += timedelta(minutes=15)
+        self.bar(self.inst, now - timedelta(minutes=16))         # the feed is back
+        run = self.review(now)
+        self.assertIn('stale_data', run.summary['skipped'])      # by stocks: market closed
+        self.assertFalse(self.stale(self.account).exists(),
+                         "stocks declining to look kept forex's finding open on fresh bars")
+        self.assertFalse(self.halted(self.account))
+        self.assertIn('stale_data', run.summary['resolved'])
+
+
+class ACheckSkippedOnALaneCannotCloseThatLanesFinding(TwoLanesOnAPinnedClock):
+    """The other half of judging it per lane: another lane looking and finding
+    nothing must not vouch for the lane that did not look."""
+
+    def test_a_stock_feed_that_died_before_the_bell_is_still_a_finding_after_it(self):
+        now = datetime(2026, 10, 9, 19, 0, tzinfo=UTC)          # Friday 15:00 ET, both open
+        self.bar(self.spy, now - timedelta(hours=1))
+        self.bar(self.inst, now - timedelta(minutes=16))
+        self.review(now)
+        self.assertTrue(self.stale(self.stocks).exists())
+        self.assertTrue(self.halted(self.stocks))
+        self.assertFalse(self.stale(self.account).exists())
+
+        now = datetime(2026, 10, 9, 20, 30, tzinfo=UTC)         # 16:30 ET: stocks shut, forex open
+        self.bar(self.inst, now - timedelta(minutes=16))
+        run = self.review(now)                                   # forex looks and is clean
+        self.assertIn('stocks: stale_data: market closed', run.summary['skipped_notes'])
+        self.assertTrue(self.stale(self.stocks).exists(),
+                        "forex's clean pass closed a stocks finding that stocks never re-checked")
+        self.assertTrue(self.halted(self.stocks))
+
+
+class ACheckThatCrashedOnALaneCannotCloseThatLanesFinding(TwoLanesOnAPinnedClock):
+    """A crash is judged per lane too, in both directions: the lane it crashed
+    on keeps its finding, and the lane it looked at is not held back by it."""
+
+    def test_stocks_keeps_its_finding_and_forex_closes_its_own(self):
+        now = datetime(2026, 10, 14, 15, 0, tzinfo=UTC)         # Wednesday 11:00 ET, both open
+        self.bar(self.spy, now - timedelta(minutes=6))
+        self.bar(self.inst, now - timedelta(minutes=16))
+        naked = Position.objects.create(account=self.account, instrument=self.inst, strategy_key='ema',
+                                        qty=Decimal('1000'), avg_price=Decimal('1.08'), opened_at=now)
+        Position.objects.create(account=self.stocks, instrument=self.spy, strategy_key='orb',
+                                qty=Decimal('1'), avg_price=Decimal('100'), opened_at=now)
+        self.review(now)
+        unstopped = self.findings('position_without_stop')
+        self.assertEqual(unstopped.count(), 2)
+
+        naked.stop_price = Decimal('1.07')                      # forex is fixed; stocks is not
+        naked.save()
+        original = ops.CHECKS['protection']
+
+        def crashes_on_stocks(ctx, rec):
+            if ctx.account.market == 'stocks':
+                raise RuntimeError('still broken')
+            original(ctx, rec)
+        ops.CHECKS['protection'] = crashes_on_stocks
+        try:
+            self.review(now)
+        finally:
+            ops.CHECKS['protection'] = original
+        self.assertTrue(unstopped.filter(account=self.stocks).exists(),
+                        'a check that crashed on stocks closed the stocks finding as "ran clean"')
+        self.assertTrue(self.halted(self.stocks))
+        self.assertFalse(unstopped.filter(account=self.account).exists(),
+                         "a crash on stocks stopped forex closing a finding its own check had looked at")
+        self.assertFalse(self.halted(self.account))
+
+
+class TimeTheFeedWasNotDueIsNotStaleness(TwoLanesOnAPinnedClock):
+    """At a lane's open the newest bar is the last session's. Counting the
+    weekend as its age halted forex on three Sundays running ("newest bar is
+    2892 min old"), and the night did the same to stocks at 09:31.
+
+    For forex the feed is due later than the market opens: Yahoo's bars resume
+    Monday 00:00 London, two hours after the Sunday 17:00 ET open."""
+
+    FRIDAY = datetime(2026, 10, 9, 20, 45, tzinfo=UTC)          # 16:45 ET, the week's last bar
+
+    def assert_quiet(self, now, account):
+        run = self.review(now, [account])
+        self.assertFalse(ReviewFinding.objects.filter(check_key='stale_data').exists())
+        self.assertFalse(self.halted(account))
+        return run
+
+    def test_forex_ten_minutes_after_the_sunday_open(self):
+        self.bar(self.inst, self.FRIDAY)
+        self.assert_quiet(datetime(2026, 10, 11, 21, 10, tzinfo=UTC), self.account)     # 17:10 ET
+
+    def test_forex_past_three_bars_from_the_open_and_before_yahoo_resumes(self):
+        self.bar(self.inst, self.FRIDAY)
+        self.assert_quiet(datetime(2026, 10, 11, 22, 30, tzinfo=UTC), self.account)     # 18:30 ET
+
+    def test_forex_in_a_winter_week_when_london_is_on_gmt(self):
+        """Due at 00:00 UTC, not 23:00: thirty minutes in is on time. An offset
+        that was only right in summer would call this ninety minutes late."""
+        self.bar(self.inst, datetime(2026, 1, 9, 21, 45, tzinfo=UTC))                   # Friday 16:45 EST
+        self.assert_quiet(datetime(2026, 1, 12, 0, 30, tzinfo=UTC), self.account)
+
+    def test_stocks_a_minute_after_the_bell_with_yesterdays_last_bar(self):
+        self.bar(self.spy, datetime(2026, 10, 12, 19, 55, tzinfo=UTC))                  # Monday 15:55 ET
+        self.assert_quiet(datetime(2026, 10, 13, 13, 31, tzinfo=UTC), self.stocks)      # Tuesday 09:31 ET
+
+
+class ALaneWaitingForItsFirstBarHasNotPassed(TwoLanesOnAPinnedClock):
+    """Not late is not the same as seen. Until a bar from this session arrives
+    the check has confirmed nothing, so it may not close what the last session
+    left open; the first bar of the week is what closes it."""
+
+    def test_fridays_outage_stays_open_until_the_week_actually_delivers_a_bar(self):
+        friday = datetime(2026, 10, 9, 19, 0, tzinfo=UTC)       # 15:00 ET, mid-session
+        self.bar(self.inst, friday - timedelta(hours=1))
+        self.review(friday, [self.account])
+        self.assertTrue(self.halted(self.account))
+
+        run = self.review(datetime(2026, 10, 11, 21, 10, tzinfo=UTC), [self.account])   # Sunday 17:10 ET
+        self.assertIn('stale_data', run.summary['skipped'])
+        self.assertTrue(self.stale(self.account).exists(), 'closed on no new evidence')
+        self.assertTrue(self.halted(self.account))
+
+        self.bar(self.inst, datetime(2026, 10, 11, 23, 0, tzinfo=UTC))
+        self.review(datetime(2026, 10, 11, 23, 20, tzinfo=UTC), [self.account])
+        self.assertFalse(self.stale(self.account).exists())
+        self.assertFalse(self.halted(self.account))
+
+
+class AFeedSilentPastItsAllowanceStillHalts(TwoLanesOnAPinnedClock):
+    """Not counting closed time must not turn the check off."""
+
+    def assert_halts(self, now, account):
+        self.review(now, [account])
+        f = self.stale(account).get()
+        self.assertEqual(f.severity, ReviewFinding.CRITICAL)
+        self.assertTrue(self.halted(account))
+        return f
+
+    def test_fifty_minutes_after_yahoo_was_due_with_nothing_since_friday(self):
+        self.bar(self.inst, datetime(2026, 10, 9, 20, 45, tzinfo=UTC))
+        f = self.assert_halts(datetime(2026, 10, 11, 23, 50, tzinfo=UTC), self.account)  # Monday 00:50 BST
+        self.assertEqual(f.evidence['age_min'], 50.0)
+        self.assertEqual(f.evidence['measured_from'], 'feed_due')
+        self.assertIn('no bar 50 min after the feed was due', f.title)
+
+    def test_the_same_in_a_winter_week(self):
+        self.bar(self.inst, datetime(2026, 1, 9, 21, 45, tzinfo=UTC))
+        f = self.assert_halts(datetime(2026, 1, 12, 0, 50, tzinfo=UTC), self.account)    # Monday 00:50 GMT
+        self.assertEqual(f.evidence['age_min'], 50.0)
+
+    def test_mid_session_with_the_newest_bar_four_bars_old(self):
+        now = datetime(2026, 10, 14, 15, 0, tzinfo=UTC)         # Wednesday 11:00 ET
+        self.bar(self.inst, now - timedelta(hours=1))
+        f = self.assert_halts(now, self.account)
+        self.assertEqual(f.evidence['measured_from'], 'newest_bar')
+        self.assertIn('newest bar is 60 min old', f.title)
+
+
+class ALateFeedAtTheOpenIsItsOwnFinding(TwoLanesOnAPinnedClock):
+    """The staleness bucket restarts from the feed-due time, so on a late Monday
+    it lands on the number an old mid-session finding used. Sharing a fingerprint
+    would reopen that row, which keeps its first title, and halt the lane on
+    "newest bar is 50 min old" when the newest bar is days old."""
+
+    def test_it_does_not_reopen_a_resolved_mid_session_finding_with_the_same_bucket(self):
+        now = datetime(2026, 10, 7, 15, 0, tzinfo=UTC)          # Wednesday, mid-session
+        self.bar(self.inst, now - timedelta(minutes=50))
+        self.review(now, [self.account])
+        self.bar(self.inst, now - timedelta(minutes=1))
+        self.review(now + timedelta(minutes=15), [self.account])
+        old = ReviewFinding.objects.get(check_key='stale_data')
+        self.assertEqual(old.status, ReviewFinding.RESOLVED)
+        self.assertIn('newest bar is 50 min old', old.title)
+
+        self.review(datetime(2026, 10, 11, 23, 50, tzinfo=UTC), [self.account])     # Monday 00:50 BST
+        late = self.stale(self.account).get()
+        self.assertNotEqual(late.pk, old.pk)
+        self.assertIn('no bar 50 min after the feed was due', late.title)
+        self.assertEqual(ReviewFinding.objects.get(pk=old.pk).status, ReviewFinding.RESOLVED)
+        self.assertIn('after the feed was due',
+                      Account.objects.get(pk=self.account.pk).review_halt_reason)
 
 
 class SimpleNamespaceQty:

@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 
 from django.core.management.base import BaseCommand, CommandError
 
+from main_app.services.research_stats import at2x as _at2x, fmt as _fmt, pf as _pf, stats as _stats  # noqa: F401
 from main_app.services.research_window import merge_artifact
 from django.utils import timezone as djtz
 
@@ -364,38 +365,6 @@ def _rows_key(rows) -> dict:
 
 def _measured_rows(doc: dict) -> dict:
     return _rows_key(doc.get('candidates'))
-
-
-def _fmt(v):
-    return '-' if v is None else f'{v:.2f}'
-
-
-def _pf(trades) -> float | None:
-    won = sum(float(t.pnl) for t in trades if float(t.pnl) > 0)
-    lost = -sum(float(t.pnl) for t in trades if float(t.pnl) <= 0)
-    return round(won / lost, 3) if lost else None
-
-
-def _stats(trades, slip) -> dict:
-    """Net profit factor, not gross: the question is what the desk keeps."""
-    if not trades:
-        return {'trades': 0, 'gross': 0.0, 'fees': 0.0, 'slippage': 0.0, 'net': 0.0,
-                'net_pf': None, 'bps_captured': None, 'notional': 0.0}
-    net = sum(float(t.pnl) for t in trades)
-    fees = sum(float(t.fees) for t in trades)
-    notional = sum(float(t.entry_price) * float(t.qty) for t in trades)
-    legs = sum(1 + (0 if t.exit_reason == 'target' else 1) for t in trades)
-    slipc = notional / len(trades) * legs * slip / 1e4
-    gross = net + fees + slipc
-    return {'trades': len(trades), 'gross': round(gross, 2), 'fees': round(fees, 2),
-            'slippage': round(slipc, 2), 'net': round(net, 2), 'net_pf': _pf(trades),
-            'notional': round(notional, 2),
-            'bps_captured': round(gross / notional * 1e4, 2) if notional else None}
-
-
-def _at2x(trades) -> dict:
-    return {'net_2x': round(sum(float(t.pnl) for t in trades), 2),
-            'net_pf_2x': _pf(trades), 'trades_2x': len(trades)}
 
 
 def _select(strategy: str, rows: list) -> dict:

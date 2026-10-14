@@ -114,6 +114,116 @@ def risk_for(cand: dict) -> dict:
     return over
 
 
+FORBIDDEN = {'h10_held_out': HELD_OUT, 'spent_by_mt_a001': SPENT}
+PIP = 1e-4                      # every pair here is USD-quoted with a 4-decimal pip
+
+
+def check_registration(reg: dict) -> None:
+    """Refuse to measure anything the code no longer describes as registered.
+
+    The registration was written from this module's constants, and the run reads
+    the same constants. If either has moved since, the run would measure a grid
+    nobody wrote down.
+    """
+    now = registration(datetime.now(timezone.utc))
+    for key in ('candidates', 'risk_overrides', 'timeframe_params', 'train_window',
+                'warmup_from', 'forbidden_windows', 'selection_rule'):
+        if json.loads(json.dumps(now[key])) != reg.get(key):
+            raise CommandError(f'the code no longer matches the registration on {key!r} — '
+                               f'refusing to measure a grid that was not the one registered')
+
+
+def check_bars(name: str, key: str, params: dict, frames: dict) -> dict:
+    """Refuse frames that cannot support the measurement; bars per pair otherwise.
+
+    Three guards, each fatal: no bars in the train window, any bar inside a
+    forbidden window, and too little warm-up before the window opens (the
+    registration says FxTrend's 760-bar requirement is asserted at run time; every
+    candidate's own requirement is checked the same way).
+    """
+    from main_app.services.strategies import make_strategy
+
+    need = make_strategy(key, dict(params)).warmup_bars
+    out = {}
+    for sym in PAIRS:
+        df = frames.get(sym)
+        idx = df.index if df is not None else None
+        train = 0 if idx is None else int(((idx >= TRAIN_START) & (idx < TRAIN_END)).sum())
+        if not train:
+            raise CommandError(f'{name}: {sym} has zero bars in the train window '
+                               f'{TRAIN_START:%Y-%m-%d}..{TRAIN_END:%Y-%m-%d}')
+        for label, (lo, hi) in FORBIDDEN.items():
+            inside = int(((idx >= lo) & (idx < hi)).sum())
+            if inside:
+                raise CommandError(f'{name}: {sym} carries {inside} bar(s) inside {label} '
+                                   f'{lo:%Y-%m-%d}..{hi:%Y-%m-%d} — refusing to measure on them')
+        warm = int((idx < TRAIN_START).sum())
+        if warm < need:
+            raise CommandError(f'{name}: {sym} has {warm} warm-up bars before '
+                               f'{TRAIN_START:%Y-%m-%d}; {key} needs {need}')
+        out[sym] = {'train': train, 'warmup': warm}
+    return out
+
+
+def measure(name: str, key: str, params: dict, over: dict, tf: str, frames: dict) -> dict:
+    """One row: the train window at 1x and 2x cost, priced like MT-A003's rows."""
+    from main_app.services.research_stats import at2x, stats
+    from main_app.services.research_window import run_window
+
+    trades, slip = run_window(key, dict(params), dict(over), frames, TRAIN_START, TRAIN_END,
+                              timeframe=tf, pairs=PAIRS)
+    t2, _ = run_window(key, dict(params), dict(over), frames, TRAIN_START, TRAIN_END,
+                       timeframe=tf, pairs=PAIRS, cost_mult=2.0)
+    stray = [t for t in trades + t2 if not (TRAIN_START <= t.entry_ts and t.exit_ts < TRAIN_END)]
+    if stray:
+        raise CommandError(f'{name}: {len(stray)} trade(s) open or close outside the train '
+                           f'window — refusing to record a contaminated row')
+    # The stop price is not on a trade record, so this is the distance a stopped
+    # trade actually moved against entry: the stop plus any gap or slippage.
+    moved = sorted(abs(float(t.exit_price) - float(t.entry_price)) / PIP
+                   for t in trades if t.exit_reason == 'stop')
+    return {'name': name, 'strategy': key, 'timeframe': tf, 'params': dict(params),
+            'risk_override': dict(over), **stats(trades, slip), **at2x(t2),
+            'stopped': len(moved),
+            'median_stop_pips': round(moved[len(moved) // 2], 1) if moved else None}
+
+
+def select(rows: list[dict], live_row: dict) -> dict:
+    """The registered selection rule, exactly. No judgement is exercised here.
+
+    A comparator is never in `rows`, so it cannot be ranked or win. A missing net
+    PF at 2x (no losing trade) fails the gate, as it does in MT-A003.
+    """
+    from main_app.services.research_stats import fmt
+
+    def failed(r):
+        out = []
+        if r['trades'] < MIN_TRAIN_TRADES:
+            out.append(f'n {r["trades"]} < {MIN_TRAIN_TRADES}')
+        if not r['net'] > MIN_NET_AT_1X:
+            out.append(f'net at 1x {r["net"]:+.2f} does not beat flat')
+        if not r['net'] > live_row['net']:
+            out.append(f'net at 1x {r["net"]:+.2f} does not beat {LIVE_PARAMS_ROW} '
+                       f'({live_row["net"]:+.2f})')
+        if r['net_pf_2x'] is None or r['net_pf_2x'] < MIN_NET_PF_AT_2X:
+            out.append(f'net PF at 2x {fmt(r["net_pf_2x"])} < {MIN_NET_PF_AT_2X}')
+        return out
+
+    ranked = sorted(rows, key=lambda r: r['net'], reverse=True)
+    gates = {r['name']: failed(r) for r in ranked}
+    passing = [r for r in ranked if not gates[r['name']]]
+    why = [f'{LIVE_PARAMS_ROW} net at 1x: {live_row["net"]:+.2f} over {live_row["trades"]} trades']
+    if passing:
+        w = passing[0]
+        why.append(f'winner {w["name"]}: net {w["net"]:+.2f} over {w["trades"]} trades, '
+                   f'net PF at 2x {fmt(w["net_pf_2x"])}. A train result, not a positive result.')
+        return {'outcome': w['name'], 'winner': w['name'], 'ranked': [r['name'] for r in ranked],
+                'gates_failed': gates, 'why': why}
+    why.append('no candidate cleared every pre-registered gate')
+    return {'outcome': 'none', 'winner': None, 'ranked': [r['name'] for r in ranked],
+            'gates_failed': gates, 'why': why}
+
+
 def registration(now) -> dict:
     return {
         'assignment': 'MT-A008', 'hypothesis': 'H19',
@@ -214,8 +324,7 @@ class Command(BaseCommand):
             raise CommandError('choose exactly one of --preregister and --run')
         if o['preregister']:
             return self._preregister()
-        raise CommandError('--run is not built yet; the registration is committed first so '
-                           'that the order cannot be argued about later')
+        return self._run()
 
     def _preregister(self):
         from main_app.models import Hypothesis
@@ -258,3 +367,102 @@ class Command(BaseCommand):
           f'spent {SPENT[0]:%Y-%m-%d}..{SPENT[1]:%Y-%m-%d}')
         w(f'  confirm from  {FORWARD_START:%Y-%m-%d}; nothing claimed about it here')
         w(self.style.SUCCESS(f'  wrote {PREREG}'))
+
+    # --- measurement -------------------------------------------------------
+    def _run(self):
+        from main_app.models import Hypothesis, Strategy
+        from main_app.services.research_window import Window, research_frames
+        from main_app.services.strategies.fx_trend import H10_RISK, H10_SPEC, H10_TIMEFRAME
+
+        if not os.path.exists(PREREG):
+            raise CommandError(f'no {PREREG} — register what will be tested before measuring it')
+        # Measured once. Unlike MT-A003 there is no supersession path: a second run
+        # of the same grid is a second look, and nothing has been found wrong with
+        # the first that would justify one.
+        if os.path.exists(RESULTS):
+            raise CommandError(f'{RESULTS} already exists — MT-A008 has been measured; '
+                               f'refusing to measure the same grid twice')
+        with open(PREREG) as fh:
+            reg = json.load(fh)
+        h = Hypothesis.objects.filter(id=reg.get('hypothesis_id')).first()
+        if h is None:
+            raise CommandError(f'registration names hypothesis #{reg.get("hypothesis_id")}, '
+                               f'which does not exist — refusing to report against nothing')
+        check_registration(reg)
+
+        ema = Strategy.objects.get(market='forex', key='ema_momentum')
+        live = {'ema_momentum': dict(ema.params)}
+        frames = {tf: research_frames(PAIRS, tf, Window(warmup_start=WARMUP_FROM[tf], start=TRAIN_START,
+                                                        end=TRAIN_END))
+                  for tf in TIMEFRAMES}
+        runs = [(c['name'], c['strategy'], params_for(c, live), risk_for(c), c['timeframe'])
+                for c in candidates()]
+        # Run on the same window and reported, never ranked: neither is in `runs`.
+        comps = [('h10_frozen', 'fx_trend', dict(H10_SPEC), dict(H10_RISK), H10_TIMEFRAME),
+                 (LIVE_PARAMS_ROW, 'ema_momentum', dict(live['ema_momentum']), {}, '1Hour')]
+        # Every guard runs before the first measurement, so a refusal leaves no result.
+        bars = {name: check_bars(name, key, params, frames[tf]) for name, key, params, _, tf in runs + comps}
+
+        first_result_at = datetime.now(timezone.utc).isoformat()
+        rows = [measure(name, key, params, over, tf, frames[tf]) for name, key, params, over, tf in runs]
+        comparators = [measure(name, key, params, over, tf, frames[tf])
+                       for name, key, params, over, tf in comps]
+        verdict = select(rows, next(r for r in comparators if r['name'] == LIVE_PARAMS_ROW))
+
+        out = {'assignment': 'MT-A008', 'hypothesis': 'H19', 'hypothesis_id': h.id,
+               'registered_at': reg['registered_at'], 'first_result_at': first_result_at,
+               'measured_at': datetime.now(timezone.utc).isoformat(),
+               'train_window': [TRAIN_START.isoformat(), TRAIN_END.isoformat()],
+               'bars': bars, 'live_params': {'ema_momentum': live['ema_momentum'],
+                                             'version': ema.version},
+               'candidates': rows, 'comparators': comparators, 'verdict': verdict,
+               'selection_rule': reg['selection_rule'],
+               'forward': 'not built — whether anything is confirmed forward is a separate decision',
+               'what_is_not_claimed': reg['what_is_not_claimed']}
+        with open(RESULTS, 'x') as fh:          # 'x': never overwrite, even in a race
+            json.dump(out, fh, indent=2, sort_keys=True)
+
+        h.train_result = {'train_window': out['train_window'], 'rows': rows,
+                          'comparators': comparators, 'verdict': verdict}
+        h.status = Hypothesis.BACKTESTED if verdict['winner'] else Hypothesis.REJECTED
+        h.decided_at = djtz.now()
+        h.decision_note = f'train outcome: {verdict["outcome"]}. ' + ' '.join(verdict['why'])
+        h.save()
+        self._report(reg, out)
+
+    def _report(self, reg, out):
+        from main_app.services.research_stats import fmt
+
+        w = self.stdout.write
+        w(self.style.MIGRATE_HEADING('\nMT-A008 / H19 TREND RESEARCH — train only, places no orders'))
+        w(f'  registered    {reg["registered_at"]}')
+        w(f'  first result  {out["first_result_at"]}   (registration must precede it)')
+        w(f'  train window  {TRAIN_START:%Y-%m-%d} .. {TRAIN_END:%Y-%m-%d} (exclusive)')
+        hdr = (f'\n  {"candidate":28} {"n":>4} {"gross":>9} {"fees":>8} {"slip":>8} {"net 1x":>9} '
+               f'{"net 2x":>9} {"netPF":>6} {"PF2x":>6} {"stop pips":>9}')
+        w(hdr)
+        w('  ' + '-' * (len(hdr) - 3))
+
+        def line(r, note=''):
+            w(f'  {r["name"]:28} {r["trades"]:4} {r["gross"]:9.2f} {r["fees"]:8.2f} {r["slippage"]:8.2f} '
+              f'{r["net"]:9.2f} {r["net_2x"]:9.2f} {fmt(r["net_pf"]):>6} {fmt(r["net_pf_2x"]):>6} '
+              f'{"-" if r["median_stop_pips"] is None else r["median_stop_pips"]:>9}{note}')
+
+        for r in out['candidates']:
+            line(r, '' if r['trades'] >= MIN_TRAIN_TRADES else '  <- too few to choose')
+        w('  comparators (run on the same window, never ranked)')
+        for r in out['comparators']:
+            line(r)
+        v = out['verdict']
+        w('')
+        (w(self.style.SUCCESS(f'  outcome: {v["outcome"]}')) if v['winner']
+         else w(self.style.WARNING(f'  outcome: {v["outcome"]}')))
+        for text in v['why']:
+            w(f'      {text}')
+        for name in v['ranked']:
+            failed = v['gates_failed'][name]
+            w(f'    {name:28} {"passes every gate" if not failed else "; ".join(failed)}')
+        w(f'\n  stop pips = median distance a stopped trade moved against entry (stop plus any gap).')
+        w(f'  No significance is claimed: {len(out["candidates"])} candidates with an argmax taken '
+          f'flatters the winner by construction.')
+        w(self.style.SUCCESS(f'  wrote {RESULTS}'))

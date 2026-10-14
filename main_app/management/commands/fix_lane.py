@@ -37,6 +37,7 @@ from main_app.services.backtest import load_frames, spec_from_models
 from main_app.services.fix_loop import choose_regime, install_if_better, own_timeframe, regime_key, row_risk
 from main_app.services.optimize import evaluate_fixed_params, grid_from_schema, run_experiment, with_risk_overrides
 from main_app.services.promotion import promote
+from main_app.services.strategies import get_strategy_class
 from main_app.services.strategies.base import ENTRY_SESSIONS
 from main_app.services.timeframes import tf_minutes
 
@@ -85,6 +86,9 @@ class Command(BaseCommand):
         parser.add_argument('--timeframes', default='1Hour',
                             help='strategy timeframes to try besides the lane base (whole multiples only)')
         parser.add_argument('--current-regime', action='store_true', help='measure only the lane\'s current regime')
+        parser.add_argument('--search', default='',
+                            help='comma-separated bool params to search on and off this run '
+                                 '(they are search=False, so held at their default otherwise)')
         parser.add_argument('--random', type=int, default=0,
                             help='random-search this many param combos per window instead of the spread grid')
         parser.add_argument('--apply', action='store_true', help='select and install from the saved plan')
@@ -107,13 +111,14 @@ class Command(BaseCommand):
         except OSError:
             raise CommandError('auto_research (or another fix_lane) is running — not starting')
         plan = self._measure(o['market'], o['random'], [k for k in o['strategies'].split(',') if k],
-                             [t for t in o['timeframes'].split(',') if t], o['current_regime'])
+                             [t for t in o['timeframes'].split(',') if t], o['current_regime'],
+                             [k for k in o['search'].split(',') if k])
         plan_path.write_text(json.dumps(plan, indent=2, default=str))
         self.stdout.write(self.style.SUCCESS(f'plan written to {plan_path}'))
 
     # --- phase 1 ---------------------------------------------------------------
     def _measure(self, market: str, random_n: int, keys: list[str], wanted_tfs: list[str],
-                 current_only: bool) -> dict:
+                 current_only: bool, flags: list[str] = ()) -> dict:
         cfg = AgentConfig.get()
         fields = lane_fields(market)
         days, train, test = WINDOWS[market]
@@ -126,14 +131,26 @@ class Command(BaseCommand):
         if keys:
             rows = rows.filter(key__in=keys)
         rows = list(rows.order_by('key'))
+        declared = {p.name for row in rows for p in get_strategy_class(row.key).params if p.type == 'bool'}
+        unknown = [name for name in flags if name not in declared]
+        if unknown:
+            # A misspelt flag would otherwise be ignored by every grid and the run
+            # would quietly measure without it.
+            raise CommandError(f'--search {", ".join(unknown)}: not a bool param of '
+                               f'{", ".join(r.key for r in rows) or "any selected strategy"}')
         timeframes = candidate_timeframes(base, wanted_tfs)
         overrides = {'entry_session': list(ENTRY_SESSIONS)} if market == 'forex' else None
+        if flags:
+            # A strategy that does not declare a flag ignores it (grid_from_schema
+            # only reads overrides for its own params).
+            overrides = {**(overrides or {}), **{name: [False, True] for name in flags}}
         windows = {'train_days': train, 'test_days': test}
         if random_n:
             windows.update(search='random', max_combos=random_n)
         regimes = ([(cur_mrc, cur_hold)] if current_only else
                    [(mrc, hold) for mrc in (cur_mrc, 2 * cur_mrc) for hold in (cur_hold, LONG_HOLD)])
         plan = {'market': market, 'start': str(start), 'end': str(end), 'measured_at': timezone.now(),
+                'searched_flags': list(flags),
                 'base_timeframe': base, 'timeframes': timeframes,
                 'current': regime_key(base, cur_mrc, cur_hold), 'strategies': [r.key for r in rows],
                 'regimes': {}}

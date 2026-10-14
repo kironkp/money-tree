@@ -1,0 +1,594 @@
+{
+  "addenda": [
+    {
+      "at": "2026-10-14T08:08:34.637800+00:00",
+      "note": "No new candidate. The only passing rows are H10 (#10) and H10 with a 72h hold, re-measured on H10's own training window (#10 train 2024-09-08..2025-12-31 contains this train window). Not independent evidence for H10; its forward record must never count separately from H10's."
+    },
+    {
+      "at": "2026-10-14T08:08:34.637800+00:00",
+      "note": "The four ema_momentum rows and the live_params_1hour gate ran forex ema v3 (installed 2026-10-07 from #412, fitted on 15Min bars resampled to 1Hour, 2026-08-09..10-06, which overlaps h10_held_out, spent_by_mt_a001 and the forward window). The registration named 'live parameters' without pinning values. Verdict unaffected: every ema row loses at 1x."
+    }
+  ],
+  "assignment": "MT-A008",
+  "bars": {
+    "ema_momentum_1Day_72h": {
+      "AUD/USD": {
+        "train": 289,
+        "warmup": 3740
+      },
+      "EUR/USD": {
+        "train": 287,
+        "warmup": 3764
+      },
+      "GBP/USD": {
+        "train": 290,
+        "warmup": 3786
+      },
+      "NZD/USD": {
+        "train": 288,
+        "warmup": 3702
+      }
+    },
+    "ema_momentum_1Day_week": {
+      "AUD/USD": {
+        "train": 289,
+        "warmup": 3740
+      },
+      "EUR/USD": {
+        "train": 287,
+        "warmup": 3764
+      },
+      "GBP/USD": {
+        "train": 290,
+        "warmup": 3786
+      },
+      "NZD/USD": {
+        "train": 288,
+        "warmup": 3702
+      }
+    },
+    "ema_momentum_1Hour_72h": {
+      "AUD/USD": {
+        "train": 7232,
+        "warmup": 929
+      },
+      "EUR/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "GBP/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "NZD/USD": {
+        "train": 7232,
+        "warmup": 929
+      }
+    },
+    "ema_momentum_1Hour_week": {
+      "AUD/USD": {
+        "train": 7232,
+        "warmup": 929
+      },
+      "EUR/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "GBP/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "NZD/USD": {
+        "train": 7232,
+        "warmup": 929
+      }
+    },
+    "fx_trend_1Day_72h": {
+      "AUD/USD": {
+        "train": 289,
+        "warmup": 3740
+      },
+      "EUR/USD": {
+        "train": 287,
+        "warmup": 3764
+      },
+      "GBP/USD": {
+        "train": 290,
+        "warmup": 3786
+      },
+      "NZD/USD": {
+        "train": 288,
+        "warmup": 3702
+      }
+    },
+    "fx_trend_1Day_week": {
+      "AUD/USD": {
+        "train": 289,
+        "warmup": 3740
+      },
+      "EUR/USD": {
+        "train": 287,
+        "warmup": 3764
+      },
+      "GBP/USD": {
+        "train": 290,
+        "warmup": 3786
+      },
+      "NZD/USD": {
+        "train": 288,
+        "warmup": 3702
+      }
+    },
+    "fx_trend_1Hour_72h": {
+      "AUD/USD": {
+        "train": 7232,
+        "warmup": 929
+      },
+      "EUR/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "GBP/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "NZD/USD": {
+        "train": 7232,
+        "warmup": 929
+      }
+    },
+    "fx_trend_1Hour_week": {
+      "AUD/USD": {
+        "train": 7232,
+        "warmup": 929
+      },
+      "EUR/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "GBP/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "NZD/USD": {
+        "train": 7232,
+        "warmup": 929
+      }
+    },
+    "h10_frozen": {
+      "AUD/USD": {
+        "train": 7232,
+        "warmup": 929
+      },
+      "EUR/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "GBP/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "NZD/USD": {
+        "train": 7232,
+        "warmup": 929
+      }
+    },
+    "live_params_1hour": {
+      "AUD/USD": {
+        "train": 7232,
+        "warmup": 929
+      },
+      "EUR/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "GBP/USD": {
+        "train": 7187,
+        "warmup": 928
+      },
+      "NZD/USD": {
+        "train": 7232,
+        "warmup": 929
+      }
+    }
+  },
+  "candidates": [
+    {
+      "bps_captured": 0.26,
+      "fees": 747.38,
+      "gross": 196.83,
+      "median_stop_pips": 28.7,
+      "name": "ema_momentum_1Hour_72h",
+      "net": -953.0,
+      "net_2x": -2160.71,
+      "net_pf": 0.917,
+      "net_pf_2x": 0.833,
+      "notional": 7473572.17,
+      "params": {
+        "entry_session": "all",
+        "fast": 13,
+        "min_relvol": 1.5,
+        "rr": 2.0,
+        "rsi_max": 65.0,
+        "rsi_min": 40.0,
+        "slow": 27,
+        "stop_atr_mult": 2.5
+      },
+      "risk_override": {
+        "max_hold_minutes": 4320
+      },
+      "slippage": 402.45,
+      "stopped": 118,
+      "strategy": "ema_momentum",
+      "timeframe": "1Hour",
+      "trades": 517,
+      "trades_2x": 574
+    },
+    {
+      "bps_captured": 0.26,
+      "fees": 747.38,
+      "gross": 196.83,
+      "median_stop_pips": 28.7,
+      "name": "ema_momentum_1Hour_week",
+      "net": -953.0,
+      "net_2x": -2160.71,
+      "net_pf": 0.917,
+      "net_pf_2x": 0.833,
+      "notional": 7473572.17,
+      "params": {
+        "entry_session": "all",
+        "fast": 13,
+        "min_relvol": 1.5,
+        "rr": 2.0,
+        "rsi_max": 65.0,
+        "rsi_min": 40.0,
+        "slow": 27,
+        "stop_atr_mult": 2.5
+      },
+      "risk_override": {
+        "max_hold_minutes": 7200
+      },
+      "slippage": 402.45,
+      "stopped": 118,
+      "strategy": "ema_momentum",
+      "timeframe": "1Hour",
+      "trades": 517,
+      "trades_2x": 574
+    },
+    {
+      "bps_captured": -9.83,
+      "fees": 5.82,
+      "gross": -57.11,
+      "median_stop_pips": 227.9,
+      "name": "ema_momentum_1Day_72h",
+      "net": -66.41,
+      "net_2x": -75.73,
+      "net_pf": 0.701,
+      "net_pf_2x": 0.666,
+      "notional": 58089.98,
+      "params": {
+        "entry_session": "all",
+        "fast": 13,
+        "min_relvol": 1.5,
+        "rr": 2.0,
+        "rsi_max": 65.0,
+        "rsi_min": 40.0,
+        "slow": 27,
+        "stop_atr_mult": 2.5
+      },
+      "risk_override": {
+        "max_hold_minutes": 4320
+      },
+      "slippage": 3.49,
+      "stopped": 2,
+      "strategy": "ema_momentum",
+      "timeframe": "1Day",
+      "trades": 26,
+      "trades_2x": 26
+    },
+    {
+      "bps_captured": -3.09,
+      "fees": 5.84,
+      "gross": -18.0,
+      "median_stop_pips": 227.9,
+      "name": "ema_momentum_1Day_week",
+      "net": -27.33,
+      "net_2x": -36.7,
+      "net_pf": 0.875,
+      "net_pf_2x": 0.835,
+      "notional": 58246.53,
+      "params": {
+        "entry_session": "all",
+        "fast": 13,
+        "min_relvol": 1.5,
+        "rr": 2.0,
+        "rsi_max": 65.0,
+        "rsi_min": 40.0,
+        "slow": 27,
+        "stop_atr_mult": 2.5
+      },
+      "risk_override": {
+        "max_hold_minutes": 7200
+      },
+      "slippage": 3.49,
+      "stopped": 2,
+      "strategy": "ema_momentum",
+      "timeframe": "1Day",
+      "trades": 26,
+      "trades_2x": 26
+    },
+    {
+      "bps_captured": 8.52,
+      "fees": 186.17,
+      "gross": 1585.51,
+      "median_stop_pips": 47.3,
+      "name": "fx_trend_1Hour_72h",
+      "net": 1287.65,
+      "net_2x": 988.9,
+      "net_pf": 1.328,
+      "net_pf_2x": 1.245,
+      "notional": 1861579.26,
+      "params": {
+        "allow_short": true,
+        "atr_len": 24,
+        "cooldown_h": 168,
+        "hour_from": 7,
+        "hour_to": 21,
+        "lookback_h": 480,
+        "min_move_atr": 1.0,
+        "stop_atr_mult": 4.0
+      },
+      "risk_override": {
+        "max_hold_minutes": 4320,
+        "min_reward_to_cost": 0.0
+      },
+      "slippage": 111.69,
+      "stopped": 53,
+      "strategy": "fx_trend",
+      "timeframe": "1Hour",
+      "trades": 172,
+      "trades_2x": 172
+    },
+    {
+      "bps_captured": 9.43,
+      "fees": 189.67,
+      "gross": 1788.3,
+      "median_stop_pips": 47.3,
+      "name": "fx_trend_1Hour_week",
+      "net": 1484.81,
+      "net_2x": 1181.03,
+      "net_pf": 1.36,
+      "net_pf_2x": 1.279,
+      "notional": 1896951.38,
+      "params": {
+        "allow_short": true,
+        "atr_len": 24,
+        "cooldown_h": 168,
+        "hour_from": 7,
+        "hour_to": 21,
+        "lookback_h": 480,
+        "min_move_atr": 1.0,
+        "stop_atr_mult": 4.0
+      },
+      "risk_override": {
+        "max_hold_minutes": 7200,
+        "min_reward_to_cost": 0.0
+      },
+      "slippage": 113.82,
+      "stopped": 56,
+      "strategy": "fx_trend",
+      "timeframe": "1Hour",
+      "trades": 172,
+      "trades_2x": 172
+    },
+    {
+      "bps_captured": 1.34,
+      "fees": 21.55,
+      "gross": 28.93,
+      "median_stop_pips": 241.1,
+      "name": "fx_trend_1Day_72h",
+      "net": -5.55,
+      "net_2x": -39.91,
+      "net_pf": 0.99,
+      "net_pf_2x": 0.928,
+      "notional": 215497.32,
+      "params": {
+        "allow_short": true,
+        "atr_len": 14,
+        "cooldown_h": 7,
+        "hour_from": 0,
+        "hour_to": 24,
+        "lookback_h": 20,
+        "min_move_atr": 1.0,
+        "stop_atr_mult": 4.0
+      },
+      "risk_override": {
+        "max_hold_minutes": 4320,
+        "min_reward_to_cost": 0.0
+      },
+      "slippage": 12.93,
+      "stopped": 3,
+      "strategy": "fx_trend",
+      "timeframe": "1Day",
+      "trades": 146,
+      "trades_2x": 146
+    },
+    {
+      "bps_captured": -2.76,
+      "fees": 21.36,
+      "gross": -58.91,
+      "median_stop_pips": 241.1,
+      "name": "fx_trend_1Day_week",
+      "net": -93.09,
+      "net_2x": -127.16,
+      "net_pf": 0.844,
+      "net_pf_2x": 0.794,
+      "notional": 213580.35,
+      "params": {
+        "allow_short": true,
+        "atr_len": 14,
+        "cooldown_h": 7,
+        "hour_from": 0,
+        "hour_to": 24,
+        "lookback_h": 20,
+        "min_move_atr": 1.0,
+        "stop_atr_mult": 4.0
+      },
+      "risk_override": {
+        "max_hold_minutes": 7200,
+        "min_reward_to_cost": 0.0
+      },
+      "slippage": 12.81,
+      "stopped": 3,
+      "strategy": "fx_trend",
+      "timeframe": "1Day",
+      "trades": 146,
+      "trades_2x": 146
+    }
+  ],
+  "comparators": [
+    {
+      "bps_captured": 9.43,
+      "fees": 189.67,
+      "gross": 1788.3,
+      "median_stop_pips": 47.3,
+      "name": "h10_frozen",
+      "net": 1484.81,
+      "net_2x": 1181.03,
+      "net_pf": 1.36,
+      "net_pf_2x": 1.279,
+      "notional": 1896951.38,
+      "params": {
+        "allow_short": true,
+        "atr_len": 24,
+        "cooldown_h": 168,
+        "hour_from": 7,
+        "hour_to": 21,
+        "lookback_h": 480,
+        "min_move_atr": 1.0,
+        "stop_atr_mult": 4.0
+      },
+      "risk_override": {
+        "max_hold_minutes": 7200,
+        "min_reward_to_cost": 0.0
+      },
+      "slippage": 113.82,
+      "stopped": 56,
+      "strategy": "fx_trend",
+      "timeframe": "1Hour",
+      "trades": 172,
+      "trades_2x": 172
+    },
+    {
+      "bps_captured": -0.99,
+      "fees": 823.41,
+      "gross": -817.79,
+      "median_stop_pips": 26.5,
+      "name": "live_params_1hour",
+      "net": -2100.36,
+      "net_2x": -3158.13,
+      "net_pf": 0.833,
+      "net_pf_2x": 0.75,
+      "notional": 8234026.07,
+      "params": {
+        "entry_session": "all",
+        "fast": 13,
+        "min_relvol": 1.5,
+        "rr": 2.0,
+        "rsi_max": 65.0,
+        "rsi_min": 40.0,
+        "slow": 27,
+        "stop_atr_mult": 2.5
+      },
+      "risk_override": {},
+      "slippage": 459.16,
+      "stopped": 142,
+      "strategy": "ema_momentum",
+      "timeframe": "1Hour",
+      "trades": 609,
+      "trades_2x": 608
+    }
+  ],
+  "first_result_at": "2026-10-14T07:51:19.388670+00:00",
+  "forward": "not built \u2014 whether anything is confirmed forward is a separate decision",
+  "hypothesis": "H19",
+  "hypothesis_id": 22,
+  "live_params": {
+    "ema_momentum": {
+      "entry_session": "all",
+      "fast": 13,
+      "min_relvol": 1.5,
+      "rr": 2.0,
+      "rsi_max": 65.0,
+      "rsi_min": 40.0,
+      "slow": 27,
+      "stop_atr_mult": 2.5
+    },
+    "version": 3
+  },
+  "measured_at": "2026-10-14T07:54:23.000974+00:00",
+  "registered_at": "2026-09-25T00:54:34.309430+00:00",
+  "selection_rule": {
+    "gates": [
+      "train trades >= 30",
+      "train net at 1x cost > 0.0 (beats flat)",
+      "train net at 1x cost > the live_params_1hour comparator",
+      "net profit factor at 2x cost >= 1.0"
+    ],
+    "rank_by": "train net at 1x cost",
+    "statement": "The winner is the candidate with the highest train net at 1x cost that satisfies every gate. If none does, the outcome is \"none\" and nothing is frozen."
+  },
+  "train_window": [
+    "2024-11-01T00:00:00+00:00",
+    "2026-01-01T00:00:00+00:00"
+  ],
+  "verdict": {
+    "gates_failed": {
+      "ema_momentum_1Day_72h": [
+        "n 26 < 30",
+        "net at 1x -66.41 does not beat flat",
+        "net PF at 2x 0.67 < 1.0"
+      ],
+      "ema_momentum_1Day_week": [
+        "n 26 < 30",
+        "net at 1x -27.33 does not beat flat",
+        "net PF at 2x 0.83 < 1.0"
+      ],
+      "ema_momentum_1Hour_72h": [
+        "net at 1x -953.00 does not beat flat",
+        "net PF at 2x 0.83 < 1.0"
+      ],
+      "ema_momentum_1Hour_week": [
+        "net at 1x -953.00 does not beat flat",
+        "net PF at 2x 0.83 < 1.0"
+      ],
+      "fx_trend_1Day_72h": [
+        "net at 1x -5.55 does not beat flat",
+        "net PF at 2x 0.93 < 1.0"
+      ],
+      "fx_trend_1Day_week": [
+        "net at 1x -93.09 does not beat flat",
+        "net PF at 2x 0.79 < 1.0"
+      ],
+      "fx_trend_1Hour_72h": [],
+      "fx_trend_1Hour_week": []
+    },
+    "outcome": "fx_trend_1Hour_week",
+    "ranked": [
+      "fx_trend_1Hour_week",
+      "fx_trend_1Hour_72h",
+      "fx_trend_1Day_72h",
+      "ema_momentum_1Day_week",
+      "ema_momentum_1Day_72h",
+      "fx_trend_1Day_week",
+      "ema_momentum_1Hour_72h",
+      "ema_momentum_1Hour_week"
+    ],
+    "why": [
+      "live_params_1hour net at 1x: -2100.36 over 609 trades",
+      "winner fx_trend_1Hour_week: net +1484.81 over 172 trades, net PF at 2x 1.28. A train result, not a positive result."
+    ],
+    "winner": "fx_trend_1Hour_week"
+  },
+  "what_is_not_claimed": "No significance is claimed and none is available: 8 candidates with an argmax taken flatters the winner by construction. A train result is not a positive result. Only the forward record from 2026-09-25 can confirm anything, and this step does not claim it has."
+}

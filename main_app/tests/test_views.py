@@ -480,3 +480,54 @@ class TheEquityTileShowsMoreThanToday(TestCase):
         body = self._panel('crypto')
         self.assertIn('lifetime $0.00', body)
         self.assertIn('no trades yet', body)
+
+
+class SavingAStrategyIsNotAnEditUnlessAParamChanged(TestCase):
+    """A row saved before a param was declared lacks it and the form sends its default.
+    Pressing Save on it must not mint a version or reset its evidence."""
+
+    V3 = {'entry_z': 3.0, 'lookback': 30, 'stop_atr_mult': 1.0, 'min_bar_pos': 3, 'max_bars_held': 36,
+          'entry_session': 'london_ny'}
+
+    def setUp(self):
+        from main_app.models import Instrument, Strategy
+        seed_db(('QQQ',), with_bars=False)
+        Instrument.objects.create(symbol='EUR/USD', name='EUR/USD', asset_class='forex', market='forex')
+        self.fx = Strategy.objects.create(key='vwap_reversion', market='forex', name='VWAP', params=dict(self.V3),
+                                          version=3, stage='sprout', qualification='quarantine',
+                                          symbols=['EUR/USD'])
+        old = {k: v for k, v in self.V3.items() if k != 'entry_session'}
+        self.stocks = Strategy.objects.create(key='vwap_reversion', market='stocks', name='VWAP', params=old,
+                                              version=2, stage='sprout', qualification='unproven', symbols=['QQQ'])
+        self.client.force_login(make_user())
+
+    def save(self, row, params):
+        data = {'action': 'save', 'symbols': row.symbols, 'allocation_pct': '100', 'notes': ''}
+        for k, v in params.items():
+            if isinstance(v, bool):
+                if v:
+                    data[k] = 'on'
+            else:
+                data[k] = str(v)
+        r = self.client.post(reverse('strategy-detail', args=[row.market, row.key]), data)
+        self.assertEqual(r.status_code, 302)
+        row.refresh_from_db()
+        return row
+
+    def test_a_forex_row_missing_the_two_new_flags(self):
+        before = dict(self.fx.params)
+        row = self.save(self.fx, {**self.V3, 'stop_cooldown': False, 'trend_guard': False})
+        self.assertEqual((row.version, row.qualification), (3, 'quarantine'))
+        self.assertEqual(row.params, before, 'defaults must not be written into the row')
+
+    def test_a_stocks_row_missing_entry_session(self):
+        before = dict(self.stocks.params)
+        row = self.save(self.stocks, {**before, 'entry_session': 'all'})
+        self.assertEqual((row.version, row.qualification), (2, 'unproven'))
+        self.assertEqual(row.params, before)
+
+    def test_a_real_change_still_mints_an_unproven_version(self):
+        row = self.save(self.fx, {**self.V3, 'entry_z': 2.5})
+        self.assertEqual((row.version, row.qualification), (4, 'unproven'))
+        self.assertEqual(row.params['entry_z'], 2.5)
+        self.assertEqual(row.history[-1]['source'], 'manual edit')

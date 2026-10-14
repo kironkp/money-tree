@@ -249,6 +249,13 @@ class Strategy:
     def on_signal_accepted(self, sig: Signal) -> None:
         """The order reached the broker. Whatever this signal consumed is spent."""
 
+    def on_trade_closed(self, trade) -> None:
+        """A position this strategy owned has closed, with its exit reason.
+
+        Most strategies do not care. One that remembers how its last trade ended
+        does — a stop says something a target does not.
+        """
+
     def on_session_end(self, symbol: str) -> None:
         self.state.pop(symbol, None)
 

@@ -418,6 +418,9 @@ class Engine:
             card.closed_at = trade.exit_ts
             self._card_event(card, 'close')
             self.card_by_symbol.pop(trade.symbol, None)
+        for strat in self.strategies:
+            if strat.key == trade.strategy_key:
+                strat.on_trade_closed(trade)
 
     # --- the decision for one bar ----------------------------------------
     def process_bar(self, symbol: str, ts: datetime, bar, rows_by_strategy: dict, frames_by_strategy: dict,

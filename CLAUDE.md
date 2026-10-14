@@ -522,6 +522,53 @@ systems check; three of four lanes had been halted on bars that were fresh.
   still say `-2`. The machine was off 2026-10-07 20:12 → 10-10 23:54 PT and
   nothing off the machine noticed.
 
+## 2026-10-14 — reset, parity, H19
+
+- Second scoring epoch closed at the owner's request (figures under Scoring
+  epochs). The forex vwap_reversion v3 losses that prompted it were the strategy,
+  not a bug (parity invariant below).
+- **MT-A008 / H19 measured (`trend_research --run`, docs/mt-a008-trend.json):
+  no new candidate.** The only rows that pass are H10 itself (fx_trend 1Hour,
+  week hold: 172 trades, +1,484.81, PF at 2x cost 1.28) and H10 with a 72h hold.
+  Both were re-measured on a train window inside H10's own training window, so
+  this is not further evidence for H10. Every 1Day row and every ema row loses
+  after costs. H10's case still rests on its held-out (2026-01-01→09-08, n=100,
+  +1,081.84) and its shadow forward record (`h10_shadow`, from 2026-09-25).
+- **A preregistration must pin values, not name a live row.** MT-A008 said
+  "live parameters" and ran forex ema v3. v3 was installed after registration
+  and fitted on windows the registration forbade, and `check_registration`
+  compares only module constants, so it could not see that. Put the parameters
+  in the registration and compare them at run time. Also write the result file
+  and the hypothesis row together: writing the file first leaves a failed save
+  unrecoverable without a hand edit.
+- **A signal without a target skips the reward-to-cost gate** (`risk.py`: the
+  check runs only when `sig.target is not None`). fx_trend sends no target, so
+  the lane gate never applied to it: H10 over 2025-01-01→07-01 took the same 74
+  trades, +559.86, at `min_reward_to_cost` 2.0 and at 0, and the registration's
+  "would refuse every entry" was wrong. Any target-less strategy must bring its
+  own after-cost evidence (fx_trend's is its 2x-cost backtests); the gate will
+  not supply it.
+- **Forex vwap re-entry filters measured, none installed.** `stop_cooldown`
+  (no re-entry on the same symbol and direction until the forex day rolls,
+  keyed on the stop's exit bar) and `trend_guard` (no fade against completed
+  1Hour EMA13/27) default off. Fixed v3 params, `evaluate_fixed_params`: on
+  v3's own selection windows (09-07→10-11) the cooldown looked good (58 trades,
+  +664.84, PF 1.55). On the only 15Min stretch v3's selection never saw
+  (07-13→08-16), every variant lost: v3 −389.65 PF 0.85, cooldown −344.11 PF
+  0.76, guard −82.01 PF 0.91, both −125.85 PF 0.72. Median stop 3.8–4.7 pips,
+  about three steps of EUR/USD's Yahoo grid. The cooldown's memory does not
+  survive a restart, while the backtest assumes it does: rebuild it from the
+  day's stop trades before ever installing it.
+- `fix_lane --search` re-tunes every parameter alongside the flags, so "the
+  procedure beats current" cannot show a flag helps; measure flags with fixed
+  params. It refuses names that are not bool params of a selected strategy.
+  Saving a strategy page compares against `{**defaults, **params}`, so a newly
+  declared param no longer bumps the version and resets qualification.
+  `flatten_all` refuses while an agent runs on the account.
+- `run_replay` sizes warm-up in calendar days, so it under-warms fx_trend
+  (~565 1Hour bars of the 760 it needs); the live tick loads enough from the
+  store.
+
 ## Daily diagnosis (06:30)
 
 `deploy/daily-diagnosis.sh` + `com.kiron.moneytree.diagnosis.plist`: ONE
@@ -579,6 +626,18 @@ open, since the rest of that trade would book against a balance it never opened
 from.
 
 First epoch: 2026-09-19, closing -$4,086.24 over 450 trades.
+Second epoch: 2026-09-19 → 2026-10-14 07:25 UTC, closing −$1,532.98 over 266
+trades (forex −1,401.81, stocks −119.53, crypto −10.95, degen −0.69), reset at
+the owner's request after forex vwap_reversion v3's 17 straight stops.
+
+**Never run `flatten_all` against a lane whose agent is running.** It builds
+its own `SimBroker` from the ledger and books the close, and the agent's next
+`persist_broker` writes the position and the old cash back, so the same trade
+is later booked twice. The dashboard refuses it (`flatten_now`); the command
+does not. To flatten a running sim lane, stop its agent the way the dashboard
+Stop does (`stop_requested`, then `procs.stop`): the agent closes on its own
+broker. Start `reset_epoch` just after an `ensure_agents` tick (every 300 s)
+so a stopped lane is not restarted mid-reset with its old balance.
 
 ## Invariants that matter
 
@@ -626,6 +685,22 @@ First epoch: 2026-09-19, closing -$4,086.24 over 450 trades.
   positions age out via `max_hold_minutes`. Forex: sessions roll 17:00 ET, the
   week closes Friday 17:00 ET, leverage 10×, whole units, Yahoo bars only
   (the week's first bar is Monday 00:00 London, two hours after the open).
+- **Yahoo's EUR/USD and AUD/USD intraday closes are reciprocals of 4-decimal
+  quotes.** EUR/USD moves in steps of about 1.25 pips (1.116819 = 1/0.8954) and
+  AUD/USD about 0.5 pip; GBP/USD is finer. One week of 15Min EUR/USD
+  (2026-10-05..09) had 80 distinct closes in 396 bars. Sim and backtest share
+  the grid, so they agree with each other, but a 15Min result whose ATR stop sits
+  near the ~1.8-pip round trip is partly quantisation. No Yahoo-fitted forex
+  result goes to real money without being measured again on the broker's own
+  bars.
+- **Live and backtest stamp the same entry one bar apart.** Live fills at the
+  decision bar's close and stamps `entry_ts` with the decision bar; a backtest
+  fills at the next bar's open and stamps the fill bar — the same moment. Strategy
+  exits carry the same offset; stop exits are intrabar and match. Compare the two
+  by exit time, or shift live entries one bar. Checked 2026-10-14 on forex vwap v3
+  (10-12→10-14): 13 of 17 live trades had an identical backtest twin after the
+  shift, and the other 4 differ for known reasons (a false halt, directional-cap
+  path, sizing), so its 17 straight stops were the strategy, not a bug.
 - `enabled` is permission to observe at the configured stage, not proof.
   Newly seeded rows are disabled until research is deliberately promoted.
   Broker-backed modes must also see `qualification='qualified'`; quarantine is

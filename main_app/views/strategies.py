@@ -101,8 +101,13 @@ def strategy_detail(request, market, key):
                     params[p.name] = bool(form.cleaned_data.get(p.name))
                 elif p.type == 'choice':
                     params[p.name] = p.coerce(type(p.default)(params[p.name])) if p.name in params else p.default
-            changed = params != row.params
-            row.params = params
+            # A row saved before a param was declared does not carry it, and the form
+            # sends that param's default. Not an edit: compare against the row as the
+            # strategy reads it, or every newly declared filter would bump every row's
+            # version and reset its evidence the next time anyone pressed Save.
+            changed = params != {**cls.defaults(), **(row.params or {})}
+            if changed:
+                row.params = params
             row.symbols = [s for s in request.POST.getlist('symbols') if Instrument.objects.filter(symbol=s).exists()]
             row.allocation_pct = request.POST.get('allocation_pct') or row.allocation_pct
             # Strategy.timeframe is the strategy's own (v1.73): blank or the lane's base

@@ -1,7 +1,13 @@
 {
   "forward_start": "2026-09-25T00:00:00+00:00",
-  "in_flight": [],
-  "last_run": "2026-10-15T09:00:34.810342+00:00",
+  "in_flight": [
+    {
+      "entry_ts": "2026-10-15T11:00:00+00:00",
+      "side": "short",
+      "symbol": "EUR/USD"
+    }
+  ],
+  "last_run": "2026-10-16T09:00:14.341986+00:00",
   "pairs": [
     "EUR/USD",
     "GBP/USD",
@@ -149,6 +155,14 @@
       "status": "recorded",
       "total": 8,
       "window_end": "2026-10-15T08:00:00.000001+00:00"
+    },
+    {
+      "added": 3,
+      "at": "2026-10-16T09:00:14.341986+00:00",
+      "in_flight": 1,
+      "status": "recorded",
+      "total": 11,
+      "window_end": "2026-10-16T08:00:00.000001+00:00"
     }
   ],
   "slippage_bps": 0.3,
@@ -165,37 +179,37 @@
   "timeframe": "1Hour",
   "totals": {
     "1x": {
-      "bps_captured": -0.16,
+      "bps_captured": -11.73,
       "bps_cost": 1.6,
-      "fees": 9.5,
-      "gross": -1.53,
-      "gross_pf": 0.971,
-      "net": -16.73,
-      "net_pf": 0.734,
-      "slippage": 5.7,
-      "trades": 8
+      "fees": 12.63,
+      "gross": -148.13,
+      "gross_pf": 0.258,
+      "net": -168.34,
+      "net_pf": 0.215,
+      "slippage": 7.57,
+      "trades": 11
     },
     "2x": {
-      "bps_captured": -0.16,
+      "bps_captured": -11.73,
       "bps_cost": 3.2,
-      "fees": 19.0,
-      "gross": -1.53,
-      "gross_pf": 0.971,
-      "net": -31.94,
-      "net_pf": 0.563,
-      "slippage": 11.4,
-      "trades": 8
+      "fees": 25.26,
+      "gross": -148.13,
+      "gross_pf": 0.258,
+      "net": -188.54,
+      "net_pf": 0.179,
+      "slippage": 15.15,
+      "trades": 11
     },
     "3x": {
-      "bps_captured": -0.16,
+      "bps_captured": -11.73,
       "bps_cost": 4.8,
-      "fees": 28.51,
-      "gross": -1.53,
-      "gross_pf": 0.971,
-      "net": -47.14,
-      "net_pf": 0.434,
-      "slippage": 17.1,
-      "trades": 8
+      "fees": 37.89,
+      "gross": -148.13,
+      "gross_pf": 0.258,
+      "net": -208.75,
+      "net_pf": 0.148,
+      "slippage": 22.72,
+      "trades": 11
     }
   },
   "trades": {
@@ -224,6 +238,20 @@
       "notional": 12767.710413941446,
       "pnl": -27.021235776028043,
       "qty": 18312.0,
+      "side": "short",
+      "symbol": "AUD/USD"
+    },
+    "AUD/USD|2026-10-15T11:00:00+00:00|2026-10-16T07:00:00+00:00|fx_trend": {
+      "bars_held": 20,
+      "entry_price": 0.692212378242612,
+      "entry_ts": "2026-10-15T11:00:00+00:00",
+      "exit_price": 0.6956645496265177,
+      "exit_reason": "stop",
+      "exit_ts": "2026-10-16T07:00:00+00:00",
+      "fees": 1.060337972892015,
+      "notional": 10577.005139547111,
+      "pnl": -53.80951671897179,
+      "qty": 15280.0,
       "side": "short",
       "symbol": "AUD/USD"
     },
@@ -283,6 +311,20 @@
       "side": "short",
       "symbol": "GBP/USD"
     },
+    "GBP/USD|2026-10-15T11:00:00+00:00|2026-10-16T04:00:00+00:00|fx_trend": {
+      "bars_held": 17,
+      "entry_price": 1.3254993459177018,
+      "entry_ts": "2026-10-15T11:00:00+00:00",
+      "exit_price": 1.330640184674598,
+      "exit_reason": "stop",
+      "exit_ts": "2026-10-16T04:00:00+00:00",
+      "fees": 1.182513319019692,
+      "notional": 11802.246176051216,
+      "pnl": -46.95654161042438,
+      "qty": 8904.0,
+      "side": "short",
+      "symbol": "GBP/USD"
+    },
     "NZD/USD|2026-09-25T08:00:00+00:00|2026-09-25T20:00:00+00:00|fx_trend": {
       "bars_held": 13,
       "entry_price": 0.5669085178995132,
@@ -310,10 +352,24 @@
       "qty": 18023.0,
       "side": "short",
       "symbol": "NZD/USD"
+    },
+    "NZD/USD|2026-10-15T11:00:00+00:00|2026-10-16T02:00:00+00:00|fx_trend": {
+      "bars_held": 15,
+      "entry_price": 0.5609929939812422,
+      "entry_ts": "2026-10-15T11:00:00+00:00",
+      "exit_price": 0.5641659319268745,
+      "exit_reason": "stop",
+      "exit_ts": "2026-10-16T02:00:00+00:00",
+      "fees": 0.885668848528574,
+      "notional": 8831.712704246696,
+      "pnl": -50.837230926616705,
+      "qty": 15743.0,
+      "side": "short",
+      "symbol": "NZD/USD"
     }
   },
   "window": [
     "2026-09-25T00:00:00+00:00",
-    "2026-10-15T08:00:00.000001+00:00"
+    "2026-10-16T08:00:00.000001+00:00"
   ]
 }

@@ -1,13 +1,7 @@
 {
   "forward_start": "2026-09-25T00:00:00+00:00",
-  "in_flight": [
-    {
-      "entry_ts": "2026-10-15T11:00:00+00:00",
-      "side": "short",
-      "symbol": "EUR/USD"
-    }
-  ],
-  "last_run": "2026-10-16T09:00:14.341986+00:00",
+  "in_flight": [],
+  "last_run": "2026-10-17T09:00:11.231998+00:00",
   "pairs": [
     "EUR/USD",
     "GBP/USD",
@@ -163,6 +157,14 @@
       "status": "recorded",
       "total": 11,
       "window_end": "2026-10-16T08:00:00.000001+00:00"
+    },
+    {
+      "added": 1,
+      "at": "2026-10-17T09:00:11.231998+00:00",
+      "in_flight": 0,
+      "status": "recorded",
+      "total": 12,
+      "window_end": "2026-10-16T22:00:00.000001+00:00"
     }
   ],
   "slippage_bps": 0.3,
@@ -179,37 +181,37 @@
   "timeframe": "1Hour",
   "totals": {
     "1x": {
-      "bps_captured": -11.73,
+      "bps_captured": -14.39,
       "bps_cost": 1.6,
-      "fees": 12.63,
-      "gross": -148.13,
-      "gross_pf": 0.258,
-      "net": -168.34,
-      "net_pf": 0.215,
-      "slippage": 7.57,
-      "trades": 11
+      "fees": 13.69,
+      "gross": -196.86,
+      "gross_pf": 0.207,
+      "net": -218.76,
+      "net_pf": 0.174,
+      "slippage": 8.21,
+      "trades": 12
     },
     "2x": {
-      "bps_captured": -11.73,
+      "bps_captured": -14.39,
       "bps_cost": 3.2,
-      "fees": 25.26,
-      "gross": -148.13,
-      "gross_pf": 0.258,
-      "net": -188.54,
-      "net_pf": 0.179,
-      "slippage": 15.15,
-      "trades": 11
+      "fees": 27.38,
+      "gross": -196.86,
+      "gross_pf": 0.207,
+      "net": -240.65,
+      "net_pf": 0.146,
+      "slippage": 16.41,
+      "trades": 12
     },
     "3x": {
-      "bps_captured": -11.73,
+      "bps_captured": -14.39,
       "bps_cost": 4.8,
-      "fees": 37.89,
-      "gross": -148.13,
-      "gross_pf": 0.258,
-      "net": -208.75,
-      "net_pf": 0.148,
-      "slippage": 22.72,
-      "trades": 11
+      "fees": 41.06,
+      "gross": -196.86,
+      "gross_pf": 0.207,
+      "net": -262.55,
+      "net_pf": 0.121,
+      "slippage": 24.62,
+      "trades": 12
     }
   },
   "trades": {
@@ -280,6 +282,20 @@
       "notional": 10293.246254688493,
       "pnl": 36.4200946182537,
       "qty": 9152.0,
+      "side": "short",
+      "symbol": "EUR/USD"
+    },
+    "EUR/USD|2026-10-15T11:00:00+00:00|2026-10-16T10:00:00+00:00|fx_trend": {
+      "bars_held": 23,
+      "entry_price": 1.1217971661126613,
+      "entry_ts": "2026-10-15T11:00:00+00:00",
+      "exit_price": 1.1270498730134342,
+      "exit_reason": "stop",
+      "exit_ts": "2026-10-16T10:00:00+00:00",
+      "fees": 1.0567332236853524,
+      "notional": 10542.649767126792,
+      "pnl": -50.42167267714851,
+      "qty": 9398.0,
       "side": "short",
       "symbol": "EUR/USD"
     },
@@ -370,6 +386,6 @@
   },
   "window": [
     "2026-09-25T00:00:00+00:00",
-    "2026-10-16T08:00:00.000001+00:00"
+    "2026-10-16T22:00:00.000001+00:00"
   ]
 }

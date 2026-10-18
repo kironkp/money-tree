@@ -1,7 +1,7 @@
 MoneyTree data backup
-taken       2026-10-17 02:00:25 PDT
-database    490577920 bytes
-ledger.sql  34392208 bytes
+taken       2026-10-18 02:00:23 PDT
+database    493785088 bytes
+ledger.sql  35141790 bytes
 
 accounts (mode · market · equity · trades)
   paper · crypto · 10000.00 · 0
@@ -20,38 +20,38 @@ accounts (mode · market · equity · trades)
 rows backed up
   main_app_account             12
   main_app_agentconfig         1
-  main_app_agentrun            262
-  main_app_apiusage            2927
-  main_app_briefing            345
-  main_app_experiment          500
+  main_app_agentrun            266
+  main_app_apiusage            2959
+  main_app_briefing            353
+  main_app_experiment          513
   main_app_fill                1540
   main_app_instrument          104
-  main_app_journalentry        662
+  main_app_journalentry        682
   main_app_marketsession       0
-  main_app_newsitem            2414
-  main_app_newssession         155
-  main_app_newsverdict         2059
+  main_app_newsitem            2428
+  main_app_newssession         161
+  main_app_newsverdict         2081
   main_app_order               1540
   main_app_position            0
-  main_app_symboldossier       221
+  main_app_symboldossier       230
   main_app_evaluation          3
-  main_app_unmatchedsymbol     3588
-  main_app_riskevent           349
-  main_app_signal              5731
+  main_app_unmatchedsymbol     3591
+  main_app_riskevent           354
+  main_app_signal              5777
   main_app_signupinvite        0
   main_app_strategy            13
   main_app_trade               770
   main_app_tradecard           770
-  main_app_equitysnapshot      9507
+  main_app_equitysnapshot      9611
   main_app_cashmovement        0
   main_app_reconciliationsnapshot 0
-  main_app_reviewrun           1762
-  main_app_reviewfinding       247
+  main_app_reviewrun           1858
+  main_app_reviewfinding       250
   main_app_hypothesis          22
 
 not in this dump (regenerable)
-  main_app_bar                 1646359
-  main_app_feedevent           57043
+  main_app_bar                 1647523
+  main_app_feedevent           52973
   main_app_symbolstate         36
-  main_app_backtestrun         2584
+  main_app_backtestrun         2650
   main_app_backtesttrade       4707

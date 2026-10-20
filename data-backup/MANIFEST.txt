@@ -1,7 +1,7 @@
 MoneyTree data backup
-taken       2026-10-19 02:00:24 PDT
-database    495321088 bytes
-ledger.sql  35951040 bytes
+taken       2026-10-20 02:00:20 PDT
+database    499478528 bytes
+ledger.sql  37252965 bytes
 
 accounts (mode · market · equity · trades)
   paper · crypto · 10000.00 · 0
@@ -12,46 +12,46 @@ accounts (mode · market · equity · trades)
   sim · degen · 10000.00 · 282
   paper · forex · 10000.00 · 0
   replay · forex · 10000.00 · 0
-  sim · forex · 10481.97 · 288
+  sim · forex · 10462.16 · 296
   paper · stocks · 10000.00 · 0
   replay · stocks · 10000.00 · 0
-  sim · stocks · 9876.02 · 191
+  sim · stocks · 9912.92 · 203
 
 rows backed up
   main_app_account             12
   main_app_agentconfig         1
-  main_app_agentrun            270
-  main_app_apiusage            3008
-  main_app_briefing            361
-  main_app_experiment          526
-  main_app_fill                1541
+  main_app_agentrun            274
+  main_app_apiusage            3137
+  main_app_briefing            369
+  main_app_experiment          539
+  main_app_fill                1583
   main_app_instrument          104
-  main_app_journalentry        703
+  main_app_journalentry        725
   main_app_marketsession       0
-  main_app_newsitem            2460
-  main_app_newssession         167
-  main_app_newsverdict         2119
-  main_app_order               1541
-  main_app_position            1
-  main_app_symboldossier       239
+  main_app_newsitem            2572
+  main_app_newssession         173
+  main_app_newsverdict         2238
+  main_app_order               1583
+  main_app_position            3
+  main_app_symboldossier       248
   main_app_evaluation          3
-  main_app_unmatchedsymbol     3603
-  main_app_riskevent           359
-  main_app_signal              5832
+  main_app_unmatchedsymbol     3737
+  main_app_riskevent           364
+  main_app_signal              6035
   main_app_signupinvite        0
   main_app_strategy            13
-  main_app_trade               770
-  main_app_tradecard           771
-  main_app_equitysnapshot      9763
+  main_app_trade               790
+  main_app_tradecard           793
+  main_app_equitysnapshot      10013
   main_app_cashmovement        0
   main_app_reconciliationsnapshot 0
-  main_app_reviewrun           1956
-  main_app_reviewfinding       253
+  main_app_reviewrun           2080
+  main_app_reviewfinding       259
   main_app_hypothesis          22
 
 not in this dump (regenerable)
-  main_app_bar                 1648880
-  main_app_feedevent           54541
+  main_app_bar                 1651928
+  main_app_feedevent           59724
   main_app_symbolstate         36
-  main_app_backtestrun         2716
+  main_app_backtestrun         2784
   main_app_backtesttrade       4707
